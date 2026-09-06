@@ -1,6 +1,14 @@
 [package]
 name = "gedlint"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+description = "Linter GEDCOM 5.5.1 + 7.0: categories, severitats, --fix, streaming, WASM-ready"
+license = "MIT"
 
-[dependencies]
+[lib]
+name = "gedlint"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gedlint"
+path = "src/main.rs"
