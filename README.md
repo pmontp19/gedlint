@@ -4,6 +4,11 @@ GEDCOM linter in Rust: fast, single binary, streaming for large files, dual 5.5.
 
 Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 
+## Install
+
+- Prebuilt binaries (linux x86_64, macOS ARM, Windows): GitHub Releases. Intel Macs: build from source.
+- From source: `cargo install --git github.com/pmontp19/gedlint` or `cargo build --release`.
+
 ## Status
 
 Working MVP: `cargo test` (68 tests: 2 unit + 56 rule + 10 CLI), `cargo clippy` clean, `cargo llvm-cov` 89.4% regions (lib 90.4%, main 79.4%), release validated at 4.5MB in 0.13s, `cargo check --target wasm32-unknown-unknown` OK. Prebuilt binaries (linux/macOS/Windows) attached to releases. Validated against a real 520-person MyHeritage tree (found 175 strict-grammar errors the previous validator missed: HTML continuations without CONT, plus encoding quirks). Rule set audited against the 5.5.1 and 7.0 specs (E007/E008/E009/W306 from the registries); two rounds of hand-rolled mutation testing (15/19), all survivors covered with regression tests.
