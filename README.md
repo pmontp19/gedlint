@@ -11,7 +11,7 @@ Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 
 ## Status
 
-Working MVP: `cargo test` (68 tests: 2 unit + 56 rule + 10 CLI), `cargo clippy` clean, `cargo llvm-cov` 89.4% regions (lib 90.4%, main 79.4%), release validated at 4.5MB in 0.13s, `cargo check --target wasm32-unknown-unknown` OK. Prebuilt binaries (linux/macOS/Windows) attached to releases. Validated against a real 520-person MyHeritage tree (found 175 strict-grammar errors the previous validator missed: HTML continuations without CONT, plus encoding quirks). Rule set audited against the 5.5.1 and 7.0 specs (E007/E008/E009/W306 from the registries); two rounds of hand-rolled mutation testing (15/19), all survivors covered with regression tests.
+Working MVP: `cargo test` (72 tests: 2 unit + 60 rule + 10 CLI), `cargo clippy` clean, `cargo llvm-cov` 90.1% regions (lib 91.1%, main 79.4%), release validated at 4.5MB in 0.13s, `cargo check --target wasm32-unknown-unknown` OK. Prebuilt binaries (linux/macOS/Windows) attached to releases. Validated against a real 520-person MyHeritage tree (found 175 strict-grammar errors the previous validator missed: HTML continuations without CONT, plus encoding quirks). Rule set audited against the 5.5.1 and 7.0 specs (E007/E008/E009/W306 from the registries); two rounds of hand-rolled mutation testing (15/19), all survivors covered with regression tests.
 
 ## Usage
 
@@ -37,9 +37,9 @@ Exit codes: 0 clean, 1 warnings, 2 errors.
 Structural: E001 level, E002 HEAD/TRLR (incl. HEAD-first, nothing after TRLR), E003 duplicate xref, E004 malformed xref, E005 orphan CONT/CONC, E007 CONC in 7.0 (reserved tag, spec 1.3), E008 duplicate singleton (SEX/HUSB/WIFE/GEDC/VERS, one detail substructure per event block), E009 missing required (HEAD.GEDC, GEDC.VERS).
 Encoding: E101 invalid UTF-8 / split CONC (MyHeritage bug) with `--fix` (skipped for declared ANSEL/ASCII), W102 BOM (silent in 7.0, which recommends it) / mixed CRLF / control chars.
 Referential: E201 broken refs incl. level-2+ pointers (@VOID@ exempt), W202 FAMC/CHIL mismatch.
-Semantic: W301 death before birth / longevity >105 (DEAT Y without a date is excluded), W302 duplicates (name + birth ±2 years), W303 parent age, W304 child before marriage, W305 SEX (X valid only in 7.0), W306 enum values (ROLE/PEDI/QUAY/RESN/FAMC-STAT/NAME-TYPE/MEDI/LDS-STAT from the 7.0 registries; HEAD.CHAR validated; OTHER wants a sibling PHRASE).
+Semantic: W301 death before birth / longevity >105 (DEAT Y without a date is excluded), W302 duplicates (name + birth ±2 years), W303 parent age, W304 child before marriage, W305 SEX (X valid only in 7.0), W306 enum values (ROLE/PEDI/QUAY/RESN/FAMC-STAT/NAME-TYPE/MEDI/LDS-STAT/DATA-EVEN from the 7.0 registries; HEAD.CHAR validated; FILE.FORM media type; OTHER wants a sibling PHRASE), W307 duplicate events with conflicting dates.
 Style/MyHeritage quirks: W401 URL inside PLAC, W402 non-standard NAME/DATE (BET/FROM-TO pairing and order, parens, calendar escapes), W403 NOTE with HTML.
-Upgrade: U501 RELA/PEDI/BET/CHAR (7.0 changes, incl. out-of-order ranges), U502 vendor tags `_MARNM`/`_UPD`/Ancestry (kept as undocumented extensions, SCHMA recommended).
+Upgrade: U501 RELA/PEDI/BET/CHAR (7.0 changes, incl. out-of-order ranges), U502 vendor tags `_MARNM`/`_UPD`/Ancestry (kept as undocumented extensions, SCHMA recommended). E009 also covers EVEN/FACT without TYPE and LDS STAT without DATE (7.0 only).
 
 ## State of the art (research summary, Sep 2026)
 

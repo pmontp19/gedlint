@@ -30,7 +30,8 @@ fn help() -> String {
         E009 missing required, E101 UTF-8/split CONC, E201 broken refs,\n  \
         W202 FAMC/CHIL mismatch, W301 death/longevity, W302 duplicates,\n  \
         W303 parent age, W304 child before marriage, W305 SEX, W306 enums,\n  \
-        W401 PLAC+URL, W402 style (NAME/DATE), W403 NOTE+HTML,\n  \
+        W307 conflicting duplicate events, W401 PLAC+URL,\n  \
+        W402 style (NAME/DATE), W403 NOTE+HTML,\n  \
         W102 encoding/style, U501/U502 upgrade path 5.5.1 -> 7.0"
     )
 }

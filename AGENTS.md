@@ -23,5 +23,5 @@
 
 ## Deferred roadmap (audited, consciously postponed)
 
-- Conflicting duplicate events (two BIRT blocks with different DATEs): suspicious, needs per-record event comparison.
-- EVEN payload validation and full LDS coverage beyond STAT.
+- SLGC FAMC requirement and other ordinance details beyond STAT+DATE.
+- main.rs coverage (79%): error paths are thin but untested beyond exit codes.

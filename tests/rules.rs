@@ -383,7 +383,7 @@ fn w306_pedi_per_version() {
 #[test]
 fn w306_medi_ignored_in_70() {
     // MEDI is a 5.5.1 tag: never validated under 7.0.
-    let g = format!("{}0 @O1@ OBJE\n1 FILE\n2 FORM jpg\n3 MEDI PHOTO\n0 TRLR\n", HEAD70);
+    let g = format!("{}0 @O1@ OBJE\n1 FILE\n2 FORM image/jpeg\n3 MEDI PHOTO\n0 TRLR\n", HEAD70);
     assert!(!has(&g, "W306"));
 }
 
@@ -449,6 +449,48 @@ fn w306_lds_stat() {
     assert!(!has(&ok, "W306"));
     let ok2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT PRE_1970\n0 TRLR\n", HEAD70);
     assert!(!has(&ok2, "W306"));
+}
+
+#[test]
+fn w307_conflicting_duplicate_events() {
+    // Real @I131@ pattern: two BIRT blocks, different DATEs.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1867\n1 BIRT\n2 DATE ABT 1870\n");
+    assert!(has(&g, "W307"));
+    let same = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1867\n1 BIRT\n2 DATE 1867\n");
+    assert!(!has(&same, "W307"));
+    let single = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1867\n");
+    assert!(!has(&single, "W307"));
+}
+
+#[test]
+fn e009_even_fact_type_70_only() {
+    // EVEN/FACT need TYPE in 7.0; 5.5.1 leaves it optional.
+    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 EVEN\n2 DATE 1900\n0 TRLR\n", HEAD70);
+    assert!(has(&g, "E009"));
+    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 EVEN\n2 TYPE Military service\n2 DATE 1900\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok, "E009"));
+    let g551 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 EVEN\n2 DATE 1900\n");
+    assert!(!has(&g551, "E009"));
+}
+
+#[test]
+fn e009_lds_stat_date_70_only() {
+    // LDS STAT needs a DATE under 7.0.
+    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT COMPLETED\n0 TRLR\n", HEAD70);
+    assert!(has(&g, "E009"));
+    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT COMPLETED\n3 DATE 1900\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok, "E009"));
+}
+
+#[test]
+fn w306_data_even_and_form() {
+    // DATA.EVEN payload and FILE.FORM media type under 7.0.
+    let g = format!("{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN BIRTHS\n0 TRLR\n", HEAD70);
+    assert!(has(&g, "W306"));
+    let f = format!("{}0 @O1@ OBJE\n1 FILE\n2 FORM textplain\n0 TRLR\n", HEAD70);
+    assert!(has(&f, "W306"));
+    let ok = format!("{}0 @O1@ OBJE\n1 FILE\n2 FORM image/jpeg\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok, "W306"));
 }
 
 #[test]

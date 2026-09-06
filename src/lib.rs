@@ -414,6 +414,13 @@ const ORD_STAT: &[&str] = &[
     "BIC", "CANCELED", "CHILD", "COMPLETED", "DNS", "DNS_CAN", "EXCLUDED", "INFANT",
     "PRE", "PRE_1970", "STILLBORN", "SUBMITTED", "UNCLEARED",
 ];
+// SOUR.DATA.EVEN payloads (7.0 only).
+const EVENATTR: &[&str] = &["CENS", "EVEN", "FACT", "NCHI", "RESI"];
+
+// (record, event, instance) key shared by the E008/E009/W307 trackers.
+type EvKey = (String, String, usize);
+// (instance, DATE value, line) hit inside one record+event group.
+type EvHit = (usize, String, usize);
 
 // Line parser + rules
 // ---------------------------------------------------------------------------
@@ -509,6 +516,23 @@ fn check_enum(
     if v.is_empty() {
         return;
     }
+    // OBJE.FILE.FORM under 7.0 is a media type, not an enum.
+    if tag == "FORM" && parent_tag == "FILE" && version == Version::V70 {
+        if !v.contains('/') || v.chars().any(char::is_whitespace) {
+            let who = if record.is_empty() { format!("line {}", line) } else { record.to_string() };
+            push_capped(
+                diags,
+                vec![Diag::new(
+                    "W306",
+                    Category::Suspicious,
+                    Severity::Warning,
+                    line,
+                    format!("{}: invalid media type {:?} (use image/jpeg etc.)", who, v),
+                )],
+            );
+        }
+        return;
+    }
     let set: Option<(&[&str], &str)> = match tag {
         "ROLE" => Some((ROLE, "ASSO.ROLE")),
         "PEDI" => Some((
@@ -525,6 +549,9 @@ fn check_enum(
         }
         "STAT" if LDS_EVENTS.contains(&parent_tag) && version != Version::V551 => {
             Some((ORD_STAT, "LDS.STAT"))
+        }
+        "EVEN" if parent_tag == "DATA" && version == Version::V70 => {
+            Some((EVENATTR, "DATA.EVEN"))
         }
         "TYPE" if parent_tag == "NAME" => Some((
             if version == Version::V70 { NAME_TYPE70 } else { NAME_TYPE551 },
@@ -627,6 +654,14 @@ fn lint_lines(text: &str) -> Report {
     // Current event instance + the level it opened at: deeper levels
     // (SOUR.DATA.DATE) belong to other structures, not to the event.
     let mut cur_event: Option<(String, usize, u32)> = None;
+    // W307 conflicting duplicate events: EvKey -> (DATE, line).
+    let mut event_dates: HashMap<EvKey, (String, usize)> = HashMap::new();
+    // E009 EVEN/FACT without TYPE (7.0 only): EvKey line + typed set.
+    let mut ef_inst: HashMap<(String, String), usize> = HashMap::new();
+    let mut ef_line: HashMap<EvKey, usize> = HashMap::new();
+    let mut ef_typed: HashSet<EvKey> = HashSet::new();
+    // E009 LDS STAT without DATE (7.0 only): (record, event, stat line).
+    let mut lds_stat: Vec<(String, String, usize)> = Vec::new();
 
     let flush_person = |diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d: Option<i64>, line: usize| {
         if let (Some(bb), Some(dd)) = (b, d) {
@@ -898,6 +933,13 @@ fn lint_lines(text: &str) -> Report {
                     event_inst.insert(key, n);
                     cur_event = Some((l.tag.clone(), n, lvl));
                 }
+                // E009 EVEN/FACT instance counter (TYPE required in 7.0).
+                if l.tag == "EVEN" || l.tag == "FACT" {
+                    let key = (xref.clone(), l.tag.clone());
+                    let n = ef_inst.get(&key).copied().unwrap_or(0) + 1;
+                    ef_inst.insert(key.clone(), n);
+                    ef_line.insert((key.0, key.1, n), l.no);
+                }
                 match (kind.as_str(), l.tag.as_str()) {
                     ("INDI", "FAMS") | ("INDI", "FAMC") => {
                         if is_pointer(&l.value) {
@@ -1121,11 +1163,34 @@ fn lint_lines(text: &str) -> Report {
                     l.no,
                 );
             }
+            // E009 EVEN/FACT TYPE mark (instance = latest opened block).
+            if (cur_sub == "EVEN" || cur_sub == "FACT") && l.tag == "TYPE" && !rec.is_empty() {
+                if let Some(n) = ef_inst.get(&(rec.clone(), cur_sub.clone())).copied() {
+                    ef_typed.insert((rec.clone(), cur_sub.clone(), n));
+                }
+            }
+            // E009 LDS STAT register; a DATE directly under STAT satisfies it.
+            if l.tag == "STAT" && LDS_EVENTS.contains(&cur_sub.as_str()) && !rec.is_empty() {
+                lds_stat.push((rec.clone(), cur_sub.clone(), l.no));
+            }
+            if l.tag == "DATE" && parent_tag == "STAT" && !rec.is_empty() {
+                if let Some((_, pline)) = &parent {
+                    let pl = *pline;
+                    lds_stat.retain(|(r, _, sl)| !(r == &rec && sl == &pl));
+                }
+            }
             // E008: one {0:1} detail substructure per event instance, at the
-            // level directly under the event.
+            // level directly under the event. DATEs are also collected
+            // for the W307 conflicting-duplicate check below.
             if !rec.is_empty() && EVENT_SINGLETONS.contains(&l.tag.as_str()) {
                 if let Some((ev, inst, ev_lvl)) = cur_event.clone() {
                     if lvl == ev_lvl + 1 {
+                        if l.tag == "DATE" && !l.value.trim().is_empty() {
+                            event_dates.insert(
+                                (rec.clone(), ev.clone(), inst),
+                                (l.value.trim().to_string(), l.no),
+                            );
+                        }
                         let key = (rec.clone(), ev.clone(), inst, l.tag.clone());
                         if let Some(first) = event_seen.get(&key) {
                             push_capped(
@@ -1267,6 +1332,68 @@ fn lint_lines(text: &str) -> Report {
                     format!("{}: {} OTHER without a sibling PHRASE (add the free-text phrase)", who, tag),
                 )],
             );
+        }
+    }
+
+    // E009: EVEN/FACT without TYPE and LDS STAT without DATE (7.0 only:
+    // 5.5.1 leaves both optional).
+    if version == Version::V70 {
+        for ((rec, tag, inst), line) in &ef_line {
+            if !ef_typed.contains(&(rec.clone(), tag.clone(), *inst)) {
+                push_capped(
+                    &mut diags,
+                    vec![Diag::new(
+                        "E009",
+                        Category::Correctness,
+                        Severity::Error,
+                        *line,
+                        format!("{}: {} without required TYPE (7.0)", rec, tag),
+                    )],
+                );
+            }
+        }
+        for (rec, ev, sline) in &lds_stat {
+            push_capped(
+                &mut diags,
+                vec![Diag::new(
+                    "E009",
+                    Category::Correctness,
+                    Severity::Error,
+                    *sline,
+                    format!("{}: {} STAT without required DATE (7.0)", rec, ev),
+                )],
+            );
+        }
+    }
+
+    // W307: same event twice with conflicting DATEs (classic merge leftover).
+    {
+        let mut by_event: HashMap<(String, String), Vec<EvHit>> = HashMap::new();
+        for ((rec, ev, inst), (val, line)) in &event_dates {
+            by_event.entry((rec.clone(), ev.clone())).or_default().push((*inst, val.clone(), *line));
+        }
+        for ((rec, ev), mut v) in by_event {
+            v.sort();
+            let mut seen: Vec<&String> = Vec::new();
+            for (_, val, line) in &v {
+                if !seen.contains(&val) {
+                    seen.push(val);
+                    if seen.len() > 1 {
+                        let vals: Vec<&str> = seen.iter().map(|s| s.as_str()).collect();
+                        push_capped(
+                            &mut diags,
+                            vec![Diag::new(
+                                "W307",
+                                Category::Suspicious,
+                                Severity::Warning,
+                                *line,
+                                format!("{}: duplicate {} with conflicting dates ({})", rec, ev, vals.join(" vs ")),
+                            )],
+                        );
+                        break;
+                    }
+                }
+            }
         }
     }
 
