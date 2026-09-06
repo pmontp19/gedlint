@@ -3,7 +3,7 @@
 ## Non-obvious facts
 
 - Working language is English (code, messages, docs). The owner's family research (fixtures) is Catalan; test *data* may be Catalan, test *names/comments* must not.
-- Private real fixtures live OUTSIDE this repo (machine-local Orca checkout): `/Users/pere/orca/workspaces/Genealogia-Montpeo/gedlint/arbre/Montpeo_arbre_netejat.ged` (520 INDI, MyHeritage) and `arbre/originals/original_myheritage_20260905.ged`. Never copy tree data into this repo or public issues; discuss counts and rule codes only.
+- Private real fixtures live OUTSIDE this repo (a local checkout of a 520-person MyHeritage tree: one cleaned file plus the original export). Never copy tree data into this repo or public issues; discuss counts and rule codes only.
 - Spec source of truth was pmontp19/gedcom-family-tree#2 (closed on MVP). Both spec audits (5.5.1, 7.0) are done; findings not yet implemented are roadmap, not bugs.
 - `cargo-llvm-cov` is installed; `cargo-mutants` is not (offline at the time). Mutation testing was manual in a /tmp copy; survivors all have regression tests.
 

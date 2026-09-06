@@ -47,4 +47,4 @@ Existing validators: Chronoplex GEDCOM Validator (Windows/.NET, closed), GED-inl
 
 ## Real fixtures
 
-pmontp19/Genealogia-Montpeo (private): MyHeritage GEDCOM with split UTF-8, PLAC URLs, SEX U, real duplicates, impossible ages, a 112-year entry. Never paste private tree data into public issues; discuss counts and rule codes only.
+A private 520-person MyHeritage GEDCOM (not in this repo) with split UTF-8, PLAC URLs, SEX U, real duplicates, impossible ages, a 112-year entry. Never paste private tree data into public issues; discuss counts and rule codes only.
