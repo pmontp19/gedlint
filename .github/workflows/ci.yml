@@ -1,0 +1,30 @@
+name: CI
+on:
+  push:
+    branches: [master]
+  pull_request:
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, llvm-tools-preview
+          targets: wasm32-unknown-unknown
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Test
+        run: cargo test
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Coverage (floor 84% regions)
+        run: |
+          cargo llvm-cov --summary-only --all-targets 2>/dev/null | tee /tmp/cov.txt
+          COV=$(awk '/^TOTAL/ {print $4}' /tmp/cov.txt)
+          echo "regions coverage: $COV"
+          awk -v cov="$COV" 'BEGIN { c = cov + 0; if (c < 84) { printf "FAIL: %s below 84%%\n", cov; exit 1 } }'
+      - name: WASM check
+        run: cargo check --target wasm32-unknown-unknown

@@ -381,6 +381,25 @@ fn conc_payload(line: &[u8]) -> &[u8] {
 }
 
 // ---------------------------------------------------------------------------
+// GEDCOM 7 enumeration sets (exact spellings from the spec registries).
+// Lowercase variants are the 5.5.1 spellings where they differ.
+const ROLE: &[&str] = &[
+    "CHIL", "CLERGY", "FATH", "FRIEND", "GODP", "HUSB", "MOTH", "MULTIPLE", "NGHBR",
+    "OFFICIATOR", "PARENT", "SPOU", "WIFE", "WITN", "OTHER",
+];
+const PEDI70: &[&str] = &["ADOPTED", "BIRTH", "FOSTER", "SEALING", "OTHER"];
+const PEDI551: &[&str] = &["adopted", "birth", "foster", "sealing", "other"];
+const QUAY: &[&str] = &["0", "1", "2", "3"];
+const RESN70: &[&str] = &["CONFIDENTIAL", "LOCKED", "PRIVACY"];
+const RESN551: &[&str] = &["confidential", "locked", "privacy"];
+const FAMC_STAT: &[&str] = &["CHALLENGED", "DISPROVEN", "PROVEN"];
+const NAME_TYPE70: &[&str] = &["AKA", "BIRTH", "IMMIGRANT", "MAIDEN", "MARRIED", "OTHER", "PROFESSIONAL"];
+const NAME_TYPE551: &[&str] = &["aka", "birth", "immigrant", "maiden", "married", "other", "professional"];
+const MEDI551: &[&str] = &[
+    "AUDIO", "BOOK", "CARD", "ELECTRONIC", "FICHE", "FILM", "MAGAZINE", "MANUSCRIPT",
+    "MAP", "NEWSPAPER", "OTHER", "PHOTO", "TOMBSTONE", "VIDEO",
+];
+
 // Line parser + rules
 // ---------------------------------------------------------------------------
 
@@ -456,6 +475,68 @@ fn truncate(s: &str, n: usize) -> String {
     }
 }
 
+/// W306: enumerated values (ROLE/PEDI/QUAY/RESN/STAT/TYPE/MEDI) against the
+/// 7.0 registry spellings (lowercase variants under 5.5.1). OTHER values
+/// are registered for the sibling-PHRASE check flushed at end of run.
+#[allow(clippy::too_many_arguments)]
+fn check_enum(
+    diags: &mut Vec<Diag>,
+    tag: &str,
+    value: &str,
+    parent_tag: &str,
+    record: &str,
+    parent_key: Option<(String, usize)>,
+    pending_other: &mut Vec<(String, String, usize, String, usize)>,
+    version: Version,
+    line: usize,
+) {
+    let v = value.trim();
+    if v.is_empty() {
+        return;
+    }
+    let set: Option<(&[&str], &str)> = match tag {
+        "ROLE" => Some((ROLE, "ASSO.ROLE")),
+        "PEDI" => Some((
+            if version == Version::V70 { PEDI70 } else { PEDI551 },
+            "FAMC.PEDI",
+        )),
+        "QUAY" => Some((QUAY, "SOUR.QUAY")),
+        "RESN" => Some((
+            if version == Version::V70 { RESN70 } else { RESN551 },
+            "RESN",
+        )),
+        "STAT" if parent_tag == "FAMC" && version != Version::V551 => {
+            Some((FAMC_STAT, "FAMC.STAT"))
+        }
+        "TYPE" if parent_tag == "NAME" => Some((
+            if version == Version::V70 { NAME_TYPE70 } else { NAME_TYPE551 },
+            "NAME.TYPE",
+        )),
+        "MEDI" if version != Version::V70 => Some((MEDI551, "FILE.FORM.MEDI")),
+        _ => None,
+    };
+    let Some((allowed, what)) = set else { return };
+    if allowed.contains(&v) {
+        if (tag == "ROLE" || tag == "PEDI" || tag == "TYPE") && (v == "OTHER" || v == "other") {
+            if let Some((ptag, pline)) = parent_key {
+                pending_other.push((record.to_string(), ptag, pline, tag.to_string(), line));
+            }
+        }
+        return;
+    }
+    let who = if record.is_empty() { format!("line {}", line) } else { record.to_string() };
+    push_capped(
+        diags,
+        vec![Diag::new(
+            "W306",
+            Category::Suspicious,
+            Severity::Warning,
+            line,
+            format!("{}: invalid {} value {:?} (expected: {})", who, what, v, allowed.join("|")),
+        )],
+    );
+}
+
 fn lint_lines(text: &str) -> Report {
     // The BOM is not part of the grammar: it is reported in encoding_diags
     // and stripped so "0 HEAD" on the first line is recognized.
@@ -495,19 +576,29 @@ fn lint_lines(text: &str) -> Report {
     let mut indi_sex: HashMap<String, (String, usize)> = HashMap::new();
     let mut indi_famc: HashMap<String, Vec<String>> = HashMap::new();
     let mut fam_chil: HashMap<String, Vec<String>> = HashMap::new();
-    let mut fam_husb: HashMap<String, String> = HashMap::new();
-    let mut fam_wife: HashMap<String, String> = HashMap::new();
+    let mut fam_husb: HashMap<String, (String, usize)> = HashMap::new();
+    let mut fam_wife: HashMap<String, (String, usize)> = HashMap::new();
     let mut fam_marr: HashMap<String, Option<i64>> = HashMap::new();
     let mut pending: Vec<(usize, String, String, String)> = Vec::new(); // (line, from, tag, target)
 
     let mut cur: Option<(String, String)> = None; // (xref, kind)
     let mut cur_sub = String::new();
-    let mut cur_birt: Option<i64> = None;
-    let mut cur_deat: Option<i64> = None;
     let mut saw_head = false;
     let mut saw_trlr = false;
     let mut prev_level: Option<u32> = None;
     let mut expect_conc_parent = false;
+    // Parent stack for context-sensitive rules (enums, OTHER/PHRASE):
+    // stack[i] is the tag/line of the nearest preceding line at level i.
+    let mut stack: Vec<(String, usize)> = Vec::new();
+    // E008 duplicate singletons: SEX/HUSB/WIFE counted via their maps below;
+    // HEAD children tracked here.
+    let mut saw_gedc_line: Option<usize> = None;
+    let mut saw_vers_line: Option<usize> = None;
+    let mut in_head_main = false;
+    let mut in_gedc_main = false;
+    // OTHER values awaiting a sibling PHRASE: (record, parent_tag, parent_line, tag, line).
+    let mut pending_other: Vec<(String, String, usize, String, usize)> = Vec::new();
+    let mut phrased: HashSet<(String, String, usize)> = HashSet::new();
 
     let flush_person = |diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d: Option<i64>, line: usize| {
         if let (Some(bb), Some(dd)) = (b, d) {
@@ -553,7 +644,7 @@ fn lint_lines(text: &str) -> Report {
             prev_level = None;
             continue;
         };
-        // E001: salt de nivell > +1.
+        // E001: level jump > +1.
         if let Some(p) = prev_level {
             if lvl > p + 1 {
                 push_capped(
@@ -569,6 +660,14 @@ fn lint_lines(text: &str) -> Report {
             }
         }
         prev_level = Some(lvl);
+        // Parent stack: truncate to the current level, read the parent
+        // (nearest preceding line one level up), then push this line.
+        while stack.len() > lvl as usize {
+            stack.pop();
+        }
+        let parent: Option<(String, usize)> = stack.last().cloned();
+        stack.push((l.tag.clone(), l.no));
+        let parent_tag: &str = parent.as_ref().map(|p| p.0.as_str()).unwrap_or("");
 
         // E004: xref syntax (@id@, no spaces, closed).
         if !l.xref.is_empty() && !is_pointer(&l.xref) {
@@ -630,12 +729,11 @@ fn lint_lines(text: &str) -> Report {
             if let Some((xref, _)) = cur.take() {
                 let _ = xref;
             }
-            if cur_birt.is_some() || cur_deat.is_some() {
-                // Es resol al canvi de registre via indi_birth/death ja guardats.
-            }
-            cur_birt = None;
-            cur_deat = None;
+            // Birth/death resolve at record change via the already stored maps.
             cur_sub.clear();
+            // HEAD scope for E008 (GEDC/VERS singletons) and E009.
+            in_head_main = l.tag == "HEAD";
+            in_gedc_main = false;
             if l.tag == "HEAD" {
                 saw_head = true;
             }
@@ -681,6 +779,24 @@ fn lint_lines(text: &str) -> Report {
 
         if lvl == 1 {
             cur_sub = l.tag.clone();
+            // E008: HEAD.GEDC is a {1:1} singleton.
+            if in_head_main && l.tag == "GEDC" {
+                if let Some(first) = saw_gedc_line {
+                    push_capped(
+                        &mut diags,
+                        vec![Diag::new(
+                            "E008",
+                            Category::Correctness,
+                            Severity::Error,
+                            l.no,
+                            format!("duplicate HEAD.GEDC (first at line {})", first),
+                        )],
+                    );
+                } else {
+                    saw_gedc_line = Some(l.no);
+                    in_gedc_main = true;
+                }
+            }
             if let Some((xref, kind)) = cur.clone() {
                 match (kind.as_str(), l.tag.as_str()) {
                     ("INDI", "FAMS") | ("INDI", "FAMC") => {
@@ -711,11 +827,23 @@ fn lint_lines(text: &str) -> Report {
                                 "CHIL" => {
                                     fam_chil.entry(xref.clone()).or_default().push(t);
                                 }
-                                "HUSB" => {
-                                    fam_husb.insert(xref.clone(), t);
-                                }
-                                "WIFE" => {
-                                    fam_wife.insert(xref.clone(), t);
+                                // E008: FAM.HUSB / FAM.WIFE are {0:1}.
+                                "HUSB" | "WIFE" => {
+                                    let slot = if l.tag == "HUSB" { &mut fam_husb } else { &mut fam_wife };
+                                    if let Some((_, first)) = slot.get(&xref) {
+                                        push_capped(
+                                            &mut diags,
+                                            vec![Diag::new(
+                                                "E008",
+                                                Category::Correctness,
+                                                Severity::Error,
+                                                l.no,
+                                                format!("duplicate {} in {} (first at line {})", l.tag, xref, first),
+                                            )],
+                                        );
+                                    } else {
+                                        slot.insert(xref.clone(), (t, l.no));
+                                    }
                                 }
                                 _ => {}
                             }
@@ -737,17 +865,29 @@ fn lint_lines(text: &str) -> Report {
                         }
                     }
                     ("INDI", "SEX") => {
-                        indi_sex.insert(xref.clone(), (l.value.clone(), l.no));
+                        // E008: INDI.SEX is {0:1}.
+                        if let Some((_, first)) = indi_sex.get(&xref) {
+                            push_capped(
+                                &mut diags,
+                                vec![Diag::new(
+                                    "E008",
+                                    Category::Correctness,
+                                    Severity::Error,
+                                    l.no,
+                                    format!("duplicate SEX in {} (first at line {})", xref, first),
+                                )],
+                            );
+                        } else {
+                            indi_sex.insert(xref.clone(), (l.value.clone(), l.no));
+                        }
                     }
                     ("FAM", "MARR") | ("INDI", "BIRT") | ("INDI", "DEAT") => {
                         if let Some(y) = year_of(&l.value) {
                             match l.tag.as_str() {
                                 "BIRT" => {
-                                    cur_birt = Some(y);
                                     indi_birth.insert(xref.clone(), Some(y));
                                 }
                                 "DEAT" => {
-                                    cur_deat = Some(y);
                                     indi_death.insert(xref.clone(), Some(y));
                                 }
                                 _ => {
@@ -822,15 +962,65 @@ fn lint_lines(text: &str) -> Report {
                         )],
                     );
                 }
+                // W306 enum values at level 1 (rare) + OTHER/PHRASE tracking.
+                check_enum(
+                    &mut diags,
+                    &l.tag,
+                    &l.value,
+                    parent_tag,
+                    &xref,
+                    parent.clone(),
+                    &mut pending_other,
+                    version,
+                    l.no,
+                );
             }
             continue;
         }
 
         // Level >= 2.
+        // E008: GEDC.VERS is a {1:1} singleton.
+        if in_head_main && in_gedc_main && l.tag == "VERS" {
+            if let Some(first) = saw_vers_line {
+                push_capped(
+                    &mut diags,
+                    vec![Diag::new(
+                        "E008",
+                        Category::Correctness,
+                        Severity::Error,
+                        l.no,
+                        format!("duplicate GEDC.VERS (first at line {})", first),
+                    )],
+                );
+            } else {
+                saw_vers_line = Some(l.no);
+            }
+        }
         // Pointers below level 1 (event SOUR/OBJE/NOTE...) resolve for E201 too.
         if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "REPO" | "SUBM") {
             let from = cur.clone().map(|c| c.0).unwrap_or_else(|| format!("line {}", l.no));
             pending.push((l.no, from, l.tag.clone(), inner_ptr(&l.value).to_string()));
+        }
+        // W306 enum values + OTHER/PHRASE tracking.
+        {
+            let rec = cur.clone().map(|c| c.0).unwrap_or_default();
+            if l.tag == "PHRASE" {
+                if let Some((ptag, pline)) = &parent {
+                    phrased.insert((rec, ptag.clone(), *pline));
+                }
+            } else {
+                check_enum(
+                    &mut diags,
+                    &l.tag,
+                    &l.value,
+                    parent_tag,
+                    &rec,
+                    parent.clone(),
+                    &mut pending_other,
+                    version,
+                    l.no,
+                );
+            }
         }
         // Upgrade path 5.5.1 -> 7 also at sublevels (e.g. ASSO.RELA).
         if version == Version::V551 && l.tag == "RELA" {
@@ -849,11 +1039,10 @@ fn lint_lines(text: &str) -> Report {
             if let Some((xref, kind)) = cur.clone() {
                 if kind == "INDI" {
                     if let Some(y) = year_of(&l.value) {
-                        cur_birt = Some(y);
                         indi_birth.insert(xref, Some(y));
                     }
                 } else if kind == "FAM" && cur_sub == "MARR" {
-                    // No-op: MARR es tracta a sota.
+                    // No-op: MARR is handled below.
                 }
             }
         }
@@ -861,7 +1050,6 @@ fn lint_lines(text: &str) -> Report {
             if let Some((xref, kind)) = cur.clone() {
                 if kind == "INDI" {
                     if let Some(y) = year_of(&l.value) {
-                        cur_deat = Some(y);
                         indi_death.insert(xref, Some(y));
                     }
                 }
@@ -923,6 +1111,37 @@ fn lint_lines(text: &str) -> Report {
             &mut diags,
             vec![Diag::new("E002", Category::Correctness, Severity::Error, 0, "missing TRLR record".into())],
         );
+    }
+
+    // E009: HEAD.GEDC and GEDC.VERS are {1:1} in both 5.5.1 and 7.0.
+    if saw_head && saw_gedc_line.is_none() {
+        push_capped(
+            &mut diags,
+            vec![Diag::new("E009", Category::Correctness, Severity::Error, 0, "HEAD without required GEDC".into())],
+        );
+    }
+    if saw_gedc_line.is_some() && saw_vers_line.is_none() {
+        push_capped(
+            &mut diags,
+            vec![Diag::new("E009", Category::Correctness, Severity::Error, 0, "GEDC without required VERS".into())],
+        );
+    }
+
+    // W306: OTHER enum values want a sibling PHRASE with the free text.
+    for (rec, ptag, pline, tag, line) in &pending_other {
+        if !phrased.contains(&(rec.clone(), ptag.clone(), *pline)) {
+            let who = if rec.is_empty() { format!("line {}", line) } else { rec.clone() };
+            push_capped(
+                &mut diags,
+                vec![Diag::new(
+                    "W306",
+                    Category::Suspicious,
+                    Severity::Info,
+                    *line,
+                    format!("{}: {} OTHER without a sibling PHRASE (add the free-text phrase)", who, tag),
+                )],
+            );
+        }
     }
 
     // E201: broken references. @VOID@ is the 7.0 null pointer: always valid.
@@ -1007,8 +1226,8 @@ fn lint_lines(text: &str) -> Report {
                 continue;
             }
             for (parent, rol) in [(&fam_husb.get(fam), "father"), (&fam_wife.get(fam), "mother")] {
-                if let Some(px) = parent {
-                    if let Some(Some(pb)) = indi_birth.get(*px) {
+                if let Some((px, _)) = parent {
+                    if let Some(Some(pb)) = indi_birth.get(px) {
                         let age = cb - pb;
                         let max = if rol == "mother" { 50 } else { 70 };
                         if age < 13 || age > max {

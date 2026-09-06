@@ -301,6 +301,93 @@ fn e201_level2_pointer() {
 }
 
 #[test]
+fn e008_duplicate_singletons() {
+    // INDI.SEX, FAM.HUSB, HEAD.GEDC, GEDC.VERS are all {0:1}/{1:1}.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 SEX M\n1 SEX F\n");
+    assert!(has(&g, "E008"));
+    let g2 = wrap551("0 @F1@ FAM\n1 HUSB @I1@\n1 HUSB @I2@\n0 @I1@ INDI\n1 NAME A /B/\n0 @I2@ INDI\n1 NAME C /D/\n");
+    assert!(has(&g2, "E008"));
+    let g3 = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n";
+    assert!(has(g3, "E008"));
+    // Singletons present exactly once: clean.
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 SEX M\n");
+    assert!(!has(&ok, "E008"));
+}
+
+#[test]
+fn e009_missing_required() {
+    // HEAD.GEDC and GEDC.VERS are {1:1}.
+    assert!(has("0 HEAD\n1 CHAR UTF-8\n0 TRLR\n", "E009"));
+    assert!(has("0 HEAD\n1 GEDC\n1 CHAR UTF-8\n0 TRLR\n", "E009"));
+    assert!(!has("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n", "E009"));
+}
+
+#[test]
+fn w306_enum_values() {
+    // Invalid ROLE / QUAY / RESN values fire W306.
+    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE ALIEN\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n", HEAD70);
+    assert!(has(&g, "W306"));
+    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE FRIEND\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok, "W306"));
+    let q = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 SOUR @S1@\n3 QUAY 9\n0 @S1@ SOUR\n1 TITL T\n");
+    assert!(has(&q, "W306"));
+    let r = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN locked\n0 TRLR\n", HEAD70);
+    assert!(has(&r, "W306"));
+    let r2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN LOCKED\n0 TRLR\n", HEAD70);
+    assert!(!has(&r2, "W306"));
+}
+
+#[test]
+fn w306_other_wants_phrase() {
+    // ROLE OTHER without a sibling PHRASE: info; with PHRASE: silent.
+    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n", HEAD70);
+    let r = lint_str(&g);
+    assert!(r.diags.iter().any(|d| d.code == "W306" && d.severity == Severity::Info));
+    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n2 PHRASE Teacher\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n", HEAD70);
+    assert!(!lint_str(&ok).diags.iter().any(|d| d.code == "W306"));
+}
+
+#[test]
+fn w302_3digit_years() {
+    // 3-digit years are valid: same name + 1 year apart still duplicates.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Joan /Puig/\n1 BIRT\n2 DATE 1 JAN 950\n0 @I2@ INDI\n1 NAME Joan /Puig/\n1 BIRT\n2 DATE 1 JAN 951\n",
+    );
+    assert!(has(&g, "W302"));
+}
+
+#[test]
+fn e101_ansel_exempt_conc_split() {
+    // Declared ANSEL: a high byte starting a CONC payload is legal, no E101.
+    let mut data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR ANSEL\n0 @I1@ INDI\n1 NOTE ab\n2 CONC ".to_vec();
+    data.push(0x83);
+    data.extend_from_slice(b"\n0 TRLR\n");
+    let r = lint_bytes(&data);
+    assert!(!r.diags.iter().any(|d| d.code == "E101"), "ANSEL: {:?}", r.diags);
+}
+
+#[test]
+fn w306_pedi_per_version() {
+    // PEDI case follows the version: uppercase in 7.0, lowercase in 5.5.1.
+    let fam70 = "0 @F1@ FAM\n1 CHIL @I1@\n";
+    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI ADOPTED\n{}0 TRLR\n", HEAD70, fam70);
+    assert!(!has(&g, "W306"));
+    let g2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI adopted\n{}0 TRLR\n", HEAD70, fam70);
+    assert!(has(&g2, "W306"));
+    let g3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI adopted\n0 @F1@ FAM\n1 CHIL @I1@\n");
+    assert!(!has(&g3, "W306"));
+    let g4 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI ADOPTED\n0 @F1@ FAM\n1 CHIL @I1@\n");
+    assert!(has(&g4, "W306"));
+}
+
+#[test]
+fn w306_medi_ignored_in_70() {
+    // MEDI is a 5.5.1 tag: never validated under 7.0.
+    let g = format!("{}0 @O1@ OBJE\n1 FILE\n2 FORM jpg\n3 MEDI PHOTO\n0 TRLR\n", HEAD70);
+    assert!(!has(&g, "W306"));
+}
+
+#[test]
 fn void_pointer_is_valid() {
     // @VOID@ is the 7.0 null pointer (voidptr.ged): never E201.
     let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 SOUR @VOID@\n0 TRLR\n", HEAD70);

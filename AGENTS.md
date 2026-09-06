@@ -23,6 +23,7 @@
 
 ## Deferred roadmap (audited, consciously postponed)
 
-- Cardinality engine from 7.0 `cardinalities.tsv` (duplicate `{0:1}`, missing `{1:1}`); needs a parent-tag stack.
-- Enum validation from 7.0 `tags/enumset-*.yaml` (ROLE/PEDI/QUAY/RESN/STAT); embed at build time.
-- 5.5.1: HEAD mandatory substructures + CHAR value set, full DATE_VALUE grammar, TRLR-position/trailing-junk check.
+- Full DATE_VALUE grammar (calendar escapes, phrases, FROM/TO pairing).
+- TRLR-position / trailing-junk check; HEAD CHAR value set enforcement.
+- Event-level cardinality (BIRT detail singletons); needs a deeper parent stack.
+- LDS ordinance enums (ORD_STAT) and EVEN payload validation.

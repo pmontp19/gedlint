@@ -26,11 +26,12 @@ fn help() -> String {
         EXIT: 0 clean, 1 warnings, 2 errors\n\
         \n\
         RULES: E001 level, E002 HEAD/TRLR, E003 duplicate xref, E004 xref,\n  \
-        E005 CONT/CONC, E007 CONC in 7.0, E101 UTF-8/split CONC, E201 broken refs,\n  \
+        E005 CONT/CONC, E007 CONC in 7.0, E008 duplicate singleton,\n  \
+        E009 missing required, E101 UTF-8/split CONC, E201 broken refs,\n  \
         W202 FAMC/CHIL mismatch, W301 death/longevity, W302 duplicates,\n  \
-        W303 parent age, W304 child before marriage, W305 SEX, W401 PLAC+URL,\n  \
-        W402 style (NAME/DATE), W403 NOTE+HTML, W102 encoding/style,\n  \
-        U501/U502 upgrade path 5.5.1 -> 7.0"
+        W303 parent age, W304 child before marriage, W305 SEX, W306 enums,\n  \
+        W401 PLAC+URL, W402 style (NAME/DATE), W403 NOTE+HTML,\n  \
+        W102 encoding/style, U501/U502 upgrade path 5.5.1 -> 7.0"
     )
 }
 
