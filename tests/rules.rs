@@ -388,6 +388,70 @@ fn w306_medi_ignored_in_70() {
 }
 
 #[test]
+fn w402_date_period_phrase_calendar() {
+    // FROM without TO, unbalanced parens, bad calendar escape: all W402.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE FROM 1900\n");
+    assert!(has(&g, "W402"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE FROM 1900 TO 1910\n");
+    assert!(!has(&ok, "W402"));
+    let g2 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE (seen on stone\n");
+    assert!(has(&g2, "W402"));
+    let g3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE @#MARS@ 1900\n");
+    assert!(has(&g3, "W402"));
+    let ok3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE @#DJULIAN@ 1900\n");
+    // DJULIAN is not a registry calendar: flagged. GREGORIAN passes.
+    assert!(has(&ok3, "W402"));
+    let ok4 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE @#GREGORIAN@ 1900\n");
+    assert!(!has(&ok4, "W402"));
+}
+
+#[test]
+fn e002_head_first_trlr_last() {
+    // TRLR must end the file; HEAD must open it.
+    assert!(has("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n0 @I1@ INDI\n1 NAME A /B/\n", "E002"));
+    assert!(has("0 @I1@ INDI\n1 NAME A /B/\n0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n", "E002"));
+    assert!(!has("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n", "E002"));
+}
+
+#[test]
+fn char_rules() {
+    // 5.5.1 CHAR has 4 legal values; 7.0 drops CHAR entirely.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR ANSI\n0 TRLR\n";
+    assert!(has(g, "W306"));
+    let ok = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 TRLR\n";
+    assert!(!has(ok, "W306"));
+    let g70 = format!("{}1 CHAR UTF-8\n0 TRLR\n", HEAD70);
+    assert!(has(&g70, "U501"));
+}
+
+#[test]
+fn e008_two_birt_blocks_ok() {
+    // BIRT is {0:M} (real @I131@ case): one DATE per block is legal.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1867\n1 BIRT\n2 DATE ABT 1870\n");
+    assert!(!has(&g, "E008"));
+}
+
+#[test]
+fn e008_event_detail_singleton() {
+    // Two DATEs under one BIRT: E008.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 DATE 1901\n");
+    assert!(has(&g, "E008"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC Reus\n");
+    assert!(!has(&ok, "E008"));
+}
+
+#[test]
+fn w306_lds_stat() {
+    // LDS ordinance STAT is enumerated (accepts PRE and PRE_1970).
+    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT BOGUS\n0 TRLR\n", HEAD70);
+    assert!(has(&g, "W306"));
+    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT COMPLETED\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok, "W306"));
+    let ok2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT PRE_1970\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok2, "W306"));
+}
+
+#[test]
 fn void_pointer_is_valid() {
     // @VOID@ is the 7.0 null pointer (voidptr.ged): never E201.
     let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 SOUR @VOID@\n0 TRLR\n", HEAD70);

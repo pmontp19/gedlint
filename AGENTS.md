@@ -23,7 +23,5 @@
 
 ## Deferred roadmap (audited, consciously postponed)
 
-- Full DATE_VALUE grammar (calendar escapes, phrases, FROM/TO pairing).
-- TRLR-position / trailing-junk check; HEAD CHAR value set enforcement.
-- Event-level cardinality (BIRT detail singletons); needs a deeper parent stack.
-- LDS ordinance enums (ORD_STAT) and EVEN payload validation.
+- Conflicting duplicate events (two BIRT blocks with different DATEs): suspicious, needs per-record event comparison.
+- EVEN payload validation and full LDS coverage beyond STAT.

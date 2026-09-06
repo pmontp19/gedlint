@@ -399,6 +399,21 @@ const MEDI551: &[&str] = &[
     "AUDIO", "BOOK", "CARD", "ELECTRONIC", "FICHE", "FILM", "MAGAZINE", "MANUSCRIPT",
     "MAP", "NEWSPAPER", "OTHER", "PHOTO", "TOMBSTONE", "VIDEO",
 ];
+// Common individual/family events whose detail singletons are {0:1}.
+const EVENT_TAGS: &[&str] = &[
+    "BIRT", "CHR", "DEAT", "BURI", "MARR", "DIV", "OCCU", "RESI", "EVEN", "FACT",
+    "CENS", "EMIG", "IMMI", "GRAD", "RETI", "BAPM", "CONF",
+];
+const EVENT_SINGLETONS: &[&str] = &[
+    "DATE", "PLAC", "ADDR", "AGNC", "CAUS", "RELI", "RESN", "TYPE", "AGE", "SDATE", "PAGE",
+];
+// LDS ordinances whose STAT is enumerated (spec TSV has PRE_1970/DNS_CAN;
+// the human page shows PRE: accept all three spellings).
+const LDS_EVENTS: &[&str] = &["BAPL", "CONL", "ENDL", "SLGC", "SLGS", "INIL"];
+const ORD_STAT: &[&str] = &[
+    "BIC", "CANCELED", "CHILD", "COMPLETED", "DNS", "DNS_CAN", "EXCLUDED", "INFANT",
+    "PRE", "PRE_1970", "STILLBORN", "SUBMITTED", "UNCLEARED",
+];
 
 // Line parser + rules
 // ---------------------------------------------------------------------------
@@ -508,6 +523,9 @@ fn check_enum(
         "STAT" if parent_tag == "FAMC" && version != Version::V551 => {
             Some((FAMC_STAT, "FAMC.STAT"))
         }
+        "STAT" if LDS_EVENTS.contains(&parent_tag) && version != Version::V551 => {
+            Some((ORD_STAT, "LDS.STAT"))
+        }
         "TYPE" if parent_tag == "NAME" => Some((
             if version == Version::V70 { NAME_TYPE70 } else { NAME_TYPE551 },
             "NAME.TYPE",
@@ -585,6 +603,8 @@ fn lint_lines(text: &str) -> Report {
     let mut cur_sub = String::new();
     let mut saw_head = false;
     let mut saw_trlr = false;
+    let mut first_done = false;
+    let mut after_trlr = false;
     let mut prev_level: Option<u32> = None;
     let mut expect_conc_parent = false;
     // Parent stack for context-sensitive rules (enums, OTHER/PHRASE):
@@ -599,6 +619,14 @@ fn lint_lines(text: &str) -> Report {
     // OTHER values awaiting a sibling PHRASE: (record, parent_tag, parent_line, tag, line).
     let mut pending_other: Vec<(String, String, usize, String, usize)> = Vec::new();
     let mut phrased: HashSet<(String, String, usize)> = HashSet::new();
+    // E008 event-detail singletons: (record, event, instance, sub) -> first line.
+    // The instance matters: INDI.BIRT is {0:M}, so two BIRT blocks may each
+    // carry one DATE; only two DATEs under the SAME block are duplicates.
+    let mut event_seen: HashMap<(String, String, usize, String), usize> = HashMap::new();
+    let mut event_inst: HashMap<(String, String), usize> = HashMap::new();
+    // Current event instance + the level it opened at: deeper levels
+    // (SOUR.DATA.DATE) belong to other structures, not to the event.
+    let mut cur_event: Option<(String, usize, u32)> = None;
 
     let flush_person = |diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d: Option<i64>, line: usize| {
         if let (Some(bb), Some(dd)) = (b, d) {
@@ -644,6 +672,35 @@ fn lint_lines(text: &str) -> Report {
             prev_level = None;
             continue;
         };
+        // E002: HEAD must be the first line; nothing may follow TRLR.
+        if !l.raw.trim().is_empty() {
+            if !first_done {
+                first_done = true;
+                if !(lvl == 0 && l.tag == "HEAD") {
+                    push_capped(
+                        &mut diags,
+                        vec![Diag::new(
+                            "E002",
+                            Category::Correctness,
+                            Severity::Error,
+                            l.no,
+                            "HEAD must be the first line".into(),
+                        )],
+                    );
+                }
+            } else if after_trlr {
+                push_capped(
+                    &mut diags,
+                    vec![Diag::new(
+                        "E002",
+                        Category::Correctness,
+                        Severity::Error,
+                        l.no,
+                        format!("content after TRLR: {}", truncate(&l.raw, 50)),
+                    )],
+                );
+            }
+        }
         // E001: level jump > +1.
         if let Some(p) = prev_level {
             if lvl > p + 1 {
@@ -731,6 +788,7 @@ fn lint_lines(text: &str) -> Report {
             }
             // Birth/death resolve at record change via the already stored maps.
             cur_sub.clear();
+            cur_event = None;
             // HEAD scope for E008 (GEDC/VERS singletons) and E009.
             in_head_main = l.tag == "HEAD";
             in_gedc_main = false;
@@ -739,6 +797,7 @@ fn lint_lines(text: &str) -> Report {
             }
             if l.tag == "TRLR" {
                 saw_trlr = true;
+                after_trlr = true;
             }
             if !l.xref.is_empty() {
                 if let Some((_, first_line)) = records.get(&l.xref) {
@@ -779,6 +838,39 @@ fn lint_lines(text: &str) -> Report {
 
         if lvl == 1 {
             cur_sub = l.tag.clone();
+            cur_event = None;
+            // HEAD.CHAR: removed in 7.0 (UTF-8 assumed); 5.5.1 has 4 legal values.
+            if in_head_main && l.tag == "CHAR" {
+                if version == Version::V70 {
+                    push_capped(
+                        &mut diags,
+                        vec![Diag::new(
+                            "U501",
+                            Category::Upgrade,
+                            Severity::Info,
+                            l.no,
+                            "CHAR removed in 7.0 (UTF-8 is assumed)".into(),
+                        )],
+                    );
+                } else {
+                    const CHAR551: &[&str] = &["ANSEL", "ASCII", "UNICODE", "UTF-8"];
+                    if !CHAR551.contains(&l.value.trim().to_ascii_uppercase().as_str()) {
+                        push_capped(
+                            &mut diags,
+                            vec![Diag::new(
+                                "W306",
+                                Category::Suspicious,
+                                Severity::Warning,
+                                l.no,
+                                format!(
+                                    "invalid HEAD.CHAR {:?} (expected ANSEL/ASCII/UNICODE/UTF-8)",
+                                    l.value.trim()
+                                ),
+                            )],
+                        );
+                    }
+                }
+            }
             // E008: HEAD.GEDC is a {1:1} singleton.
             if in_head_main && l.tag == "GEDC" {
                 if let Some(first) = saw_gedc_line {
@@ -798,6 +890,14 @@ fn lint_lines(text: &str) -> Report {
                 }
             }
             if let Some((xref, kind)) = cur.clone() {
+                // Event instance counter for E008 (BIRT is {0:M}: each block
+                // gets its own number so cross-block DATEs are not dups).
+                if EVENT_TAGS.contains(&l.tag.as_str()) {
+                    let key = (xref.clone(), l.tag.clone());
+                    let n = event_inst.get(&key).copied().unwrap_or(0) + 1;
+                    event_inst.insert(key, n);
+                    cur_event = Some((l.tag.clone(), n, lvl));
+                }
                 match (kind.as_str(), l.tag.as_str()) {
                     ("INDI", "FAMS") | ("INDI", "FAMC") => {
                         if is_pointer(&l.value) {
@@ -1006,7 +1106,7 @@ fn lint_lines(text: &str) -> Report {
             let rec = cur.clone().map(|c| c.0).unwrap_or_default();
             if l.tag == "PHRASE" {
                 if let Some((ptag, pline)) = &parent {
-                    phrased.insert((rec, ptag.clone(), *pline));
+                    phrased.insert((rec.clone(), ptag.clone(), *pline));
                 }
             } else {
                 check_enum(
@@ -1020,6 +1120,32 @@ fn lint_lines(text: &str) -> Report {
                     version,
                     l.no,
                 );
+            }
+            // E008: one {0:1} detail substructure per event instance, at the
+            // level directly under the event.
+            if !rec.is_empty() && EVENT_SINGLETONS.contains(&l.tag.as_str()) {
+                if let Some((ev, inst, ev_lvl)) = cur_event.clone() {
+                    if lvl == ev_lvl + 1 {
+                        let key = (rec.clone(), ev.clone(), inst, l.tag.clone());
+                        if let Some(first) = event_seen.get(&key) {
+                            push_capped(
+                                &mut diags,
+                                vec![Diag::new(
+                                    "E008",
+                                    Category::Correctness,
+                                    Severity::Error,
+                                    l.no,
+                                    format!(
+                                        "duplicate {} in {} {} (block {}, first at line {})",
+                                        l.tag, rec, ev, inst, first
+                                    ),
+                                )],
+                            );
+                        } else {
+                            event_seen.insert(key, l.no);
+                        }
+                    }
+                }
             }
         }
         // Upgrade path 5.5.1 -> 7 also at sublevels (e.g. ASSO.RELA).
@@ -1399,6 +1525,53 @@ fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, version: Ve
                     format!("BET range out of order (swap to chronological): {}", truncate(v, 50)),
                 )],
             );
+        }
+    }
+    // FROM/TO pairing (DATE_PERIOD needs both halves).
+    let words: Vec<&str> = v.split_whitespace().collect();
+    let has_from = words.contains(&"FROM");
+    let has_to = words.contains(&"TO");
+    if has_from != has_to {
+        push_capped(
+            diags,
+            vec![Diag::new(
+                "W402",
+                Category::Style,
+                Severity::Warning,
+                line,
+                format!("DATE period needs FROM x TO y: {}", truncate(v, 50)),
+            )],
+        );
+    }
+    // Balanced parentheses (DATE_PHRASE).
+    if v.matches('(').count() != v.matches(')').count() {
+        push_capped(
+            diags,
+            vec![Diag::new(
+                "W402",
+                Category::Style,
+                Severity::Warning,
+                line,
+                format!("DATE with unbalanced parentheses: {}", truncate(v, 50)),
+            )],
+        );
+    }
+    // Calendar escape @#...@: must close and name a known calendar.
+    if let Some(start) = v.find("@#") {
+        const CALENDARS: &[&str] = &["GREGORIAN", "JULIAN", "HEBREW", "FRENCH_R", "ROMAN", "UNKNOWN"];
+        let rest = &v[start + 2..];
+        match rest.find('@') {
+            Some(end) if CALENDARS.contains(&rest[..end].to_ascii_uppercase().as_str()) => {}
+            _ => push_capped(
+                diags,
+                vec![Diag::new(
+                    "W402",
+                    Category::Style,
+                    Severity::Warning,
+                    line,
+                    format!("DATE with bad calendar escape (use @#GREGORIAN@ etc.): {}", truncate(v, 50)),
+                )],
+            ),
         }
     }
 }
