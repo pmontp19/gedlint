@@ -2,32 +2,34 @@ use std::fs;
 use std::io::{BufReader, Write};
 use std::process::ExitCode;
 
-use gedlint::{Report, Severity, fix_bytes, lint_bytes, lint_reader};
+use gedlint::{Diag, Report, Severity, fix_bytes, lint_bytes, lint_reader};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn help() -> String {
     format!(
-        "gedlint {VERSION} (linter GEDCOM 5.5.1 + 7.0, Rust)\n\
+        "gedlint {VERSION} (GEDCOM 5.5.1 + 7.0 linter, Rust)\n\
         \n\
-        ÚS: gedlint [opcions] <fitxer.ged>\n\
+        USAGE: gedlint [options] <file.ged>\n\
         \n\
-        OPCIONS:\n  \
-        --fix                 repara (E101 CONC partit, espais finals) amb còpia .bak\n  \
-        --format text|json    sortida (defecte: text)\n  \
-        --severity N          nivell mínim: error, warning, info (defecte: info)\n  \
-        --no-color            sense colors ANSI\n  \
-        --quiet               només resum + exit code\n  \
-        -h, --help            aquesta ajuda\n  \
-        -V, --version         versió\n\
+        OPTIONS:\n  \
+        --fix                 repair (E001 orphan lines, E101 split CONC, trailing whitespace) with .bak copy\n  \
+        --format text|json    output (default: text)\n  \
+        --severity N          minimum level: error, warning, info (default: info)\n  \
+        --max N               cap on text diagnostics shown (default: 0 = all;\n  \
+                              JSON is always complete)\n  \
+        --no-color            no ANSI colors\n  \
+        --quiet               summary + exit code only\n  \
+        -h, --help            this help\n  \
+        -V, --version         version\n\
         \n\
-        EXIT: 0 net, 1 avisos, 2 errors\n\
+        EXIT: 0 clean, 1 warnings, 2 errors\n\
         \n\
-        REGLES: E001 nivell, E002 HEAD/TRLR, E003 xref duplicat, E004 xref,\n  \
-        E005 CONT/CONC, E101 UTF-8/CONC partit, E201 refs trencades,\n  \
-        W202 FAMC/CHIL creuat, W301 mort/longevitat, W302 duplicats,\n  \
-        W303 edat pares, W304 fill abans matrimoni, W305 SEX, W401 PLAC+URL,\n  \
-        W402 estil (NAME/DATE), W403 NOTE+HTML, W102 encoding/estil,\n  \
+        RULES: E001 level, E002 HEAD/TRLR, E003 duplicate xref, E004 xref,\n  \
+        E005 CONT/CONC, E007 CONC in 7.0, E101 UTF-8/split CONC, E201 broken refs,\n  \
+        W202 FAMC/CHIL mismatch, W301 death/longevity, W302 duplicates,\n  \
+        W303 parent age, W304 child before marriage, W305 SEX, W401 PLAC+URL,\n  \
+        W402 style (NAME/DATE), W403 NOTE+HTML, W102 encoding/style,\n  \
         U501/U502 upgrade path 5.5.1 -> 7.0"
     )
 }
@@ -48,6 +50,7 @@ fn main() -> ExitCode {
     let mut fix = false;
     let mut format = "text".to_string();
     let mut min_sev = Severity::Info;
+    let mut max_show: usize = 0;
     let mut no_color = false;
     let mut quiet = false;
     let mut path: Option<String> = None;
@@ -69,36 +72,50 @@ fn main() -> ExitCode {
             "--format" => {
                 i += 1;
                 if i >= args.len() {
-                    eprintln!("--format necessita text|json");
+                    eprintln!("--format needs text|json");
                     return ExitCode::from(2);
                 }
                 format = args[i].clone();
                 if format != "text" && format != "json" {
-                    eprintln!("--format ha de ser text|json");
+                    eprintln!("--format must be text|json");
                     return ExitCode::from(2);
                 }
             }
             "--severity" => {
                 i += 1;
                 if i >= args.len() {
-                    eprintln!("--severity necessita error|warning|info");
+                    eprintln!("--severity needs error|warning|info");
                     return ExitCode::from(2);
                 }
                 match Severity::parse(&args[i]) {
                     Some(s) => min_sev = s,
                     None => {
-                        eprintln!("--severity ha de ser error|warning|info");
+                        eprintln!("--severity must be error|warning|info");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            "--max" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--max needs a number");
+                    return ExitCode::from(2);
+                }
+                match args[i].parse::<usize>() {
+                    Ok(n) => max_show = n,
+                    Err(_) => {
+                        eprintln!("--max must be a number >= 0");
                         return ExitCode::from(2);
                     }
                 }
             }
             a if a.starts_with('-') => {
-                eprintln!("opció desconeguda: {} (prova --help)", a);
+                eprintln!("unknown option: {} (try --help)", a);
                 return ExitCode::from(2);
             }
             a => {
                 if path.is_some() {
-                    eprintln!("només un fitxer per invocació");
+                    eprintln!("only one file per invocation");
                     return ExitCode::from(2);
                 }
                 path = Some(a.to_string());
@@ -112,7 +129,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    // --fix abans de lintar: llegeix bytes, repara, escriu .bak.
+    // --fix before linting: read bytes, repair, write .bak.
     if fix {
         match fs::read(&path) {
             Ok(data) => {
@@ -120,41 +137,40 @@ fn main() -> ExitCode {
                 if fixed != data {
                     let bak = format!("{}.bak", path);
                     if let Err(e) = fs::write(&bak, &data) {
-                        eprintln!("no s'ha pogut escriure {}: {}", bak, e);
+                        eprintln!("cannot write {}: {}", bak, e);
                         return ExitCode::from(2);
                     }
                     if let Err(e) = fs::write(&path, &fixed) {
-                        eprintln!("no s'ha pogut escriure {}: {}", path, e);
+                        eprintln!("cannot write {}: {}", path, e);
                         return ExitCode::from(2);
                     }
                     let stdout = std::io::stdout();
                     let mut h = stdout.lock();
-                    let _ = writeln!(h, "fix: {} (còpia {})", applied.join("; "), bak);
+                    let _ = writeln!(h, "fix: {} (backup {})", applied.join("; "), bak);
                 }
             }
             Err(e) => {
-                eprintln!("no es pot llegir {}: {}", path, e);
+                eprintln!("cannot read {}: {}", path, e);
                 return ExitCode::from(2);
             }
         }
     }
 
-    // Streaming via BufReader (no fs::read sencer al motor).
+    // Streaming via BufReader (no whole-file fs::read in the engine).
     let report: Report = match fs::File::open(&path) {
         Ok(f) => lint_reader(BufReader::new(f)),
         Err(e) => {
-            // Fallback: si no es pot obrir com a fitxer, missatge clar.
-            eprintln!("no es pot llegir {}: {}", path, e);
+            eprintln!("cannot read {}: {}", path, e);
             return ExitCode::from(2);
         }
     };
-    // Nota: lint_reader ja cobreix encoding; lint_bytes seria equivalent.
+    // Note: lint_reader already covers encoding; lint_bytes is equivalent.
 
     if format == "json" {
         println!("{}", report.to_json());
     } else if quiet {
         println!(
-            "{}: {} línies, {} INDI, {} FAM, {} errors, {} avisos, {} infos (GEDCOM {})",
+            "{}: {} lines, {} INDI, {} FAM, {} errors, {} warnings, {} infos (GEDCOM {})",
             path,
             report.lines,
             report.individuals,
@@ -167,9 +183,12 @@ fn main() -> ExitCode {
     } else {
         let stdout = std::io::stdout();
         let mut h = stdout.lock();
-        for d in report.filtered(min_sev) {
+        let shown_all = report.filtered(min_sev);
+        let total = shown_all.len();
+        let shown: &[&Diag] = if max_show > 0 && total > max_show { &shown_all[..max_show] } else { &shown_all };
+        for d in shown {
             let (c1, c2) = color_for(&d.severity, no_color);
-            let loc = if d.line > 0 { format!("línia {}", d.line) } else { "-".to_string() };
+            let loc = if d.line > 0 { format!("line {}", d.line) } else { "-".to_string() };
             let _ = writeln!(
                 h,
                 "{}{} [{}:{}]{} {}: {}",
@@ -184,9 +203,10 @@ fn main() -> ExitCode {
         }
         let _ = writeln!(
             h,
-            "\n{}: {} diagnòstics ({} errors, {} avisos, {} infos), {} línies, {} INDI, {} FAM [GEDCOM {}]",
+            "\n{}: {} diagnostics{} ({} errors, {} warnings, {} infos), {} lines, {} INDI, {} FAM [GEDCOM {}]",
             path,
-            report.filtered(min_sev).len(),
+            total,
+            if total > shown.len() { format!(" (showing {})", shown.len()) } else { String::new() },
             report.errors(),
             report.warnings(),
             report.infos(),
@@ -197,7 +217,7 @@ fn main() -> ExitCode {
         );
     }
 
-    // Silencia warning d'import si canvia el motor.
+    // Silence unused-import warning if the engine changes.
     let _ = lint_bytes;
     ExitCode::from(report.exit_code() as u8)
 }

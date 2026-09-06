@@ -1,5 +1,5 @@
-//! Tests per regla amb fixtures mínims (criteri d'acceptació 5).
-//! Cada test construeix el GEDCOM més petit que dispara una sola regla.
+//! One rule per test with minimal fixtures (acceptance criterion 5).
+//! Each test builds the smallest GEDCOM that triggers a single rule.
 
 use gedlint::{Severity, Version, fix_bytes, lint_bytes, lint_str};
 
@@ -69,7 +69,7 @@ fn w301_death_before_birth() {
 
 #[test]
 fn w301_longevity_112() {
-    // Entrada de 112 anys del corpus real: ha de disparar W301.
+    // The 112-year entry from the real corpus: must trigger W301.
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1 JAN 1800\n1 DEAT\n2 DATE 1 JAN 1912\n");
     assert!(has(&g, "W301"));
 }
@@ -79,7 +79,7 @@ fn w302_duplicates() {
     let g = wrap551(
         "0 @I1@ INDI\n1 NAME Joan /Osó/\n1 BIRT\n2 DATE 1861\n0 @I2@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1862\n",
     );
-    // "Osó" vs "Oso" no normalitza accents: usem mateix nom exacte.
+    // "Osó" vs "Oso" does not normalize accents: use the exact same name.
     let g2 = wrap551(
         "0 @I1@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1861\n0 @I2@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1862\n",
     );
@@ -129,8 +129,8 @@ fn w402_name_slashes() {
 
 #[test]
 fn e101_conc_split_fix() {
-    // Construeix el bug MyHeritage a nivell byte: "é" (U+00E9 = C3 A9)
-    // partit entre dues línies CONC: primera acaba amb C3, següent comença amb A9.
+    // Build the MyHeritage bug at byte level: "é" (U+00E9 = C3 A9)
+    // split across two CONC lines: first ends with C3, next starts with A9.
     let mut data = Vec::new();
     data.extend_from_slice("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME Jos".as_bytes());
     data.push(0xC3);
@@ -144,7 +144,7 @@ fn e101_conc_split_fix() {
     let r2 = lint_bytes(&fixed);
     assert!(
         !r2.diags.iter().any(|d| d.code == "E101"),
-        "E101 ha de desaparèixer després de --fix: {:?}",
+        "E101 must be gone after --fix: {:?}",
         r2.diags
     );
     assert!(String::from_utf8(fixed).is_ok());
@@ -159,8 +159,199 @@ fn fix_trims_trailing_ws() {
 }
 
 #[test]
+fn e001_orphan_cont_fix() {
+    // MyHeritage continuation without CONT prefix (real cleaned-tree case).
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT <p>origen\ncontinuacio sense prefix\n0 TRLR\n"
+        .to_vec();
+    let r = lint_bytes(&data);
+    assert!(r.diags.iter().any(|d| d.code == "E001"));
+    let (fixed, applied) = fix_bytes(&data);
+    assert!(applied.iter().any(|a| a.contains("CONT")));
+    let r2 = lint_bytes(&fixed);
+    assert!(!r2.diags.iter().any(|d| d.code == "E001" && d.line == 7), "orphan line 7 repaired: {:?}", r2.diags);
+    let text = String::from_utf8(fixed).unwrap();
+    assert!(text.contains("3 CONT continuacio sense prefix"));
+}
+
+#[test]
+fn no_global_cap_hides_errors() {
+    // 516 real _UPD infos used to hide errors behind the 200 global cap: now everything is collected.
+    let mut g = String::from(HEAD551);
+    for i in 1..=300 {
+        g.push_str(&format!("0 @I{}@ INDI\n1 NAME A{} /B/\n1 _UPD X\n", i, i));
+    }
+    g.push_str("0 @F9@ FAM\n1 CHIL @I999@\n0 TRLR\n");
+    let r = lint_str(&g);
+    assert!(r.diags.iter().any(|d| d.code == "E201"), "E201 must not stay hidden: {:?}", r.diags.len());
+    assert!(r.infos() >= 300);
+}
+
+#[test]
+fn bom_does_not_hide_head_or_version() {
+    // The real MyHeritage export starts with a BOM: HEAD and VERS must still be detected.
+    let g = "\u{FEFF}0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n";
+    let r = lint_str(g);
+    assert_eq!(r.version, Version::V551);
+    assert!(!r.diags.iter().any(|d| d.code == "E002"));
+    let rb = lint_bytes(g.as_bytes());
+    assert!(rb.diags.iter().any(|d| d.code == "W102"));
+}
+
+#[test]
+fn deat_y_without_date_is_not_longevity() {
+    // DEAT Y without DATE = death with unknown date, not 8097 years.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1902\n1 DEAT Y\n");
+    assert!(!has(&g, "W301"));
+}
+
+#[test]
+fn w302_no_false_positive_distant_births() {
+    // Same name but 10 years apart: must NOT be a duplicate (kills ±200 mutant).
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1861\n0 @I2@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1871\n",
+    );
+    assert!(!has(&g, "W302"));
+}
+
+#[test]
+fn w302_case_insensitive_duplicates() {
+    // Same name in different case: still a duplicate (kills no-lowercase mutant).
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME JOAN /OSO/\n1 BIRT\n2 DATE 1861\n0 @I2@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1862\n",
+    );
+    assert!(has(&g, "W302"));
+}
+
+#[test]
+fn w303_old_mother_60() {
+    // Mother aged 60 (>50) fires; father aged 60 (<=70) does not matter here.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1870\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1870\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE 1930\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    assert!(has(&g, "W303"));
+}
+
+#[test]
+fn date_year_3000_ignored() {
+    // Year 3000 is outside 100..=2100: no birth year, no W303 (kills 9999 mutant).
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1900\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE 3000\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    assert!(!has(&g, "W303"));
+}
+
+#[test]
+fn e004_malformed_xref() {
+    // Unclosed xref is malformed.
+    let g = wrap551("0 @I1 INDI\n1 NAME A /B/\n");
+    assert!(has(&g, "E004"));
+}
+
+#[test]
+fn e005_orphan_cont() {
+    // CONT as the first line has no parent.
+    assert!(has("2 CONT orphan\n", "E005"));
+}
+
+#[test]
+fn u502_vendor_tag() {
+    // MyHeritage _UPD is a vendor tag: upgrade info, never an error.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 _UPD 20240101\n");
+    let r = lint_str(&g);
+    assert!(r.diags.iter().any(|d| d.code == "U502" && d.severity == Severity::Info));
+}
+
+#[test]
+fn u501_lowercase_pedi() {
+    // 5.5.1 lowercase PEDI values must be uppercase in 7.0.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI birth\n0 @F1@ FAM\n1 CHIL @I1@\n");
+    assert!(has(&g, "U501"));
+}
+
+#[test]
+fn w402_date_approximations_and_months() {
+    // Lowercase "about" and non-English months violate DATE style.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE about 1900\n");
+    assert!(has(&g, "W402"));
+    let g2 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 18 gener 1861\n");
+    assert!(has(&g2, "W402"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE ABT 1900\n");
+    assert!(!has(&ok, "W402"));
+}
+
+#[test]
+fn w102_control_char_and_mixed_endings() {
+    let g = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A\x01 /B/\n0 TRLR\n";
+    assert!(has(g, "W102"));
+    let g2 = "0 HEAD\r\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n";
+    assert!(has(g2, "W102"));
+}
+
+#[test]
+fn e201_level2_pointer() {
+    // Broken pointer below level 1 (e.g. event SOUR) is still E201.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 SOUR @S9@\n");
+    assert!(has(&g, "E201"));
+}
+
+#[test]
+fn void_pointer_is_valid() {
+    // @VOID@ is the 7.0 null pointer (voidptr.ged): never E201.
+    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 SOUR @VOID@\n0 TRLR\n", HEAD70);
+    assert!(!has(&g, "E201"));
+}
+
+#[test]
+fn conc_illegal_in_70() {
+    // CONC is a reserved tag in 7.0 (spec 1.3): E007.
+    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n2 CONC more\n0 TRLR\n", HEAD70);
+    assert!(has(&g, "E007"));
+    let g551 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n2 CONC more\n");
+    assert!(!has(&g551, "E007"));
+}
+
+#[test]
+fn bet_without_and_flagged_in_551() {
+    // 5.5.1 DATE_RANGE mandates BET x AND y: W402.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BET 1900\n");
+    assert!(has(&g, "W402"));
+}
+
+#[test]
+fn bet_range_order() {
+    // Out-of-order range: U501 info suggesting a swap.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BET 1920 AND 1900\n");
+    assert!(has(&g, "U501"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BET 1900 AND 1920\n");
+    assert!(!has(&ok, "U501"));
+}
+
+#[test]
+fn ansel_skips_utf8_checks() {
+    // Declared ANSEL: high bytes are legal, E101 must stay silent.
+    let mut data = b"0 HEAD\n1 CHAR ANSEL\n0 @I1@ INDI\n1 NAME Jos\xe9 /Oso/\n0 TRLR\n".to_vec();
+    let r = lint_bytes(&data);
+    assert!(!r.diags.iter().any(|d| d.code == "E101"), "ANSEL: {:?}", r.diags);
+    let _ = &mut data;
+}
+
+#[test]
+fn bom_silent_in_70() {
+    // GEDCOM 7 recommends the BOM (spec 1.1): no W102 for it.
+    let g = "\u{FEFF}0 HEAD\n1 GEDC\n2 VERS 7.0\n0 TRLR\n";
+    let r = lint_bytes(g.as_bytes());
+    assert!(!r.diags.iter().any(|d| d.code == "W102" && d.line == 1));
+}
+
+#[test]
 fn version_detect_70_and_upgrade_rules() {
-    // RELA a 5.5.1 dispara U501; SEX X és vàlid a 7.0 però no a 5.5.1.
+    // RELA under 5.5.1 triggers U501; SEX X is valid in 7.0 but not in 5.5.1.
     let g551 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 RELA germà\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n", HEAD551);
     assert!(has(&g551, "U501"));
     let g70 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 SEX X\n0 TRLR\n", HEAD70);
@@ -173,7 +364,7 @@ fn version_detect_70_and_upgrade_rules() {
 
 #[test]
 fn gedcom70_minimal_clean() {
-    // Fixture propi 7.0 (criteri 5): minimal70 de gedcom.io redueix a HEAD+SOUR+TRLR.
+    // Own 7.0 fixture (criterion 5): gedcom.io minimal70 reduced to HEAD+SOUR+TRLR.
     let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n1 SOUR gedlint\n0 TRLR\n";
     let r = lint_str(g);
     assert_eq!(r.version, Version::V70);

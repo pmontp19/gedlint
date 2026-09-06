@@ -1,44 +1,45 @@
 # gedlint
 
-Linter GEDCOM en Rust: ràpid, binari únic, streaming per fitxers grans, suport dual 5.5.1 (llegat, exports MyHeritage) + 7.0 (espec formal). Compilable a WASM per reutilitzar el motor al viewer web.
+GEDCOM linter in Rust: fast, single binary, streaming for large files, dual 5.5.1 (legacy, MyHeritage exports) + 7.0 (formal spec) support. Compilable to WASM to reuse the engine in a web viewer.
 
-Spec completa: pmontp19/gedcom-family-tree issue #2 (revisió de #1).
+Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 
-## Estat
+## Status
 
-MVP funcional: `cargo test` (23 tests), `cargo clippy` net, release validat a 4.5MB en 0.09s, `cargo check --target wasm32-unknown-unknown` OK.
+Working MVP: `cargo test` (54 tests: 2 unit + 42 rule + 10 CLI), `cargo clippy` clean, `cargo llvm-cov` 87.8% regions (lib 88.9%, main 79.4%), release validated at 4.5MB in 0.09s, `cargo check --target wasm32-unknown-unknown` OK. Validated against a real 520-person MyHeritage tree (found 175 strict-grammar errors the previous validator missed: HTML continuations without CONT, plus encoding quirks). Rule set audited against the 5.5.1 and 7.0 specs; hand-rolled mutation testing at 14/18 killed, survivors covered with regression tests.
 
-## Ús
+## Usage
 
 ```
-gedlint [--fix] [--format text|json] [--severity error|warning|info] [--no-color] [--quiet] <fitxer.ged>
+gedlint [--fix] [--format text|json] [--severity error|warning|info] [--max N] [--no-color] [--quiet] <file.ged>
 ```
 
-Exit codes: 0 net, 1 avisos, 2 errors.
+Exit codes: 0 clean, 1 warnings, 2 errors.
 
-`--fix` només aplica reparacions segures (E101 CONC partit, espais finals) i sempre escriu còpia `.bak`.
+`--fix` only applies safe repairs (E001 orphan lines get a CONT prefix, E101 split CONC rejoined, trailing whitespace trimmed) and always writes a `.bak` copy. `--max N` caps text output (JSON is always complete); `--severity` sets the minimum level shown.
 
-## Disseny
+## Design
 
-- **Linter, no només validador**: categories (correctness / suspicious / style / upgrade), severitats configurables, `--fix`. Model clippy/eslint.
-- **`src/lib.rs`**: motor pur (`lint_str`, `lint_bytes`, `lint_reader`, `fix_bytes`, `Report::to_json`). Sense fs ni process: compila a WASM sense canvis. Parsing en streaming (`BufRead` línia a línia).
-- **`src/main.rs`**: capa prima CLI (args a mà, zero dependències, colors ANSI manuals).
-- **Versió**: es detecta via `HEAD.GEDC.VERS` i s'aplica el joc de regles per versió. Regles `U5xx` marquen l'upgrade path 5.5.1 cap a 7.0 (vegeu https://gedcom.io/migrate/).
-- **Tests**: `tests/rules.rs`, un fixture mínim per regla + fixture 7.0 propi.
+- **Linter, not just a validator**: categories (correctness / suspicious / style / upgrade), configurable severities, `--fix`. clippy/eslint model.
+- **`src/lib.rs`**: pure engine (`lint_str`, `lint_bytes`, `lint_reader`, `fix_bytes`, `Report::to_json`). No fs or process usage: compiles to WASM unchanged. Streaming line-by-line parsing (`BufRead`).
+- **`src/main.rs`**: thin CLI layer (hand-rolled args, zero dependencies, manual ANSI colors).
+- **Version**: detected via `HEAD.GEDC.VERS`; the rule set applies per version. `U5xx` rules flag the 5.5.1 to 7.0 upgrade path (see https://gedcom.io/migrate/).
+- **No global diagnostic cap**: every diagnostic is collected (a real file with 516 `_UPD` infos once hid errors behind a 200-item cap); output limiting is opt-in via `--max`.
+- **Tests**: `tests/rules.rs` (one minimal fixture per rule plus an own 7.0 fixture) and `tests/cli.rs` (end-to-end: formats, exit codes, `--fix`/`.bak`, `--severity`, `--max`).
 
-## Regles
+## Rules
 
-Estructurals: E001 salt de nivell, E002 HEAD/TRLR, E003 xref duplicat, E004 xref malformat, E005 CONT/CONC orfe.
-Codificació: E101 UTF-8 invàlid / CONC partit (bug MyHeritage) amb `--fix`, W102 BOM / CRLF mixt / controls.
-Referencials: E201 refs trencades, W202 FAMC/CHIL creuat.
-Semàntiques: W301 mort abans de néixer / longevitat >105, W302 duplicats (nom + naixement ±2 anys), W303 edat pares, W304 fill abans del matrimoni, W305 SEX.
-Estil/quirks MyHeritage: W401 URL dins PLAC, W402 NAME/DATE no estàndard, W403 NOTE amb HTML.
-Upgrade: U501 RELA/PEDI/BET (canvis 7.0), U502 tags propietaris `_MARNM`/`_UPD`/Ancestry.
+Structural: E001 level, E002 HEAD/TRLR, E003 duplicate xref, E004 malformed xref, E005 orphan CONT/CONC, E007 CONC in 7.0 (reserved tag, spec 1.3).
+Encoding: E101 invalid UTF-8 / split CONC (MyHeritage bug) with `--fix` (skipped for declared ANSEL/ASCII), W102 BOM (silent in 7.0, which recommends it) / mixed CRLF / control chars.
+Referential: E201 broken refs incl. level-2+ pointers (@VOID@ exempt), W202 FAMC/CHIL mismatch.
+Semantic: W301 death before birth / longevity >105 (DEAT Y without a date is excluded), W302 duplicates (name + birth ±2 years), W303 parent age, W304 child before marriage, W305 SEX (X valid only in 7.0).
+Style/MyHeritage quirks: W401 URL inside PLAC, W402 non-standard NAME/DATE (incl. BET without AND under 5.5.1), W403 NOTE with HTML.
+Upgrade: U501 RELA/PEDI/BET (7.0 changes, incl. out-of-order ranges), U502 vendor tags `_MARNM`/`_UPD`/Ancestry (kept as undocumented extensions, SCHMA recommended).
 
-## Estat de l'art (resum recerca, set 2026)
+## State of the art (research summary, Sep 2026)
 
-Validadors existents: Chronoplex GEDCOM Validator (Windows/.NET, tancat), GED-inline (Java MIT, 5.5/5.5.1/7.0, referència + ged-inline.org), gedcomtools Python (MIT, G5+G7+GX, `validate7`), js-gedcom (validació 7 completa), C# ArmidaleSoftware, go-gedcom (ABNF). Linters amb `--fix`: sashaperigo/gedcom-tools (Ancestry, Python), zupulint (26 checks, privacitat). Rust: pirtleshell/rust-gedcom (abandonat 2021, només parse 5.5.1), crate `ged_io` (lectura/escriptura). Forat: cap linter Rust amb model clippy (categories/severitats/config/--fix), streaming+WASM i dual 5/7 amb semàntica genealògica. Aquí entra gedlint.
+Existing validators: Chronoplex GEDCOM Validator (Windows/.NET, closed), GED-inline (Java MIT, 5.5/5.5.1/7.0, reference + ged-inline.org), gedcomtools Python (MIT, G5+G7+GX, `validate7`), js-gedcom (full 7 validation), ArmidaleSoftware C#, go-gedcom (ABNF). Linters with `--fix`: sashaperigo/gedcom-tools (Ancestry, Python), zupulint (26 checks, privacy). Rust: pirtleshell/rust-gedcom (abandoned 2021, parse-only 5.5.1), `ged_io` crate (read/write). Gap: no Rust linter with a clippy model (categories/severities/config/--fix), streaming+WASM and dual 5/7 with genealogical semantics. That is where gedlint fits.
 
-## Fixtures reals
+## Real fixtures
 
-pmontp19/Genealogia-Montpeo (privat): GEDCOM MyHeritage amb UTF-8 partit, PLAC amb URLs, SEX U, duplicats, edats impossibles, entrada de 112 anys.
+pmontp19/Genealogia-Montpeo (private): MyHeritage GEDCOM with split UTF-8, PLAC URLs, SEX U, real duplicates, impossible ages, a 112-year entry. Never paste private tree data into public issues; discuss counts and rule codes only.

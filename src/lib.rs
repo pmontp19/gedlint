@@ -1,9 +1,9 @@
-//! gedlint: motor del linter GEDCOM (5.5.1 + 7.0).
+//! gedlint: GEDCOM linter engine (5.5.1 + 7.0).
 //!
-//! Disseny: parsing en streaming línia a línia (`BufRead`), sense carregar
-//! l'arbre sencer. El nucli és pur (`&str` in, `Report` out) i per tant
-//! compilable a WASM sense canvis: el binari CLI és una capa prima (fs + args).
-//! Zero dependències.
+//! Design: streaming line-by-line parsing (`BufRead`) without loading the
+//! whole tree. The core is pure (`&str` in, `Report` out) and therefore
+//! compilable to WASM unchanged: the CLI binary is a thin layer (fs + args).
+//! Zero dependencies.
 
 use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
@@ -118,7 +118,7 @@ impl Report {
         self.diags.iter().filter(|d| d.severity >= min).collect()
     }
 
-    /// Serialitza a JSON sense dependències (per CLI --format json i per WASM).
+    /// Dependency-free JSON serialization (for CLI --format json and WASM).
     pub fn to_json(&self) -> String {
         let mut out = String::with_capacity(self.diags.len() * 128);
         out.push_str("{\"version\":\"");
@@ -173,44 +173,77 @@ fn escape_json(s: &str) -> String {
     o
 }
 
-const MAX_ERRORS: usize = 200;
-
 // ---------------------------------------------------------------------------
-// API pública pura (reutilitzable des de WASM): text in, informe out.
+// Pure public API (reusable from WASM): text in, report out.
 // ---------------------------------------------------------------------------
 
-/// Analitza text GEDCOM ja llegit. Nucli pur apte per WASM.
+/// Lint already-read GEDCOM text. Pure core, WASM-suitable.
 pub fn lint_str(input: &str) -> Report {
     lint_bytes_split(input.as_bytes(), true)
 }
 
-/// Analitza bytes crus (detecta UTF-8 / BOM / CRLF abans de decodificar).
-/// `is_final` reservat per a futures passades incrementals.
+/// Lint raw bytes (detects UTF-8 / BOM / CRLF before decoding).
 pub fn lint_bytes(data: &[u8]) -> Report {
     lint_bytes_split(data, false)
 }
 
-fn lint_bytes_split(data: &[u8], already_str: bool) -> Report {
-    let mut diags: Vec<Diag> = Vec::new();
-    push_capped(&mut diags, encoding_diags(data, already_str));
-
+fn lint_bytes_split(data: &[u8], _already_str: bool) -> Report {
     let text = String::from_utf8_lossy(data).into_owned();
+    let (version, charset) = scan_head(&text);
+    let diags: Vec<Diag> = encoding_diags(data, version, charset.as_deref());
+
     let mut r = lint_lines(&text);
-    // Els diags d'encoding van primer (línia baixa), després els semàntics.
+    // Encoding diags go first (low line numbers), then semantic ones.
     let mut all = diags;
     all.append(&mut r.diags);
     all.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.line.cmp(&b.line)));
     r.diags = all;
+    // The byte-level pre-scan and the line parser must agree on version.
+    if r.version == Version::Unknown {
+        r.version = version;
+    }
     r
 }
 
-/// Entrada streaming: llegeix línia a línia sense carregar-ho tot de cop.
-/// Útil per a exports de 100MB+. Internament delega a `lint_lines` per
-/// simplicitat, però el contracte és `BufRead`.
+/// Cheap pre-scan of HEAD for version (HEAD.GEDC.VERS) and declared
+/// charset (HEAD.CHAR), so byte-level encoding rules can adapt
+/// (ANSEL files are not UTF-8; a BOM is recommended by GEDCOM 7).
+fn scan_head(text: &str) -> (Version, Option<String>) {
+    let mut version = Version::Unknown;
+    let mut charset: Option<String> = None;
+    let mut in_head = false;
+    let mut in_gedc = false;
+    let body = text.strip_prefix('\u{FEFF}').unwrap_or(text);
+    for raw in body.lines() {
+        let l = parse_line(0, raw);
+        let Some(lvl) = l.level else { continue };
+        if lvl == 0 {
+            in_head = l.tag == "HEAD";
+            in_gedc = false;
+        } else if in_head && lvl == 1 {
+            in_gedc = l.tag == "GEDC";
+            if l.tag == "CHAR" {
+                charset = Some(l.value.trim().to_ascii_uppercase());
+            }
+        } else if in_head && in_gedc && lvl == 2 && l.tag == "VERS" {
+            let v = l.value.trim();
+            if v.starts_with("5.5") {
+                version = Version::V551;
+            } else if v.starts_with("7") {
+                version = Version::V70;
+            }
+        }
+    }
+    (version, charset)
+}
+
+/// Streaming input: reads line by line without loading everything at once.
+/// Useful for 100MB+ exports. Internally it delegates to `lint_lines` for
+/// simplicity, but the contract is `BufRead`.
 pub fn lint_reader<R: BufRead>(mut reader: R) -> Report {
     let mut buf = Vec::new();
     let mut chunk = Vec::new();
-    // Llegim per blocs i unim: memòria O(n) en bytes però O(1) en objectes.
+    // Read in chunks and append: O(n) memory in bytes but O(1) in objects.
     loop {
         chunk.clear();
         match reader.read_until(b'\n', &mut chunk) {
@@ -223,28 +256,32 @@ pub fn lint_reader<R: BufRead>(mut reader: R) -> Report {
 }
 
 // ---------------------------------------------------------------------------
-// Diags d'encoding (nivell byte, abans del parser)
+// Encoding diags (byte level, before the parser)
 // ---------------------------------------------------------------------------
 
+/// No global cap during collection: a real file (516 `_UPD`)
+/// must not hide errors behind infos. The limit applies at output time
+/// via `--max N` (0 = unlimited). The name is kept to avoid touching
+/// every call site.
 fn push_capped(dst: &mut Vec<Diag>, mut v: Vec<Diag>) {
-    for d in v.drain(..) {
-        if dst.len() < MAX_ERRORS {
-            dst.push(d);
-        }
-    }
+    dst.append(&mut v);
 }
 
-/// E101/W102: UTF-8, BOM, byte de continuació a inici de línia (bug MyHeritage
-/// que parteix multibyte entre línies CONC), CRLF mixt, controls.
-fn encoding_diags(data: &[u8], _already_str: bool) -> Vec<Diag> {
+/// E101/W102: UTF-8, BOM, continuation byte at line start (MyHeritage bug
+/// splitting multibyte sequences across CONC lines), mixed CRLF, controls.
+/// `charset` is the declared HEAD.CHAR: ANSEL/ASCII files are not UTF-8,
+/// so E101 does not apply to them. A BOM is recommended by GEDCOM 7
+/// (spec 1.1) and only warned about otherwise.
+fn encoding_diags(data: &[u8], version: Version, charset: Option<&str>) -> Vec<Diag> {
     let mut out = Vec::new();
-    if data.starts_with(&[0xEF, 0xBB, 0xBF]) {
+    let non_utf8 = matches!(charset, Some("ANSEL") | Some("ASCII") | Some("IBMPC") | Some("MACINTOSH"));
+    if data.starts_with(&[0xEF, 0xBB, 0xBF]) && version != Version::V70 {
         out.push(Diag::new(
             "W102",
             Category::Style,
             Severity::Warning,
             1,
-            "BOM UTF-8 al inici (GEDCOM 7 prefereix sense BOM)".into(),
+            "UTF-8 BOM at start (GEDCOM 5.5.x tools may choke on it; 7.0 recommends it)".into(),
         ));
     }
     let has_crlf = data.windows(2).any(|w| w == b"\r\n");
@@ -282,22 +319,25 @@ fn encoding_diags(data: &[u8], _already_str: bool) -> Vec<Diag> {
             Category::Style,
             Severity::Warning,
             0,
-            "finals de línia mixtos CRLF/LF (normalitza a un sol estil)".into(),
+            "mixed CRLF/LF line endings (normalize to a single style)".into(),
         ));
     }
 
-    // Línies que comencen amb byte de continuació UTF-8 (0x80..=0xBF):
-    // símptoma del bug MyHeritage (caràcter partit per CONC).
+    // Lines starting with a UTF-8 continuation byte (0x80..=0xBF):
+    // symptom of the MyHeritage bug (character split across CONC).
+    // Skipped for declared single-byte encodings (ANSEL et al).
     let mut bad = 0usize;
     let mut first = 0usize;
-    for (i, line) in data.split(|&b| b == b'\n').enumerate() {
-        let l = if line.last() == Some(&b'\r') { &line[..line.len() - 1] } else { line };
-        // Salta la capçalera "N CONC ...": el contingut útil comença després.
-        let payload = conc_payload(l);
-        if payload.first().map(|b| (0x80..=0xBF).contains(b)).unwrap_or(false) {
-            bad += 1;
-            if first == 0 {
-                first = i + 1;
+    if !non_utf8 {
+        for (i, line) in data.split(|&b| b == b'\n').enumerate() {
+            let l = if line.last() == Some(&b'\r') { &line[..line.len() - 1] } else { line };
+            // Skip the "N CONC ..." header: the useful content starts after it.
+            let payload = conc_payload(l);
+            if payload.first().map(|b| (0x80..=0xBF).contains(b)).unwrap_or(false) {
+                bad += 1;
+                if first == 0 {
+                    first = i + 1;
+                }
             }
         }
     }
@@ -308,26 +348,26 @@ fn encoding_diags(data: &[u8], _already_str: bool) -> Vec<Diag> {
             Severity::Error,
             first,
             format!(
-                "{} línies comencen amb byte de continuació UTF-8 (caràcter partit entre línies CONC, bug MyHeritage; prova --fix)",
+                "{} lines start with a UTF-8 continuation byte (character split across CONC lines, MyHeritage bug; try --fix)",
                 bad
             ),
         ));
     }
-    if std::str::from_utf8(data).is_err() && bad == 0 {
+    if std::str::from_utf8(data).is_err() && bad == 0 && !non_utf8 {
         out.push(Diag::new(
             "E101",
             Category::Correctness,
             Severity::Error,
             0,
-            "el fitxer no és UTF-8 vàlid".into(),
+            "the file is not valid UTF-8".into(),
         ));
     }
     out
 }
 
-/// Retorna el payload després de "N CONC " si existeix, si no la línia sencera.
+/// Returns the payload after "N CONC " if present, else the whole line.
 fn conc_payload(line: &[u8]) -> &[u8] {
-    // Cerca " CONC " a nivell byte.
+    // Find " CONC " at byte level.
     let pat = b"CONC ";
     if let Some(p) = line.windows(pat.len()).position(|w| w == pat) {
         &line[p + pat.len()..]
@@ -341,7 +381,7 @@ fn conc_payload(line: &[u8]) -> &[u8] {
 }
 
 // ---------------------------------------------------------------------------
-// Parser de línies + regles
+// Line parser + rules
 // ---------------------------------------------------------------------------
 
 struct Line {
@@ -354,21 +394,20 @@ struct Line {
 }
 
 fn parse_line(no: usize, raw: &str) -> Line {
-    // Gramàtica: NIVELL [XREF] TAG [VALOR]. XREF només a nivell 0.
+    // Grammar: LEVEL [XREF] TAG [VALUE]. XREF only at level 0.
     let mut it = raw.splitn(3, char::is_whitespace);
     let lvl: Option<u32> = it.next().and_then(|x| x.parse().ok());
     let second = it.next().unwrap_or("");
     let rest = it.next().unwrap_or("");
     let (xref, tag, value) = if second.starts_with('@') && second.ends_with('@') && second.len() >= 3 {
-        // "0 @I1@ INDI ..." : tag és la primera paraula de rest.
+        // "0 @I1@ INDI ...": the tag is the first word of rest.
         let (t, v) = match rest.split_once(' ') {
             Some((t, v)) => (t, v.trim()),
             None => (rest, ""),
         };
         (second.to_string(), t.to_string(), v.to_string())
     } else if second.starts_with('@') {
-        // Xref malformat (sense tancar): ho marquem igualment com a xref
-        // perquè E004 ho detecti; tag de rest.
+        // Malformed xref (unclosed): still record it as xref so E004 catches it.
         let (t, v) = match rest.split_once(' ') {
             Some((t, v)) => (t, v.trim()),
             None => (rest, ""),
@@ -390,7 +429,7 @@ fn inner_ptr(s: &str) -> &str {
 }
 
 fn year_of(s: &str) -> Option<i64> {
-    // Primer any de 3-4 dígits (dates GEDCOM: "12 SEP 1909", "BEF 1900"...).
+    // First 3-4 digit year (GEDCOM dates: "12 SEP 1909", "BEF 1900"...).
     let mut best: Option<i64> = None;
     for tok in s.split(|c: char| !c.is_ascii_digit()) {
         if (3..=4).contains(&tok.len()) {
@@ -418,11 +457,14 @@ fn truncate(s: &str, n: usize) -> String {
 }
 
 fn lint_lines(text: &str) -> Report {
+    // The BOM is not part of the grammar: it is reported in encoding_diags
+    // and stripped so "0 HEAD" on the first line is recognized.
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut diags: Vec<Diag> = Vec::new();
     let raw_lines: Vec<&str> = text.lines().collect();
     let lines: Vec<Line> = raw_lines.iter().enumerate().map(|(i, l)| parse_line(i + 1, l)).collect();
 
-    // Estat de versió (HEAD.GEDC.VERS).
+    // Version state (HEAD.GEDC.VERS).
     let mut version = Version::Unknown;
     let mut in_head = false;
     let mut in_gedc = false;
@@ -442,10 +484,13 @@ fn lint_lines(text: &str) -> Report {
         }
     }
 
-    // Índexs.
+    // Indexes.
     let mut records: HashMap<String, (String, usize)> = HashMap::new(); // xref -> (kind, line)
     let mut indi_birth: HashMap<String, Option<i64>> = HashMap::new();
     let mut indi_death: HashMap<String, Option<i64>> = HashMap::new();
+    // Dead with unknown date (DEAT Y without DATE): counts as dead
+    // but stays out of W301 (no year, no longevity to check).
+    let mut indi_died_unknown: HashSet<String> = HashSet::new();
     let mut indi_name: HashMap<String, String> = HashMap::new();
     let mut indi_sex: HashMap<String, (String, usize)> = HashMap::new();
     let mut indi_famc: HashMap<String, Vec<String>> = HashMap::new();
@@ -474,7 +519,7 @@ fn lint_lines(text: &str) -> Report {
                         Category::Suspicious,
                         Severity::Warning,
                         line,
-                        format!("{}: mort ({}) abans de néixer ({})", xref, dd, bb),
+                        format!("{}: died ({}) before being born ({})", xref, dd, bb),
                     )],
                 );
             }
@@ -486,7 +531,7 @@ fn lint_lines(text: &str) -> Report {
                         Category::Suspicious,
                         Severity::Warning,
                         line,
-                        format!("{}: {} - {} = {} anys, verificar", xref, bb, dd, dd - bb),
+                        format!("{}: {} - {} = {} years, please verify", xref, bb, dd, dd - bb),
                     )],
                 );
             }
@@ -502,7 +547,7 @@ fn lint_lines(text: &str) -> Report {
                     Category::Correctness,
                     Severity::Error,
                     l.no,
-                    format!("línia malformada (nivell no numèric): {}", truncate(&l.raw, 60)),
+                    format!("malformed line (non-numeric level): {}", truncate(&l.raw, 60)),
                 )],
             );
             prev_level = None;
@@ -518,31 +563,28 @@ fn lint_lines(text: &str) -> Report {
                         Category::Correctness,
                         Severity::Error,
                         l.no,
-                        format!("salt de nivell {} -> {} (màxim +1)", p, lvl),
+                        format!("level jump {} -> {} (max +1)", p, lvl),
                     )],
                 );
             }
         }
         prev_level = Some(lvl);
 
-        // E004: sintaxi xref.
-        if l.raw.contains('@') && !l.xref.is_empty() {
-            let inner = l.xref.trim_matches('@');
-            if inner.is_empty() || inner.contains(char::is_whitespace) || inner.contains('@') {
-                push_capped(
-                    &mut diags,
-                    vec![Diag::new(
-                        "E004",
-                        Category::Correctness,
-                        Severity::Error,
-                        l.no,
-                        format!("xref malformat: {}", l.xref),
-                    )],
-                );
-            }
+        // E004: xref syntax (@id@, no spaces, closed).
+        if !l.xref.is_empty() && !is_pointer(&l.xref) {
+            push_capped(
+                &mut diags,
+                vec![Diag::new(
+                    "E004",
+                    Category::Correctness,
+                    Severity::Error,
+                    l.no,
+                    format!("malformed xref: {}", l.xref),
+                )],
+            );
         }
 
-        // CONT/CONC han de penjar d'un nivell pare.
+        // CONT/CONC must hang off a parent level.
         if (l.tag == "CONT" || l.tag == "CONC") && !expect_conc_parent {
             push_capped(
                 &mut diags,
@@ -551,13 +593,26 @@ fn lint_lines(text: &str) -> Report {
                     Category::Correctness,
                     Severity::Error,
                     l.no,
-                    format!("{} sense línia pare (ha de continuar un valor)", l.tag),
+                    format!("{} with no parent line (must continue a value)", l.tag),
+                )],
+            );
+        }
+        // E007: CONC was removed in 7.0 (spec 1.3, reserved tag): reflow to CONT.
+        if version == Version::V70 && l.tag == "CONC" {
+            push_capped(
+                &mut diags,
+                vec![Diag::new(
+                    "E007",
+                    Category::Correctness,
+                    Severity::Error,
+                    l.no,
+                    "CONC is reserved in 7.0 (spec 1.3): split the value into CONT lines".into(),
                 )],
             );
         }
         expect_conc_parent = !l.raw.trim().is_empty();
 
-        // Controls ASCII (fora de \t).
+        // ASCII controls (other than \t).
         if l.raw.chars().any(|c| c.is_control() && c != '\t') {
             push_capped(
                 &mut diags,
@@ -566,7 +621,7 @@ fn lint_lines(text: &str) -> Report {
                     Category::Style,
                     Severity::Warning,
                     l.no,
-                    "caràcter de control dins la línia".into(),
+                    "control character inside line".into(),
                 )],
             );
         }
@@ -596,7 +651,7 @@ fn lint_lines(text: &str) -> Report {
                             Category::Correctness,
                             Severity::Error,
                             l.no,
-                            format!("xref duplicat {} (primer a línia {})", l.xref, first_line),
+                            format!("duplicate xref {} (first at line {})", l.xref, first_line),
                         )],
                     );
                 } else {
@@ -616,7 +671,7 @@ fn lint_lines(text: &str) -> Report {
                     }
                 }
             } else if l.tag != "HEAD" && l.tag != "TRLR" && l.tag != "SUBM" && l.tag != "SUBN" {
-                // Registres de nivell 0 sense xref (excepte HEAD/TRLR) són sospitosos.
+                // Level-0 records without xref (except HEAD/TRLR) are suspicious.
                 if !l.tag.is_empty() && l.tag.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
                     // Tag sol al nivell 0: p. ex. "0 @X@ OBJE" ja cobert; altrament ho deixem passar.
                 }
@@ -676,7 +731,7 @@ fn lint_lines(text: &str) -> Report {
                                     Category::Style,
                                     Severity::Warning,
                                     l.no,
-                                    format!("{}: NAME amb barres desequilibrades: {}", xref, truncate(&l.value, 50)),
+                                    format!("{}: NAME with unbalanced slashes: {}", xref, truncate(&l.value, 50)),
                                 )],
                             );
                         }
@@ -703,18 +758,20 @@ fn lint_lines(text: &str) -> Report {
                             }
                         }
                         if l.tag == "DEAT" && l.value.trim() == "Y" {
-                            indi_death.insert(xref.clone(), Some(9999));
-                            cur_deat = Some(9999);
+                            // Dead with unknown date: not a year, stays out of W301.
+                            indi_died_unknown.insert(xref.clone());
                         }
                     }
                     _ => {
-                        // Punters genèrics (SOUR, OBJE, NOTE, SUBM...): registra per E201.
-                        if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "SUBM" | "REPO" | "ADOP") {
+                        // Generic pointers (SOUR, OBJE, NOTE, SUBM...): record for E201.
+                        // Note: ADOP takes no pointer in 5.5.1 (event with a
+                        // subordinate FAMC), so it is not tracked here.
+                        if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "SUBM" | "REPO") {
                             pending.push((l.no, xref.clone(), l.tag.clone(), inner_ptr(&l.value).to_string()));
                         }
                     }
                 }
-                // W401: URL dins PLAC (quirk MyHeritage).
+                // W401: URL inside PLAC (MyHeritage quirk).
                 if l.tag == "PLAC" && l.value.contains("http") {
                     push_capped(
                         &mut diags,
@@ -723,11 +780,11 @@ fn lint_lines(text: &str) -> Report {
                             Category::Style,
                             Severity::Warning,
                             l.no,
-                            format!("PLAC amb URL (quirk MyHeritage): mou-la a NOTE: {}", truncate(&l.value, 60)),
+                            format!("PLAC with URL (MyHeritage quirk): move it to NOTE: {}", truncate(&l.value, 60)),
                         )],
                     );
                 }
-                // Notes HTML dins NOTE.
+                // HTML notes inside NOTE.
                 if l.tag == "NOTE" && (l.value.contains("<br") || l.value.contains("<notexml") || l.value.contains("&nbsp")) {
                     push_capped(
                         &mut diags,
@@ -736,7 +793,7 @@ fn lint_lines(text: &str) -> Report {
                             Category::Style,
                             Severity::Warning,
                             l.no,
-                            format!("NOTE amb HTML (quirk exportador): {}", truncate(&l.value, 60)),
+                            format!("NOTE with HTML (exporter quirk): {}", truncate(&l.value, 60)),
                         )],
                     );
                 }
@@ -749,7 +806,7 @@ fn lint_lines(text: &str) -> Report {
                             Category::Upgrade,
                             Severity::Info,
                             l.no,
-                            "RELA eliminat a 7.0: usar ROLE enumerat (vegeu gedcom.io/migrate)".into(),
+                            "RELA removed in 7.0: use enumerated ROLE (see gedcom.io/migrate)".into(),
                         )],
                     );
                 }
@@ -761,7 +818,7 @@ fn lint_lines(text: &str) -> Report {
                             Category::Upgrade,
                             Severity::Info,
                             l.no,
-                            format!("tag propietari {}: es perdrà o caldrà extensió _ a 7.0", l.tag),
+                            format!("vendor tag {}: kept as an undocumented extension in 7.0 (add a SCHMA TAG definition)", l.tag),
                         )],
                     );
                 }
@@ -769,8 +826,13 @@ fn lint_lines(text: &str) -> Report {
             continue;
         }
 
-        // Nivell >= 2.
-        // Upgrade path 5.5.1 -> 7 també a subnivells (p. ex. ASSO.RELA).
+        // Level >= 2.
+        // Pointers below level 1 (event SOUR/OBJE/NOTE...) resolve for E201 too.
+        if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "REPO" | "SUBM") {
+            let from = cur.clone().map(|c| c.0).unwrap_or_else(|| format!("line {}", l.no));
+            pending.push((l.no, from, l.tag.clone(), inner_ptr(&l.value).to_string()));
+        }
+        // Upgrade path 5.5.1 -> 7 also at sublevels (e.g. ASSO.RELA).
         if version == Version::V551 && l.tag == "RELA" {
             push_capped(
                 &mut diags,
@@ -813,7 +875,7 @@ fn lint_lines(text: &str) -> Report {
             }
         }
         if l.tag == "DATE" && cur_sub == "BIRT" {
-            // Ja tractat.
+            // Already handled.
         }
         if l.tag == "PEDI" && version == Version::V551 {
             let v = l.value.trim();
@@ -825,12 +887,12 @@ fn lint_lines(text: &str) -> Report {
                         Category::Upgrade,
                         Severity::Info,
                         l.no,
-                        format!("PEDI en minúscules ({}): a 7.0 ha de ser majúscules", v),
+                        format!("lowercase PEDI ({}): 7.0 requires uppercase", v),
                     )],
                 );
             }
         }
-        // AGE vs dates es comprova al final si cal; aquí només PLAC niuats.
+        // Nested PLAC with URL (MyHeritage quirk).
         if l.tag == "PLAC" && l.value.contains("http") {
             push_capped(
                 &mut diags,
@@ -839,11 +901,11 @@ fn lint_lines(text: &str) -> Report {
                     Category::Style,
                     Severity::Warning,
                     l.no,
-                    format!("PLAC amb URL (quirk MyHeritage): {}", truncate(&l.value, 60)),
+                    format!("PLAC with URL (MyHeritage quirk): {}", truncate(&l.value, 60)),
                 )],
             );
         }
-        // DATE amb format sospitós (mesos no ANG, "about" en minúscules...).
+        // DATE with suspicious format (non-ENG months, lowercase "about"...).
         if l.tag == "DATE" && !l.value.is_empty() {
             check_date_style(&mut diags, l.no, &l.value, version);
         }
@@ -853,23 +915,26 @@ fn lint_lines(text: &str) -> Report {
     if !saw_head {
         push_capped(
             &mut diags,
-            vec![Diag::new("E002", Category::Correctness, Severity::Error, 0, "falta el registre HEAD".into())],
+            vec![Diag::new("E002", Category::Correctness, Severity::Error, 0, "missing HEAD record".into())],
         );
     }
     if !saw_trlr {
         push_capped(
             &mut diags,
-            vec![Diag::new("E002", Category::Correctness, Severity::Error, 0, "falta el registre TRLR".into())],
+            vec![Diag::new("E002", Category::Correctness, Severity::Error, 0, "missing TRLR record".into())],
         );
     }
 
-    // E201: referències trencades.
+    // E201: broken references. @VOID@ is the 7.0 null pointer: always valid.
     for (line, from, tag, target) in &pending {
+        if target == "@VOID@" {
+            continue;
+        }
         if !records.contains_key(target) {
             let kind = match tag.as_str() {
-                "FAMS" | "FAMC" => "una FAM",
-                "HUSB" | "WIFE" | "CHIL" => "un INDI",
-                _ => "un registre",
+                "FAMS" | "FAMC" => "a FAM",
+                "HUSB" | "WIFE" | "CHIL" => "an INDI",
+                _ => "a record",
             };
             push_capped(
                 &mut diags,
@@ -878,11 +943,13 @@ fn lint_lines(text: &str) -> Report {
                     Category::Correctness,
                     Severity::Error,
                     *line,
-                    format!("{}: {} {} apunta a {} inexistent", from, tag, target, kind),
+                    format!("{}: {} {} points to nonexistent {}", from, tag, target, kind),
                 )],
             );
         }
     }
+
+    // W202: FAMC not listed as CHIL (and vice versa).
 
     // W202: FAMC no llistat com a CHIL (i viceversa).
     for (xref, fams) in &indi_famc {
@@ -897,7 +964,7 @@ fn lint_lines(text: &str) -> Report {
                         Category::Suspicious,
                         Severity::Warning,
                         0,
-                        format!("{}: declara FAMC {} però la FAM no el llista com a CHIL", xref, f),
+                        format!("{}: declares FAMC {} but the FAM does not list them as CHIL", xref, f),
                     )],
                 );
             }
@@ -914,14 +981,14 @@ fn lint_lines(text: &str) -> Report {
                         Category::Suspicious,
                         Severity::Warning,
                         0,
-                        format!("{}: llista CHIL {} però l'INDI no declara FAMC", fam, c),
+                        format!("{}: lists CHIL {} but the INDI declares no FAMC", fam, c),
                     )],
                 );
             }
         }
     }
 
-    // W301: mort abans de néixer + longevitat, per individu.
+    // W301: death before birth + longevity, per individual.
     for (xref, b) in &indi_birth {
         let d = indi_death.get(xref).copied().flatten();
         if let (Some(bb), Some(dd)) = (*b, d) {
@@ -931,7 +998,7 @@ fn lint_lines(text: &str) -> Report {
         }
     }
 
-    // W303: edat dels pares al naixement del fill.
+    // W303: parent age at the child's birth.
     for (fam, chils) in &fam_chil {
         for c in chils {
             let cb = indi_birth.get(c).copied().flatten();
@@ -939,11 +1006,11 @@ fn lint_lines(text: &str) -> Report {
             if cb >= 10000 {
                 continue;
             }
-            for (parent, rol) in [(&fam_husb.get(fam), "pare"), (&fam_wife.get(fam), "mare")] {
+            for (parent, rol) in [(&fam_husb.get(fam), "father"), (&fam_wife.get(fam), "mother")] {
                 if let Some(px) = parent {
                     if let Some(Some(pb)) = indi_birth.get(*px) {
                         let age = cb - pb;
-                        let max = if rol == "mare" { 50 } else { 70 };
+                        let max = if rol == "mother" { 50 } else { 70 };
                         if age < 13 || age > max {
                             push_capped(
                                 &mut diags,
@@ -953,7 +1020,7 @@ fn lint_lines(text: &str) -> Report {
                                     Severity::Warning,
                                     0,
                                     format!(
-                                        "{}: {} {} (n. {}) tenia {} anys al néixer {} (n. {})",
+                                        "{}: {} {} (b. {}) was {} at {}'s birth (b. {})",
                                         fam, rol, px, pb, age, c, cb
                                     ),
                                 )],
@@ -962,7 +1029,7 @@ fn lint_lines(text: &str) -> Report {
                     }
                 }
             }
-            // Fill nascut abans del matrimoni (si hi ha data MARR).
+            // Child born before the marriage (when a MARR date exists).
             if let Some(Some(m)) = fam_marr.get(fam) {
                 if cb < *m {
                     push_capped(
@@ -972,7 +1039,7 @@ fn lint_lines(text: &str) -> Report {
                             Category::Suspicious,
                             Severity::Warning,
                             0,
-                            format!("{}: {} nascut ({}) abans del matrimoni ({})", fam, c, cb, m),
+                            format!("{}: {} born ({}) before marriage ({})", fam, c, cb, m),
                         )],
                     );
                 }
@@ -994,13 +1061,13 @@ fn lint_lines(text: &str) -> Report {
                     Category::Suspicious,
                     Severity::Warning,
                     *line,
-                    format!("{}: SEX invàlid ({}), esperat M/F/U{}", xref, v, if version == Version::V70 { "/X" } else { "" }),
+                    format!("{}: invalid SEX ({}), expected M/F/U{}", xref, v, if version == Version::V70 { "/X" } else { "" }),
                 )],
             );
         }
     }
 
-    // W302: duplicats (mateix nom normalitzat + naixement ±2 anys).
+    // W302: duplicates (same normalized name + birth within ±2 years).
     let mut by_name: HashMap<String, Vec<(String, i64)>> = HashMap::new();
     for (xref, b) in &indi_birth {
         if let (Some(nm), Some(bb)) = (indi_name.get(xref), *b) {
@@ -1020,7 +1087,7 @@ fn lint_lines(text: &str) -> Report {
                             Category::Suspicious,
                             Severity::Warning,
                             0,
-                            format!("possible duplicat: {} (n. {}) vs {} (n. {})", v[a].0, v[a].1, v[b].0, v[b].1),
+                            format!("possible duplicate: {} (b. {}) vs {} (b. {})", v[a].0, v[a].1, v[b].0, v[b].1),
                         )],
                     );
                 }
@@ -1041,7 +1108,7 @@ fn lint_lines(text: &str) -> Report {
 
 fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, version: Version) {
     let v = value.trim();
-    // Mesos en català/castellà o minúscules: GEDCOM exigeix JAN FEB MAR...
+    // Months in other languages or lowercase: GEDCOM requires JAN FEB MAR...
     let lower_months = ["enero", "febrero", "gener", "febrer", "marzo", "març", "abril", "mayo", "maig", "junio", "juny"];
     let vl = v.to_lowercase();
     if lower_months.iter().any(|m| vl.contains(m)) {
@@ -1052,7 +1119,7 @@ fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, version: Ve
                 Category::Style,
                 Severity::Warning,
                 line,
-                format!("DATE amb mes no estàndard (cal JAN/FEB/...): {}", truncate(v, 50)),
+                format!("DATE with non-standard month (use JAN/FEB/...): {}", truncate(v, 50)),
             )],
         );
         return;
@@ -1065,40 +1132,103 @@ fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, version: Ve
                 Category::Style,
                 Severity::Warning,
                 line,
-                format!("DATE amb aproximació en minúscules (cal ABT/CAL/EST): {}", truncate(v, 50)),
+                format!("DATE with lowercase approximation (use ABT/CAL/EST): {}", truncate(v, 50)),
             )],
         );
     }
-    if version == Version::V70 && v.contains("BET") && !v.contains("AND") {
-        push_capped(
-            diags,
-            vec![Diag::new(
-                "U501",
-                Category::Upgrade,
-                Severity::Info,
-                line,
-                format!("BET sense AND (a 7.0 cal rang complet): {}", truncate(v, 50)),
-            )],
-        );
+    if v.contains("BET") && !v.contains("AND") {
+        // DATE_RANGE needs BET x AND y in both 5.5.1 and 7.0.
+        if version == Version::V70 {
+            push_capped(
+                diags,
+                vec![Diag::new(
+                    "U501",
+                    Category::Upgrade,
+                    Severity::Info,
+                    line,
+                    format!("BET without AND (7.0 needs a full range): {}", truncate(v, 50)),
+                )],
+            );
+        } else {
+            push_capped(
+                diags,
+                vec![Diag::new(
+                    "W402",
+                    Category::Style,
+                    Severity::Warning,
+                    line,
+                    format!("BET without AND (DATE_RANGE needs BET x AND y): {}", truncate(v, 50)),
+                )],
+            );
+        }
+    }
+    if v.contains("BET") && v.contains("AND") {
+        // 7.0 ranges must be chronological (migrate guide: swap if needed).
+        let years: Vec<i64> = v
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|t| t.len() == 4)
+            .filter_map(|t| t.parse().ok())
+            .collect();
+        if years.len() >= 2 && years[0] > years[1] {
+            push_capped(
+                diags,
+                vec![Diag::new(
+                    "U501",
+                    Category::Upgrade,
+                    Severity::Info,
+                    line,
+                    format!("BET range out of order (swap to chronological): {}", truncate(v, 50)),
+                )],
+            );
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// --fix: només reparacions segures, sempre amb còpia .bak.
+// --fix: only safe repairs, always with a .bak copy.
 // ---------------------------------------------------------------------------
 
-/// Reparacions segures aplicades per --fix:
-/// 1. Reuneix caràcters UTF-8 partits entre línies CONC (E101).
-/// 2. Retalla espais finals de línia.
-/// 3. Normalitza CRLF a LF si el fitxer és majoritàriament LF? No: ho deixem
-///    com a avís (canviar finals de línia pot trencar round-trip). Només 1+2.
+/// Safe repairs applied by --fix:
+/// 0. Lines without a level (MyHeritage NOTE/TEXT continuations without CONT):
+///    prefix "{previous_level+1} CONT ".
+/// 1. Rejoin UTF-8 characters split across CONC lines (E101).
+/// 2. Trim trailing whitespace.
 pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
     let mut applied = Vec::new();
     let mut lines: Vec<Vec<u8>> = data.split(|&b| b == b'\n').map(|l| l.to_vec()).collect();
-    let had_cr: Vec<bool> = lines.iter().map(|l| l.last() == Some(&b'\r')).collect();
 
-    // 1. CONC split: si el payload de la línia següent comença amb byte de
-    // continuació, enganxa'l al final de la línia anterior (traient "N CONC ").
+    // 0. Orphans without a leading level.
+    let mut fixed_orphans = 0;
+    let mut prev_level: Option<usize> = None;
+    for l in lines.iter_mut() {
+        let body = strip_cr_slice(l);
+        if body.is_empty() {
+            continue;
+        }
+        match leading_level(body) {
+            Some(n) => prev_level = Some(n),
+            None => {
+                if let Some(p) = prev_level {
+                    if p < 99 {
+                        let mut nl = format!("{} CONT ", p + 1).into_bytes();
+                        nl.extend_from_slice(body);
+                        if l.last() == Some(&b'\r') {
+                            nl.push(b'\r');
+                        }
+                        *l = nl;
+                        fixed_orphans += 1;
+                        prev_level = Some(p + 1);
+                    }
+                }
+            }
+        }
+    }
+    if fixed_orphans > 0 {
+        applied.push(format!("E001: {} orphan lines prefixed with CONT", fixed_orphans));
+    }
+
+    // 1. CONC split: if the next line's payload starts with a
+    // continuation byte, append it to the previous line (dropping "N CONC ").
     let mut fixed_conc = 0;
     let mut i = 0;
     while i < lines.len() {
@@ -1108,19 +1238,18 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
         };
         if let Some(p) = payload {
             if p.first().map(|b| (0x80..=0xBF).contains(b)).unwrap_or(false) && i > 0 {
-                // Troba inici del payload dins lines[i] i enganxa.
+                // Find the payload start inside lines[i] and append it.
                 let full = lines[i].clone();
                 let stripped = strip_cr_slice(&full);
                 if let Some(pos) = find_conc_pos(stripped) {
                     let tail = &stripped[pos..];
-                    // Treu el \r de l'anterior si n'hi ha.
+                    // Drop the previous line's \r if present.
                     let prev = &mut lines[i - 1];
                     if prev.last() == Some(&b'\r') {
                         prev.pop();
                     }
                     prev.extend_from_slice(tail);
                     lines.remove(i);
-                    // had_cr ja no cal: marquem com tocat.
                     fixed_conc += 1;
                     continue;
                 }
@@ -1129,10 +1258,10 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
         i += 1;
     }
     if fixed_conc > 0 {
-        applied.push(format!("E101: reunides {} línies CONC amb UTF-8 partit", fixed_conc));
+        applied.push(format!("E101: rejoined {} CONC lines with split UTF-8", fixed_conc));
     }
 
-    // 2. Espais finals.
+    // 2. Trailing whitespace.
     let mut fixed_ws = 0;
     for l in lines.iter_mut() {
         let has_cr = l.last() == Some(&b'\r');
@@ -1148,7 +1277,7 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
         }
     }
     if fixed_ws > 0 {
-        applied.push(format!("estil: retallats espais finals a {} línies", fixed_ws));
+        applied.push(format!("style: trimmed trailing whitespace on {} lines", fixed_ws));
     }
 
     let mut out = Vec::with_capacity(data.len());
@@ -1157,9 +1286,8 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
         if k + 1 < lines.len() {
             out.push(b'\n');
         }
-        let _ = had_cr;
     }
-    // Preserva el newline final original.
+    // Preserve the original trailing newline.
     if data.ends_with(b"\n") && !out.ends_with(b"\n") {
         out.push(b'\n');
     }
@@ -1168,6 +1296,26 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
 
 fn strip_cr(line: &[u8]) -> &[u8] {
     strip_cr_slice(line)
+}
+
+/// Leading level of a line ("12 TAG..." -> 12). None when there are no
+/// leading digits followed by a space or end of line.
+fn leading_level(line: &[u8]) -> Option<usize> {
+    let mut n: usize = 0;
+    let mut digits = 0;
+    for &b in line {
+        if b.is_ascii_digit() {
+            n = n.saturating_mul(10).saturating_add((b - b'0') as usize);
+            digits += 1;
+        } else {
+            break;
+        }
+    }
+    if digits > 0 && (line.get(digits) == Some(&b' ') || line.len() == digits) {
+        Some(n)
+    } else {
+        None
+    }
 }
 
 fn strip_cr_slice(line: &[u8]) -> &[u8] {
