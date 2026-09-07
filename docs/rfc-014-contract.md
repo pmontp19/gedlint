@@ -121,6 +121,14 @@ a consumer slices the line it read from the file without having to know which ru
 produced the diagnostic, and the byte-level rules (`E101`) and the line-level rules
 (`E004`, `W401`) cannot disagree about where a line begins.
 
+This is the same decision section 3 makes for `Edit.replacement`, and it is the same
+reason: a span has to address lines that are not valid UTF-8, since `E101` fires exactly
+when an exporter cut a character in two, and a char offset has nothing to count there.
+The two sections agree by construction and must stay that way. Spans address bytes,
+repairs carry bytes, and both number lines identically, 1-based after line-ending
+normalization, so a `Diag.line` and the `Edit.lines` range that repairs it land on the
+same rows. A reader arriving at either section should find the other agreeing.
+
 Constructors:
 
 ```rust

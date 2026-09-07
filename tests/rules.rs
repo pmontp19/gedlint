@@ -1,7 +1,7 @@
 //! One rule per test with minimal fixtures (acceptance criterion 5).
 //! Each test builds the smallest GEDCOM that triggers a single rule.
 
-use gedlint::{Diag, Severity, Version, fix_bytes, lint_bytes, lint_str};
+use gedlint::{Diag, Severity, Version, compute_edits, fix_bytes, lint_bytes, lint_str};
 
 fn codes(input: &str) -> Vec<String> {
     lint_str(input).diags.iter().map(|d| d.code.to_string()).collect()
@@ -1088,6 +1088,27 @@ fn w401_without_a_url_token_has_no_span() {
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC Reus chttpx\n");
     let d = only(&g, "W401");
     assert_eq!((d.col, d.len), (0, 0));
+}
+
+#[test]
+fn diag_line_and_edit_lines_use_the_same_numbering() {
+    // Cross-check with the structured fixes of #19: a span addresses bytes
+    // inside a line, an Edit addresses a range of lines, and both count lines
+    // the same way (1-based, after line-ending normalization). If these two
+    // ever disagreed, a viewer could not put a finding and its repair on the
+    // same row. Same E101 CONC split as the span test above.
+    let mut data = Vec::new();
+    data.extend_from_slice("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME Jos".as_bytes());
+    data.push(0xC3);
+    data.extend_from_slice("\n2 CONC ".as_bytes());
+    data.push(0xA9);
+    data.extend_from_slice(" /Oso/\n0 TRLR\n".as_bytes());
+    let d = lint_bytes(&data).diags.into_iter().find(|d| d.code == "E101").expect("E101");
+    let e = compute_edits(&data).into_iter().find(|e| e.code == "E101").expect("E101 edit");
+    // The diagnostic points at the CONC line; the repair replaces the pair.
+    assert_eq!(d.line, 6);
+    assert_eq!(e.lines, (5, 6));
+    assert!(e.lines.0 <= d.line && d.line <= e.lines.1, "diag line inside the edit range: {:?}", e.lines);
 }
 
 #[test]
