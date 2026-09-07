@@ -1742,14 +1742,18 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
     let mut prev_level: Option<usize> = None;
     for l in lines.iter_mut() {
         let body = strip_cr_slice(l);
-        if body.is_empty() {
+        // Blank/whitespace-only lines are not orphans (step 2 trims them);
+        // same definition lint_lines uses, and they must not break the run.
+        if body.iter().all(|b| b.is_ascii_whitespace()) {
             continue;
         }
         match leading_level(body) {
+            // The anchor only moves on a line that really has a level: a run
+            // of orphans is a run of siblings under it, not a staircase.
             Some(n) => prev_level = Some(n),
             None => {
                 if let Some(p) = prev_level {
-                    if p < 99 {
+                    if p < MAX_LEVEL as usize {
                         let mut nl = format!("{} CONT ", p + 1).into_bytes();
                         nl.extend_from_slice(body);
                         if l.last() == Some(&b'\r') {
@@ -1757,7 +1761,6 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
                         }
                         *l = nl;
                         fixed_orphans += 1;
-                        prev_level = Some(p + 1);
                     }
                 }
             }

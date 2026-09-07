@@ -377,6 +377,38 @@ fn e001_year_leading_orphan_is_repaired() {
 }
 
 #[test]
+fn e001_orphan_run_stays_flat() {
+    // A run of orphan lines is a run of siblings under the anchor, not a
+    // staircase: nested CONTs would hang the 2nd/3rd paragraph off the 1st
+    // CONT instead of off TEXT, silently losing them for a strict reader.
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT Primera part\n1936 un any dur\n1937 un altre\n1938 un altre mes\n0 TRLR\n".to_vec();
+    let (fixed, applied) = fix_bytes(&data);
+    assert!(applied.iter().any(|a| a.contains("3 orphan lines")), "{:?}", applied);
+    let text = String::from_utf8(fixed).unwrap();
+    assert!(text.contains("3 CONT 1936 un any dur"), "{}", text);
+    assert!(text.contains("3 CONT 1937 un altre"), "{}", text);
+    assert!(text.contains("3 CONT 1938 un altre mes"), "{}", text);
+    assert!(lint_str(&text).diags.is_empty(), "{:?}", lint_str(&text).diags);
+    // The anchor resets on the next line that really has a level.
+    let mixed = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT a\norfe u\norfe dos\n1 NOTE x\ndespres\n0 TRLR\n".to_vec();
+    let t2 = String::from_utf8(fix_bytes(&mixed).0).unwrap();
+    assert!(t2.contains("3 CONT orfe u") && t2.contains("3 CONT orfe dos"), "{}", t2);
+    assert!(t2.contains("2 CONT despres"), "{}", t2);
+}
+
+#[test]
+fn fix_leaves_whitespace_only_lines_alone() {
+    // lint ignores a whitespace-only line, so --fix must not turn it into an
+    // empty CONT; the trailing-whitespace pass trims it instead.
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT part\n   \n0 TRLR\n".to_vec();
+    let (fixed, applied) = fix_bytes(&data);
+    let text = String::from_utf8(fixed).unwrap();
+    assert!(!applied.iter().any(|a| a.contains("orphan")), "{:?}", applied);
+    assert!(!text.contains("CONT"), "{}", text);
+    assert!(text.contains("2 TEXT part\n\n0 TRLR"), "{}", text);
+}
+
+#[test]
 fn e009_missing_required() {
     // HEAD.GEDC and GEDC.VERS are {1:1}.
     assert!(has("0 HEAD\n1 CHAR UTF-8\n0 TRLR\n", "E009"));
