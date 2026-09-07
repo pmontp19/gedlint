@@ -5,6 +5,44 @@ on:
     tags: ["v*"]
   pull_request:
 jobs:
+  action-smoke:
+    # Exercises action.yml end to end (download pinned dev binary, fail-on matrix).
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fixtures
+        shell: bash
+        run: |
+          printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n' > /tmp/clean.ged
+          printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n0 TRLR\n' > /tmp/warn.ged
+      - name: Clean file passes
+        uses: ./
+        with:
+          path: /tmp/clean.ged
+          version: v0.5.0
+      - name: Warning ignored with fail-on error
+        uses: ./
+        with:
+          path: /tmp/warn.ged
+          fail-on: error
+          version: v0.5.0
+      - name: Warning fails with fail-on warning
+        id: warn
+        continue-on-error: true
+        uses: ./
+        with:
+          path: /tmp/warn.ged
+          fail-on: warning
+          version: v0.5.0
+      - name: Assert warning failed as expected
+        shell: bash
+        run: |
+          [ "${{ steps.warn.outcome }}" = "failure" ] || { echo "expected failure, got ${{ steps.warn.outcome }}"; exit 1; }
   ci:
     runs-on: ubuntu-latest
     permissions:
