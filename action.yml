@@ -5,62 +5,181 @@ branding:
   color: "blue"
 inputs:
   path:
-    description: "Path to the .ged file (quoted, no shell expansion)"
+    description: "File(s) to lint: one path or glob per line (quoted, expanded by the action, not by the shell)"
     required: true
   fail-on:
     description: "'error' (default) or 'warning'"
     required: false
     default: "error"
   format:
-    description: "'text' (default) or 'json'"
+    description: "Log output: 'text' (default) or 'json'. Annotations and the step summary are emitted either way"
     required: false
     default: "text"
+  annotations:
+    description: "Emit inline file annotations ('true' by default)"
+    required: false
+    default: "true"
+  max-annotations:
+    description: "Cap on annotations, worst first ('0' = no cap). GitHub only renders 10 per severity per step"
+    required: false
+    default: "50"
+  summary:
+    description: "Write a job summary grouped by rule code ('true' by default)"
+    required: false
+    default: "true"
+  require-checksum:
+    description: "Fail if the release has no .sha256 for the downloaded archive (warns and continues by default)"
+    required: false
+    default: "false"
   version:
-    description: "gedlint release with prebuilt binaries (e.g. v1)"
+    description: "gedlint release to download. 'v1' (default) is a moving major tag; pin an exact tag for reproducible runs"
     required: false
     default: "v1"
+outputs:
+  errors:
+    description: "Total error diagnostics across all linted files"
+    value: ${{ steps.gedlint.outputs.errors }}
+  warnings:
+    description: "Total warning diagnostics across all linted files"
+    value: ${{ steps.gedlint.outputs.warnings }}
+  infos:
+    description: "Total info diagnostics across all linted files"
+    value: ${{ steps.gedlint.outputs.infos }}
+  files:
+    description: "Number of files linted"
+    value: ${{ steps.gedlint.outputs.files }}
+  exit-code:
+    description: "Worst gedlint exit code: 0 clean, 1 warnings, 2 errors"
+    value: ${{ steps.gedlint.outputs.exit-code }}
 runs:
   using: "composite"
   steps:
-    - shell: bash
+    - id: gedlint
+      shell: bash
       env:
         GEDLINT_PATH: ${{ inputs.path }}
         GEDLINT_FAIL_ON: ${{ inputs.fail-on }}
         GEDLINT_FORMAT: ${{ inputs.format }}
+        GEDLINT_ANNOTATIONS: ${{ inputs.annotations }}
+        GEDLINT_MAX_ANNOTATIONS: ${{ inputs.max-annotations }}
+        GEDLINT_SUMMARY: ${{ inputs.summary }}
+        GEDLINT_REQUIRE_CHECKSUM: ${{ inputs.require-checksum }}
         GEDLINT_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
+
         case "$GEDLINT_FAIL_ON" in error|warning) ;; *) echo "fail-on must be error|warning"; exit 2;; esac
         case "$GEDLINT_FORMAT" in text|json) ;; *) echo "format must be text|json"; exit 2;; esac
+        case "$GEDLINT_ANNOTATIONS" in true|false) ;; *) echo "annotations must be true|false"; exit 2;; esac
+        case "$GEDLINT_SUMMARY" in true|false) ;; *) echo "summary must be true|false"; exit 2;; esac
+        case "$GEDLINT_REQUIRE_CHECKSUM" in true|false) ;; *) echo "require-checksum must be true|false"; exit 2;; esac
+        case "$GEDLINT_MAX_ANNOTATIONS" in ''|*[!0-9]*) echo "max-annotations must be a non-negative integer"; exit 2;; esac
+        command -v node >/dev/null || { echo "node is required to render annotations and the summary"; exit 2; }
+
         OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
         ARCH="$(uname -m)"
+        # Windows shells report MINGW64_NT-*/MSYS_NT-*/CYGWIN_NT-*, never "windows".
         case "$OS-$ARCH" in
-          linux-x86_64) TARGET="x86_64-unknown-linux-gnu"; ARCHIVE="tar.gz"; BIN_NAME="gedlint";;
-          darwin-arm64|darwin-aarch64) TARGET="aarch64-apple-darwin"; ARCHIVE="tar.gz"; BIN_NAME="gedlint";;
-          mingw*-x86_64|msys*-x86_64|windowsnt-x86_64) TARGET="x86_64-pc-windows-msvc"; ARCHIVE="zip"; BIN_NAME="gedlint.exe";;
-          *) echo "unsupported runner: $OS/$ARCH (prebuilt: linux x86_64, macOS ARM, Windows x86_64)"; exit 2;;
+          linux-x86_64)                        TARGET="x86_64-unknown-linux-gnu";  ARCHIVE="tar.gz"; BIN_NAME="gedlint";;
+          linux-aarch64|linux-arm64)           TARGET="aarch64-unknown-linux-gnu"; ARCHIVE="tar.gz"; BIN_NAME="gedlint";;
+          darwin-arm64|darwin-aarch64)         TARGET="aarch64-apple-darwin";      ARCHIVE="tar.gz"; BIN_NAME="gedlint";;
+          mingw*-x86_64|msys*-x86_64|cygwin*-x86_64) TARGET="x86_64-pc-windows-msvc"; ARCHIVE="zip"; BIN_NAME="gedlint.exe";;
+          *) echo "unsupported runner: $OS/$ARCH (prebuilt: linux x86_64/arm64, macOS ARM, Windows x86_64)"; exit 2;;
         esac
-        URL="https://github.com/pmontp19/gedlint/releases/download/${GEDLINT_VERSION}/gedlint-${GEDLINT_VERSION}-${TARGET}.${ARCHIVE}"
-        WORK="$(mktemp -d -t gedlint.XXXXXX)"
-        trap 'rm -rf "$WORK"' EXIT
-        curl -fSL "$URL" -o "$WORK/pkg.$ARCHIVE"
-        if [ "$ARCHIVE" = "zip" ]; then
-          unzip -q "$WORK/pkg.$ARCHIVE" -d "$WORK"
-        else
-          tar xzf "$WORK/pkg.$ARCHIVE" -C "$WORK"
+
+        # Per-job cache: several gedlint steps in one job download the binary once.
+        # Not actions/cache: a save/restore round trip costs more than the 5MB
+        # fetch and would burn the repository's cache quota.
+        STAGE="gedlint-${GEDLINT_VERSION}-${TARGET}"
+        CACHE="${RUNNER_TEMP:-/tmp}/.gedlint-cache/$STAGE"
+        BIN="$CACHE/$STAGE/$BIN_NAME"
+
+        if [ ! -x "$BIN" ]; then
+          BASE="https://github.com/pmontp19/gedlint/releases/download/${GEDLINT_VERSION}"
+          rm -rf "$CACHE"
+          mkdir -p "$CACHE"
+          # --retry: a transient 5xx from the release CDN must not turn CI red.
+          curl -fSL --retry 3 --retry-delay 2 --retry-all-errors \
+            --connect-timeout 20 --max-time 300 \
+            "$BASE/$STAGE.$ARCHIVE" -o "$CACHE/pkg.$ARCHIVE"
+
+          if curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+              --connect-timeout 20 --max-time 60 \
+              "$BASE/$STAGE.$ARCHIVE.sha256" -o "$CACHE/pkg.sha256"; then
+            EXPECTED="$(tr -d '\r' < "$CACHE/pkg.sha256" | awk 'NF {print $1; exit}')"
+            if command -v sha256sum >/dev/null; then
+              ACTUAL="$(sha256sum "$CACHE/pkg.$ARCHIVE" | awk '{print $1}')"
+            else
+              ACTUAL="$(shasum -a 256 "$CACHE/pkg.$ARCHIVE" | awk '{print $1}')"
+            fi
+            if [ "$EXPECTED" != "$ACTUAL" ]; then
+              echo "::error::checksum mismatch for $STAGE.$ARCHIVE (expected $EXPECTED, got $ACTUAL)"
+              exit 2
+            fi
+            echo "checksum verified: $ACTUAL"
+          elif [ "$GEDLINT_REQUIRE_CHECKSUM" = "true" ]; then
+            echo "::error::no $STAGE.$ARCHIVE.sha256 published for $GEDLINT_VERSION"
+            exit 2
+          else
+            echo "::warning::no checksum published for $GEDLINT_VERSION; the download was not verified"
+          fi
+
+          if [ "$ARCHIVE" = "zip" ]; then
+            unzip -q "$CACHE/pkg.$ARCHIVE" -d "$CACHE"
+          else
+            tar xzf "$CACHE/pkg.$ARCHIVE" -C "$CACHE"
+          fi
+          [ -x "$BIN" ] || { echo "::error::$STAGE.$ARCHIVE does not contain $BIN_NAME"; exit 2; }
         fi
-        BIN="$WORK/gedlint-${GEDLINT_VERSION}-${TARGET}/${BIN_NAME}"
-        # set -e aborts on nonzero exits: suspend it around the linter call
-        set +e
-        if [ "$GEDLINT_FORMAT" = "json" ]; then
-          "$BIN" --format json "$GEDLINT_PATH"
-        else
-          "$BIN" "$GEDLINT_PATH"
-        fi
-        CODE=$?
-        set -e
-        # 0/1/2 are the contract; any other code (crash, misuse) always fails
-        if [ $CODE -gt 2 ]; then exit $CODE; fi
-        if [ "$GEDLINT_FAIL_ON" = "warning" ] && [ $CODE -ne 0 ]; then exit $CODE; fi
-        if [ "$GEDLINT_FAIL_ON" = "error" ] && [ $CODE -eq 2 ]; then exit 2; fi
+
+        # Glob expansion with IFS emptied: patterns still expand, paths with
+        # spaces survive. Keep it out of the input itself so nothing is
+        # word-split before the action sees it.
+        FILES=()
+        while IFS= read -r PATTERN; do
+          PATTERN="${PATTERN%$'\r'}"
+          [ -n "$PATTERN" ] || continue
+          MATCHED=0
+          OLD_IFS="$IFS"
+          IFS=
+          for CANDIDATE in $PATTERN; do
+            if [ -f "$CANDIDATE" ]; then
+              FILES+=("$CANDIDATE")
+              MATCHED=1
+            fi
+          done
+          IFS="$OLD_IFS"
+          [ "$MATCHED" -eq 1 ] || { echo "::error::no file matched: $PATTERN"; exit 2; }
+        done <<< "$GEDLINT_PATH"
+        [ "${#FILES[@]}" -gt 0 ] || { echo "::error::path matched no files"; exit 2; }
+
+        REPORTS="$(mktemp -d -t gedlint.XXXXXX)"
+        trap 'rm -rf "$REPORTS"' EXIT
+
+        WORST=0
+        INDEX=0
+        for FILE in "${FILES[@]}"; do
+          SLOT="$REPORTS/$(printf '%04d' "$INDEX")"
+          INDEX=$((INDEX + 1))
+          printf '%s' "$FILE" > "$SLOT.path"
+          if "$BIN" --format json "$FILE" > "$SLOT.json" 2> "$SLOT.err"; then
+            CODE=0
+          else
+            CODE=$?
+          fi
+          # 0/1/2 are the contract; anything else is a crash or a misuse.
+          if [ "$CODE" -gt 2 ]; then
+            cat "$SLOT.err" >&2
+            echo "::error file=$FILE::gedlint exited $CODE"
+            exit "$CODE"
+          fi
+          cat "$SLOT.err" >&2
+          printf '%s' "$CODE" > "$SLOT.exit"
+          [ "$CODE" -le "$WORST" ] || WORST="$CODE"
+        done
+
+        node "$GITHUB_ACTION_PATH/scripts/gh-report.js" "$REPORTS"
+
+        if [ "$GEDLINT_FAIL_ON" = "warning" ] && [ "$WORST" -ne 0 ]; then exit "$WORST"; fi
+        if [ "$GEDLINT_FAIL_ON" = "error" ] && [ "$WORST" -eq 2 ]; then exit 2; fi
         exit 0
