@@ -434,10 +434,14 @@ struct Line {
     raw: String,
 }
 
+/// Deepest legal level (5.5.1 ch. 1). A bigger leading number is text, not a
+/// level: a biography continuation line may start with a year ("1936 va ...").
+const MAX_LEVEL: u32 = 99;
+
 fn parse_line(no: usize, raw: &str) -> Line {
     // Grammar: LEVEL [XREF] TAG [VALUE]. XREF only at level 0.
     let mut it = raw.splitn(3, char::is_whitespace);
-    let lvl: Option<u32> = it.next().and_then(|x| x.parse().ok());
+    let lvl: Option<u32> = it.next().and_then(|x| x.parse().ok()).filter(|n| *n <= MAX_LEVEL);
     let second = it.next().unwrap_or("");
     let rest = it.next().unwrap_or("");
     let (xref, tag, value) = if second.starts_with('@') && second.ends_with('@') && second.len() >= 3 {
@@ -644,7 +648,10 @@ fn lint_lines(text: &str) -> Report {
     let mut saw_gedc_line: Option<usize> = None;
     let mut saw_vers_line: Option<usize> = None;
     let mut in_head_main = false;
-    let mut in_gedc_main = false;
+    // E008 VERS singletons inside HEAD, keyed by the parent's line: GEDC.VERS
+    // (GEDCOM version), SOUR.VERS (product version) and CHAR.VERS are three
+    // different {0:1} slots, not one.
+    let mut head_vers_seen: HashMap<usize, usize> = HashMap::new();
     // OTHER values awaiting a sibling PHRASE: (record, parent_tag, parent_line, tag, line).
     let mut pending_other: Vec<(String, String, usize, String, usize)> = Vec::new();
     let mut phrased: HashSet<(String, String, usize)> = HashSet::new();
@@ -696,6 +703,12 @@ fn lint_lines(text: &str) -> Report {
 
     for l in &lines {
         let Some(lvl) = l.level else {
+            // A blank line has no level and no content: not a malformed line
+            // (E002 already treats blanks as non-content). prev_level survives
+            // so a level jump across a blank line is still caught.
+            if l.raw.trim().is_empty() {
+                continue;
+            }
             push_capped(
                 &mut diags,
                 vec![Diag::new(
@@ -828,7 +841,6 @@ fn lint_lines(text: &str) -> Report {
             cur_event = None;
             // HEAD scope for E008 (GEDC/VERS singletons) and E009.
             in_head_main = l.tag == "HEAD";
-            in_gedc_main = false;
             if l.tag == "HEAD" {
                 saw_head = true;
             }
@@ -923,7 +935,6 @@ fn lint_lines(text: &str) -> Report {
                     );
                 } else {
                     saw_gedc_line = Some(l.no);
-                    in_gedc_main = true;
                 }
             }
             if let Some((xref, kind)) = cur.clone() {
@@ -1123,21 +1134,29 @@ fn lint_lines(text: &str) -> Report {
         }
 
         // Level >= 2.
-        // E008: GEDC.VERS is a {1:1} singleton.
-        if in_head_main && in_gedc_main && l.tag == "VERS" {
-            if let Some(first) = saw_vers_line {
-                push_capped(
-                    &mut diags,
-                    vec![Diag::new(
-                        "E008",
-                        Category::Correctness,
-                        Severity::Error,
-                        l.no,
-                        format!("duplicate GEDC.VERS (first at line {})", first),
-                    )],
-                );
-            } else {
-                saw_vers_line = Some(l.no);
+        // E008: VERS is {0:1} per HEAD substructure, scoped by its parent
+        // block. HEAD.GEDC.VERS and HEAD.SOUR.VERS both appear in every
+        // MyHeritage 5.5.1 export and are not duplicates of each other.
+        if in_head_main && lvl == 2 && l.tag == "VERS" {
+            if let Some((ptag, pline)) = parent.clone() {
+                if let Some(first) = head_vers_seen.get(&pline) {
+                    push_capped(
+                        &mut diags,
+                        vec![Diag::new(
+                            "E008",
+                            Category::Correctness,
+                            Severity::Error,
+                            l.no,
+                            format!("duplicate {}.VERS (first at line {})", ptag, first),
+                        )],
+                    );
+                } else {
+                    head_vers_seen.insert(pline, l.no);
+                    // E009 requires GEDC.VERS specifically.
+                    if ptag == "GEDC" {
+                        saw_vers_line = Some(l.no);
+                    }
+                }
             }
         }
         // Pointers below level 1 (event SOUR/OBJE/NOTE...) resolve for E201 too.
@@ -1832,7 +1851,7 @@ fn leading_level(line: &[u8]) -> Option<usize> {
             break;
         }
     }
-    if digits > 0 && (line.get(digits) == Some(&b' ') || line.len() == digits) {
+    if digits > 0 && n <= MAX_LEVEL as usize && (line.get(digits) == Some(&b' ') || line.len() == digits) {
         Some(n)
     } else {
         None
