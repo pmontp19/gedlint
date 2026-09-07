@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{BufReader, Write};
 use std::process::ExitCode;
 
-use gedlint::{Diag, Report, Severity, fix_bytes, lint_bytes, lint_reader};
+use gedlint::{Diag, FixSelection, Report, Severity, fix_bytes_with, lint_bytes, lint_reader};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -14,10 +14,11 @@ fn help() -> String {
         \n\
         OPTIONS:\n  \
         --fix                 repair (E001 orphan lines, E101 split CONC, trailing whitespace) with .bak copy\n  \
+        --only CODE           with --fix: restrict to this repair code (repeatable)\n  \
+        --unsafe              with --fix: also apply MaybeIncorrect repairs (never the default)\n  \
         --format text|json    output (default: text)\n  \
         --severity N          minimum level: error, warning, info (default: info)\n  \
-        --max N               cap on text diagnostics shown (default: 0 = all;\n  \
-                              JSON is always complete)\n  \
+        --max N               cap on text diagnostics shown (0 = all; JSON always complete)\n  \
         --no-color            no ANSI colors\n  \
         --quiet               summary + exit code only\n  \
         -h, --help            this help\n  \
@@ -50,6 +51,8 @@ fn color_for(sev: &Severity, no_color: bool) -> (&'static str, &'static str) {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let mut fix = false;
+    let mut fix_only: Vec<String> = Vec::new();
+    let mut fix_unsafe = false;
     let mut format = "text".to_string();
     let mut min_sev = Severity::Info;
     let mut max_show: usize = 0;
@@ -61,6 +64,15 @@ fn main() -> ExitCode {
     while i < args.len() {
         match args[i].as_str() {
             "--fix" => fix = true,
+            "--unsafe" => fix_unsafe = true,
+            "--only" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--only needs a rule code");
+                    return ExitCode::from(2);
+                }
+                fix_only.push(args[i].clone());
+            }
             "--no-color" => no_color = true,
             "--quiet" | "-q" => quiet = true,
             "-h" | "--help" => {
@@ -131,11 +143,17 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
+    if !fix && (!fix_only.is_empty() || fix_unsafe) {
+        eprintln!("--only and --unsafe only apply with --fix");
+        return ExitCode::from(2);
+    }
+
     // --fix before linting: read bytes, repair, write .bak.
     if fix {
+        let sel = FixSelection { only: fix_only, allow_unsafe: fix_unsafe };
         match fs::read(&path) {
             Ok(data) => {
-                let (fixed, applied) = fix_bytes(&data);
+                let (fixed, applied) = fix_bytes_with(&data, &sel);
                 if fixed != data {
                     let bak = format!("{}.bak", path);
                     if let Err(e) = fs::write(&bak, &data) {

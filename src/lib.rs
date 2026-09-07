@@ -7,8 +7,8 @@
 //!
 //! Layout: `diag` holds the output types, `parse` the line grammar, `rules`
 //! the single streaming pass and the rule groups it drives, `fix` the safe
-//! `--fix` repairs. Everything public is re-exported here, so the crate's
-//! public API is exactly what this file names.
+//! `--fix` repairs as selectable `Edit`s. Everything public is re-exported
+//! here, so the crate's public API is exactly what this file names.
 
 use std::io::BufRead;
 
@@ -18,7 +18,7 @@ mod parse;
 mod rules;
 
 pub use diag::{Category, Diag, Report, Severity};
-pub use fix::fix_bytes;
+pub use fix::{apply_edits, compute_edits, fix_bytes, fix_bytes_with, normalize_endings, Applicability, Edit, FixSelection};
 pub use parse::Version;
 
 use parse::{normalize_newlines, scan_head};

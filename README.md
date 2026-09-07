@@ -16,12 +16,14 @@ Working MVP: `cargo test` (97 tests: 2 unit + 79 rule + 10 CLI + 6 golden), `car
 ## Usage
 
 ```
-gedlint [--fix] [--format text|json] [--severity error|warning|info] [--max N] [--no-color] [--quiet] <file.ged>
+gedlint [--fix [--only CODE] [--unsafe]] [--format text|json] [--severity error|warning|info] [--max N] [--no-color] [--quiet] <file.ged>
 ```
 
 Exit codes: 0 clean, 1 warnings, 2 errors.
 
 `--fix` only applies safe repairs (E001 orphan lines get a CONT prefix, E101 split CONC rejoined, trailing whitespace trimmed, classic Mac CR line endings normalized to LF) and always writes a `.bak` copy. `--max N` caps text output (JSON is always complete); `--severity` sets the minimum level shown.
+
+Each repair is one `Edit` over a line range, carrying an `Applicability` (`Safe` or `MaybeIncorrect`), so a subset can be applied: `--only CODE` (repeatable) restricts `--fix` to those repair codes, and `--unsafe` also applies the `MaybeIncorrect` ones, which a bare `--fix` never does. Line-ending normalization is whole-file preprocessing rather than a rule, so `--only` does not switch it off.
 
 ## GitHub Action
 
@@ -60,7 +62,7 @@ GitHub renders at most 10 annotations per severity per step; the job summary alw
 ## Design
 
 - **Linter, not just a validator**: categories (correctness / suspicious / style / upgrade), configurable severities, `--fix`. clippy/eslint model.
-- **`src/lib.rs`**: pure engine (`lint_str`, `lint_bytes`, `lint_reader`, `fix_bytes`, `Report::to_json`). No fs or process usage: compiles to WASM unchanged. Streaming line-by-line parsing (`BufRead`).
+- **`src/lib.rs`**: pure engine (`lint_str`, `lint_bytes`, `lint_reader`, `fix_bytes`, `compute_edits`/`apply_edits`, `Report::to_json`). No fs or process usage: compiles to WASM unchanged. Streaming line-by-line parsing (`BufRead`).
 - **`src/main.rs`**: thin CLI layer (hand-rolled args, zero dependencies, manual ANSI colors).
 - **Version**: detected via `HEAD.GEDC.VERS`; the rule set applies per version. `U5xx` rules flag the 5.5.1 to 7.0 upgrade path (see https://gedcom.io/migrate/).
 - **No global diagnostic cap**: every diagnostic is collected (a real file with 516 `_UPD` infos once hid errors behind a 200-item cap); output limiting is opt-in via `--max`.
