@@ -28,9 +28,9 @@ inputs:
     required: false
     default: "true"
   require-checksum:
-    description: "Fail if the release has no .sha256 for the downloaded archive (warns and continues by default)"
+    description: "Fail when the release publishes no .sha256 for the archive. Set false only to pin a release before v0.6.0, which have none"
     required: false
-    default: "false"
+    default: "true"
   version:
     description: "gedlint release to download. 'v1' (default) is a moving major tag; pin an exact tag for reproducible runs"
     required: false
@@ -106,11 +106,14 @@ runs:
           if curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
               --connect-timeout 20 --max-time 60 \
               "$BASE/$STAGE.$ARCHIVE.sha256" -o "$CACHE/pkg.sha256"; then
-            EXPECTED="$(tr -d '\r' < "$CACHE/pkg.sha256" | awk 'NF {print $1; exit}')"
+            EXPECTED="$(tr -d '\r' < "$CACHE/pkg.sha256" | awk 'NF {sub(/^\\\\/, "", $1); print $1; exit}')"
+            # Hash from stdin. Given a filename, coreutils escapes backslashes in
+            # the path and marks the line with a leading "\", which every Windows
+            # path triggers and which would corrupt the comparison.
             if command -v sha256sum >/dev/null; then
-              ACTUAL="$(sha256sum "$CACHE/pkg.$ARCHIVE" | awk '{print $1}')"
+              ACTUAL="$(sha256sum < "$CACHE/pkg.$ARCHIVE" | awk '{print $1}')"
             else
-              ACTUAL="$(shasum -a 256 "$CACHE/pkg.$ARCHIVE" | awk '{print $1}')"
+              ACTUAL="$(shasum -a 256 < "$CACHE/pkg.$ARCHIVE" | awk '{print $1}')"
             fi
             if [ "$EXPECTED" != "$ACTUAL" ]; then
               echo "::error::checksum mismatch for $STAGE.$ARCHIVE (expected $EXPECTED, got $ACTUAL)"

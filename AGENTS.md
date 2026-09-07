@@ -6,7 +6,7 @@
 - Private real fixtures live OUTSIDE this repo (a local checkout of a 520-person MyHeritage tree: one cleaned file plus the original export). Never copy tree data into this repo or public issues; discuss counts and rule codes only.
 - Spec source of truth was pmontp19/gedcom-family-tree#2 (closed on MVP). Both spec audits (5.5.1, 7.0) are done; findings not yet implemented are roadmap, not bugs.
 - `action.yml` renders annotations, the job summary and step outputs through `scripts/gh-report.js` (node, present on every GitHub-hosted runner). The zero-dependency rule covers the Rust binary, not the action.
-- Release archives ship a `.sha256`; `action.yml` warns instead of failing when one is missing so pre-0.6.0 tags keep working. Once `v1` points at a release that has them, flip `require-checksum` to `true` by default and drop the warning branch.
+- Release archives ship a `.sha256` since v0.6.0 and `action.yml` requires it by default. The warn-and-continue branch stays reachable through `require-checksum: false`, which is the only way to pin an older release.
 - `cargo-llvm-cov` is installed; `cargo-mutants` is not (offline at the time). Mutation testing was manual in a /tmp copy; survivors all have regression tests.
 
 ## Constraints (not derivable from code)

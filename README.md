@@ -45,7 +45,7 @@ Findings land as inline annotations on the diff, plus a job summary grouped by r
     annotations: true  # inline file annotations
     max-annotations: 50   # worst first; '0' lifts the cap
     summary: true      # job summary grouped by rule code
-    require-checksum: false  # fail instead of warn when a release has no .sha256
+    require-checksum: true   # set false only to pin a release before v0.6.0, which ship no .sha256
     version: v1        # moving major tag; pin an exact tag (v0.5.0) to freeze the binary
 ```
 
@@ -55,7 +55,7 @@ Outputs: `errors`, `warnings`, `infos`, `files`, `exit-code` (0 clean, 1 warning
 - run: echo "${{ steps.gedlint.outputs.errors }} errors in ${{ steps.gedlint.outputs.files }} files"
 ```
 
-GitHub renders at most 10 annotations per severity per step; the job summary always lists every rule and count. Prebuilt runners: linux x86_64/arm64, macOS ARM, Windows x86_64. The binary is downloaded once per job, verified against the release `.sha256` when one is published, and cached in `RUNNER_TEMP`. Rendering annotations and the summary needs `node` on `PATH` (present on all GitHub-hosted runners).
+GitHub renders at most 10 annotations per severity per step; the job summary always lists every rule and count. Prebuilt runners: linux x86_64/arm64, macOS ARM, Windows x86_64. The binary is downloaded once per job, verified against the release `.sha256`, and cached in `RUNNER_TEMP`. Releases before v0.6.0 publish no checksum: pinning `version` to one of those needs `require-checksum: false`. Rendering annotations and the summary needs `node` on `PATH` (present on all GitHub-hosted runners).
 
 ## Design
 
