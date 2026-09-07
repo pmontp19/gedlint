@@ -28,9 +28,9 @@ inputs:
     required: false
     default: "true"
   require-checksum:
-    description: "Fail if the release has no .sha256 for the downloaded archive (warns and continues by default)"
+    description: "Fail when the release publishes no .sha256 for the archive. Set false only to pin a release before v0.6.0, which have none"
     required: false
-    default: "false"
+    default: "true"
   version:
     description: "gedlint release to download. 'v1' (default) is a moving major tag; pin an exact tag for reproducible runs"
     required: false
