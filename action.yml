@@ -1,0 +1,53 @@
+name: "gedlint"
+description: "Linter GEDCOM (MyHeritage quirks + validació referencial i semàntica)"
+branding:
+  icon: "git-branch"
+  color: "blue"
+inputs:
+  path:
+    description: "Ruta al fitxer .ged (sense shell expansion; es passa quotada)"
+    required: true
+  fail-on:
+    description: "'error' (defecte) o 'warning'"
+    required: false
+    default: "error"
+  format:
+    description: "'text' (defecte) o 'json'"
+    required: false
+    default: "text"
+  version:
+    description: "Versió de gedlint (tag release, p.ex. v1.0.0)"
+    required: false
+    default: "v1"
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      env:
+        GEDLINT_PATH: ${{ inputs.path }}
+        GEDLINT_FAIL_ON: ${{ inputs.fail-on }}
+        GEDLINT_FORMAT: ${{ inputs.format }}
+        GEDLINT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$GEDLINT_FAIL_ON" in error|warning) ;; *) echo "fail-on ha de ser error|warning"; exit 2;; esac
+        case "$GEDLINT_FORMAT" in text|json) ;; *) echo "format ha de ser text|json"; exit 2;; esac
+        OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        ARCH="$(uname -m)"
+        case "$ARCH" in x86_64) ARCH=x86_64;; arm64|aarch64) ARCH=aarch64;; *) echo "arch no suportada: $ARCH"; exit 2;; esac
+        case "$OS" in linux|darwin) ;; *) echo "OS no suportat: $OS"; exit 2;; esac
+        URL="https://github.com/pmontp19/gedlint/releases/download/${GEDLINT_VERSION}/gedlint-${OS}-${ARCH}"
+        BIN="$(mktemp -t gedlint.XXXXXX)"
+        trap 'rm -f "$BIN"' EXIT
+        curl -fSL "$URL" -o "$BIN" && chmod +x "$BIN"
+        if [ "$GEDLINT_FORMAT" = "json" ]; then
+          "$BIN" --format json -- "$GEDLINT_PATH"
+        else
+          "$BIN" -- "$GEDLINT_PATH"
+        fi
+        CODE=$?
+        # propaga crashes/ús (0/1/2 són el contracte; qualsevol altre codi sempre falla)
+        if [ $CODE -gt 2 ]; then exit $CODE; fi
+        if [ "$GEDLINT_FAIL_ON" = "warning" ] && [ $CODE -ne 0 ]; then exit $CODE; fi
+        if [ "$GEDLINT_FAIL_ON" = "error" ] && [ $CODE -eq 2 ]; then exit 2; fi
+        exit 0

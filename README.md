@@ -1,8 +1,29 @@
-# gedlint (WIP)
+# gedlint
 
-Linter GEDCOM en Rust: ràpid, binari únic, streaming per fitxers grans, suport dual 5.5.1 (llegat, exports MyHeritage) + 7.0 (espec formal).
+Linter GEDCOM en Rust: binari únic, zero deps, exit codes 0/1/2.
 
-**Estat: POC esborrany que NO compila** (main.rs amb ~5 errors de sintaxi). És el punt de partida de la sessió futura: veure issue #2 a pmontp19/gedcom-family-tree per l'especificació completa.
+**Estat: compila i amb paritat gedcheck.py (1E+23W sobre Montpeo_arbre_netejat.ged: 522 INDI / 124 FAM / 35 SOUR).**
+
+## Ús
+
+```sh
+cargo build --release
+./target/release/gedlint arbre.ged
+./target/release/gedlint --format json arbre.ged
+./target/release/gedlint --fix arbre.ged   # repara E101, guarda .bak
+```
+
+## GitHub Action
+
+```yaml
+- uses: pmontp19/gedlint@v1
+  with:
+    path: arbre/Montpeo_arbre_netejat.ged
+    fail-on: error
+```
+
+Releases: `gh release create vX.Y.Z` amb `gedlint-{linux,darwin}-{x86_64,aarch64}`.
+
 
 ## Disseny (decisions preses)
 
