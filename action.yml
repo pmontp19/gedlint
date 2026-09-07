@@ -16,9 +16,9 @@ inputs:
     required: false
     default: "text"
   version:
-    description: "gedlint release with prebuilt binaries (e.g. v0.5.0)"
+    description: "gedlint release with prebuilt binaries (e.g. v1)"
     required: false
-    default: "v0.5.0"
+    default: "v1"
 runs:
   using: "composite"
   steps:

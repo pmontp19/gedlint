@@ -11,7 +11,7 @@ Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 
 ## Status
 
-Working MVP: `cargo test` (72 tests: 2 unit + 60 rule + 10 CLI), `cargo clippy` clean, `cargo llvm-cov` 90.1% regions (lib 91.1%, main 79.4%), release validated at 4.5MB in 0.13s, `cargo check --target wasm32-unknown-unknown` OK. Prebuilt binaries (linux/macOS/Windows) attached to releases. Validated against a real 520-person MyHeritage tree (found 175 strict-grammar errors the previous validator missed: HTML continuations without CONT, plus encoding quirks). Rule set audited against the 5.5.1 and 7.0 specs (E007/E008/E009/W306 from the registries); two rounds of hand-rolled mutation testing (15/19), all survivors covered with regression tests.
+Working MVP: `cargo test` (73 tests: 2 unit + 61 rule + 10 CLI), `cargo clippy` clean, `cargo llvm-cov` 90.2% regions (lib 91.2%, main 79.4%), release validated at 4.5MB in 0.13s, `cargo check --target wasm32-unknown-unknown` OK. Prebuilt binaries (linux/macOS/Windows) attached to releases. Validated against a real 520-person MyHeritage tree (found 175 strict-grammar errors the previous validator missed: HTML continuations without CONT, plus encoding quirks). Rule set audited against the 5.5.1 and 7.0 specs (E007/E008/E009/W306 from the registries); two rounds of hand-rolled mutation testing (15/19), all survivors covered with regression tests.
 
 ## Usage
 

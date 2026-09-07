@@ -24,13 +24,13 @@ jobs:
         uses: ./
         with:
           path: /tmp/clean.ged
-          version: v0.5.0
+          version: v1
       - name: Warning ignored with fail-on error
         uses: ./
         with:
           path: /tmp/warn.ged
           fail-on: error
-          version: v0.5.0
+          version: v1
       - name: Warning fails with fail-on warning
         id: warn
         continue-on-error: true
@@ -38,7 +38,7 @@ jobs:
         with:
           path: /tmp/warn.ged
           fail-on: warning
-          version: v0.5.0
+          version: v1
       - name: Assert warning failed as expected
         shell: bash
         run: |
@@ -103,7 +103,7 @@ jobs:
           STAGE="gedlint-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir "$STAGE"
           cp "target/${{ matrix.target }}/release/gedlint${{ matrix.ext }}" "$STAGE/"
-          cp README.md AGENTS.md "$STAGE/"
+          cp README.md AGENTS.md LICENSE "$STAGE/"
           if [ "${{ matrix.archive }}" = "zip" ]; then
             7z a "$STAGE.zip" "$STAGE"
           else
