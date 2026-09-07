@@ -6,7 +6,7 @@ Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 
 ## Install
 
-- Prebuilt binaries (linux x86_64, macOS ARM, Windows): GitHub Releases. Intel Macs: build from source.
+- Prebuilt binaries (linux x86_64/arm64, macOS ARM, Windows x86_64), with a `.sha256` next to each archive: GitHub Releases. Intel Macs: build from source.
 - From source: `cargo install --git github.com/pmontp19/gedlint` or `cargo build --release`.
 
 ## Status
@@ -29,11 +29,33 @@ Exit codes: 0 clean, 1 warnings, 2 errors.
 - uses: pmontp19/gedlint@v1
   with:
     path: tree.ged
-    fail-on: error # or 'warning'
-    format: text   # or 'json'
 ```
 
-Prebuilt runners: linux x86_64, macOS ARM, Windows x86_64. `version` input selects the release binary (default matches the latest release).
+Findings land as inline annotations on the diff, plus a job summary grouped by rule code. Full set of inputs:
+
+```yaml
+- uses: pmontp19/gedlint@v1
+  id: gedlint
+  with:
+    path: |            # one path or glob per line; every pattern must match
+      trees/*.ged
+      archive/legacy.ged
+    fail-on: error     # or 'warning'
+    format: text       # log rendering; 'json' prints the raw report instead
+    annotations: true  # inline file annotations
+    max-annotations: 50   # worst first; '0' lifts the cap
+    summary: true      # job summary grouped by rule code
+    require-checksum: false  # fail instead of warn when a release has no .sha256
+    version: v1        # moving major tag; pin an exact tag (v0.5.0) to freeze the binary
+```
+
+Outputs: `errors`, `warnings`, `infos`, `files`, `exit-code` (0 clean, 1 warnings, 2 errors, worst across all files).
+
+```yaml
+- run: echo "${{ steps.gedlint.outputs.errors }} errors in ${{ steps.gedlint.outputs.files }} files"
+```
+
+GitHub renders at most 10 annotations per severity per step; the job summary always lists every rule and count. Prebuilt runners: linux x86_64/arm64, macOS ARM, Windows x86_64. The binary is downloaded once per job, verified against the release `.sha256` when one is published, and cached in `RUNNER_TEMP`. Rendering annotations and the summary needs `node` on `PATH` (present on all GitHub-hosted runners).
 
 ## Design
 

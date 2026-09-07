@@ -6,7 +6,9 @@ on:
   pull_request:
 jobs:
   action-smoke:
-    # Exercises action.yml end to end (download pinned dev binary, fail-on matrix).
+    # Exercises action.yml end to end (download pinned dev binary, globs,
+    # annotations, summary, outputs, fail-on matrix).
+    # linux arm64 joins this matrix once a release carries the target.
     strategy:
       matrix:
         os: [ubuntu-latest, macos-14, windows-latest]
@@ -18,17 +20,20 @@ jobs:
       - name: Fixtures
         shell: bash
         run: |
-          printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n' > /tmp/clean.ged
-          printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n0 TRLR\n' > /tmp/warn.ged
+          mkdir -p smoke/nested
+          printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n' > smoke/clean.ged
+          printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n0 TRLR\n' > smoke/warn.ged
+          printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F9@\n0 TRLR\n' > smoke/nested/broken.ged
       - name: Clean file passes
         uses: ./
         with:
-          path: /tmp/clean.ged
+          path: smoke/clean.ged
           version: v1
       - name: Warning ignored with fail-on error
+        id: warn-ignored
         uses: ./
         with:
-          path: /tmp/warn.ged
+          path: smoke/warn.ged
           fail-on: error
           version: v1
       - name: Warning fails with fail-on warning
@@ -36,13 +41,41 @@ jobs:
         continue-on-error: true
         uses: ./
         with:
-          path: /tmp/warn.ged
+          path: smoke/warn.ged
           fail-on: warning
           version: v1
-      - name: Assert warning failed as expected
+      - name: Glob over several files
+        id: glob
+        continue-on-error: true
+        uses: ./
+        with:
+          path: |
+            smoke/*.ged
+            smoke/nested/*.ged
+          version: v1
+      - name: Assert outcomes, outputs and summary
         shell: bash
+        env:
+          WARN_OUTCOME: ${{ steps.warn.outcome }}
+          GLOB_OUTCOME: ${{ steps.glob.outcome }}
+          WARN_IGNORED_WARNINGS: ${{ steps.warn-ignored.outputs.warnings }}
+          WARN_IGNORED_ERRORS: ${{ steps.warn-ignored.outputs.errors }}
+          WARN_IGNORED_FILES: ${{ steps.warn-ignored.outputs.files }}
+          WARN_IGNORED_EXIT: ${{ steps.warn-ignored.outputs.exit-code }}
         run: |
-          [ "${{ steps.warn.outcome }}" = "failure" ] || { echo "expected failure, got ${{ steps.warn.outcome }}"; exit 1; }
+          set -euo pipefail
+          assert() { [ "$2" = "$3" ] || { echo "FAIL $1: expected $3, got $2"; exit 1; }; }
+          assert "warn outcome" "$WARN_OUTCOME" failure
+          assert "glob outcome" "$GLOB_OUTCOME" failure
+          assert "warn-ignored errors" "$WARN_IGNORED_ERRORS" 0
+          assert "warn-ignored warnings" "$WARN_IGNORED_WARNINGS" 1
+          assert "warn-ignored files" "$WARN_IGNORED_FILES" 1
+          assert "warn-ignored exit-code" "$WARN_IGNORED_EXIT" 1
+          # The summary accumulates one block per action call in this job.
+          grep -q '^## gedlint' "$GITHUB_STEP_SUMMARY"
+          grep -q '| `W305` | warning | suspicious |' "$GITHUB_STEP_SUMMARY"
+          grep -q '| `E201` | error | correctness |' "$GITHUB_STEP_SUMMARY"
+          grep -q 'smoke/nested/broken.ged' "$GITHUB_STEP_SUMMARY"
   ci:
     runs-on: ubuntu-latest
     permissions:
@@ -67,6 +100,22 @@ jobs:
           awk -v cov="$COV" 'BEGIN { c = cov + 0; if (c < 84) { printf "FAIL: %s below 84%%\n", cov; exit 1 } }'
       - name: WASM check
         run: cargo check --target wasm32-unknown-unknown
+      - name: Report renderer (annotation escaping, grouping, outputs)
+        run: |
+          set -euo pipefail
+          R=$(mktemp -d)
+          printf '%s' 'a.ged' > "$R/0000.path"
+          printf '%s' 2 > "$R/0000.exit"
+          # Message carries every character a workflow command has to escape.
+          printf '%s' '{"version":"5.5.1","lines":9,"individuals":1,"families":0,"summary":{"errors":1,"warnings":1,"infos":0},"diagnostics":[{"code":"E008","category":"correctness","severity":"ERROR","line":7,"message":"100% off: a,b\nsecond line"},{"code":"W305","category":"suspicious","severity":"WARN","line":8,"message":"invalid SEX"}]}' > "$R/0000.json"
+          OUT=$(GITHUB_STEP_SUMMARY=$R/summary.md GITHUB_OUTPUT=$R/out.txt GITHUB_WORKSPACE= node scripts/gh-report.js "$R")
+          grep -qF '::error file=a.ged,line=7,title=gedlint E008 (correctness)::100%25 off: a,b%0Asecond line' <<<"$OUT"
+          grep -qF '::warning file=a.ged,line=8,' <<<"$OUT"
+          grep -qF '::group::' <<<"$OUT"
+          grep -qF 'errors=1' "$R/out.txt"
+          grep -qF 'warnings=1' "$R/out.txt"
+          grep -qF 'exit-code=2' "$R/out.txt"
+          grep -qF '| `E008` | error | correctness | 1 |' "$R/summary.md"
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: ci
@@ -83,6 +132,10 @@ jobs:
             archive: tar.gz
           # No Intel-mac runner: GitHub retired macos-13 queues (stalls for hours).
           # Intel Macs: cargo install --git github.com/pmontp19/gedlint.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            ext: ""
+            archive: tar.gz
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             ext: .exe
@@ -108,6 +161,13 @@ jobs:
             7z a "$STAGE.zip" "$STAGE"
           else
             tar czf "$STAGE.tar.gz" "$STAGE"
+          fi
+          # action.yml verifies this before unpacking.
+          ARCHIVE="$STAGE.${{ matrix.archive }}"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          else
+            shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
           fi
       - uses: softprops/action-gh-release@v3
         with:
