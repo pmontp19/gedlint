@@ -328,6 +328,87 @@ fn e008_duplicate_singletons() {
 }
 
 #[test]
+fn e008_vers_scoped_by_parent() {
+    // Issue #5: HEAD.GEDC.VERS (GEDCOM version) and HEAD.SOUR.VERS (product
+    // version) are different singletons; every MyHeritage 5.5.1 export has both.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n2 FORM LINEAGE-LINKED\n1 SOUR MYHERITAGE\n2 NAME MyHeritage Family Tree Builder\n2 VERS 5.5.1\n0 TRLR\n";
+    assert!(!has(g, "E008"), "{:?}", codes(g));
+    // HEAD.CHAR.VERS is a third slot (5.5.1 only).
+    let chr = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n2 VERS 1.0\n0 TRLR\n";
+    assert!(!has(chr, "E008"), "{:?}", codes(chr));
+    // Two VERS inside the SAME block are still duplicates.
+    let dup_gedc = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n2 VERS 5.5.1\n0 TRLR\n";
+    assert!(has(dup_gedc, "E008"));
+    let dup_sour = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 SOUR X\n2 VERS 1\n2 VERS 2\n0 TRLR\n";
+    assert!(has(dup_sour, "E008"));
+}
+
+#[test]
+fn e009_gedc_vers_not_satisfied_by_sour_vers() {
+    // A SOUR.VERS must not stand in for the required GEDC.VERS.
+    let g = "0 HEAD\n1 GEDC\n1 SOUR X\n2 VERS 9\n0 TRLR\n";
+    assert!(has(g, "E009"), "{:?}", codes(g));
+}
+
+#[test]
+fn e001_blank_lines_are_not_malformed() {
+    // Issue #5: trailing blank lines after TRLR are not malformed lines.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n\n\n";
+    assert!(!has(g, "E001"), "{:?}", codes(g));
+    assert!(!has(g, "E002"), "{:?}", codes(g));
+    assert_eq!(lint_str(g).exit_code(), 0);
+    // A blank line must not mask the level jump that follows it.
+    let jump = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n\n3 NAME A /B/\n0 TRLR\n";
+    assert!(has(jump, "E001"), "{:?}", codes(jump));
+}
+
+#[test]
+fn e001_year_leading_orphan_is_repaired() {
+    // Issue #5: a biography continuation starting with a year read as level
+    // 1936 ("level jump"), so --fix left it behind. Levels stop at 99.
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT Primera part\n1936 va ser un any dur\n0 TRLR\n".to_vec();
+    let r = lint_bytes(&data);
+    assert!(r.diags.iter().any(|d| d.code == "E001" && d.line == 7), "{:?}", r.diags);
+    let (fixed, applied) = fix_bytes(&data);
+    assert!(applied.iter().any(|a| a.contains("CONT")));
+    let text = String::from_utf8(fixed).unwrap();
+    assert!(text.contains("3 CONT 1936 va ser un any dur"), "{}", text);
+    assert!(lint_str(&text).diags.is_empty(), "{:?}", lint_str(&text).diags);
+}
+
+#[test]
+fn e001_orphan_run_stays_flat() {
+    // A run of orphan lines is a run of siblings under the anchor, not a
+    // staircase: nested CONTs would hang the 2nd/3rd paragraph off the 1st
+    // CONT instead of off TEXT, silently losing them for a strict reader.
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT Primera part\n1936 un any dur\n1937 un altre\n1938 un altre mes\n0 TRLR\n".to_vec();
+    let (fixed, applied) = fix_bytes(&data);
+    assert!(applied.iter().any(|a| a.contains("3 orphan lines")), "{:?}", applied);
+    let text = String::from_utf8(fixed).unwrap();
+    assert!(text.contains("3 CONT 1936 un any dur"), "{}", text);
+    assert!(text.contains("3 CONT 1937 un altre"), "{}", text);
+    assert!(text.contains("3 CONT 1938 un altre mes"), "{}", text);
+    assert!(lint_str(&text).diags.is_empty(), "{:?}", lint_str(&text).diags);
+    // The anchor resets on the next line that really has a level.
+    let mixed = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT a\norfe u\norfe dos\n1 NOTE x\ndespres\n0 TRLR\n".to_vec();
+    let t2 = String::from_utf8(fix_bytes(&mixed).0).unwrap();
+    assert!(t2.contains("3 CONT orfe u") && t2.contains("3 CONT orfe dos"), "{}", t2);
+    assert!(t2.contains("2 CONT despres"), "{}", t2);
+}
+
+#[test]
+fn fix_leaves_whitespace_only_lines_alone() {
+    // lint ignores a whitespace-only line, so --fix must not turn it into an
+    // empty CONT; the trailing-whitespace pass trims it instead.
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT part\n   \n0 TRLR\n".to_vec();
+    let (fixed, applied) = fix_bytes(&data);
+    let text = String::from_utf8(fixed).unwrap();
+    assert!(!applied.iter().any(|a| a.contains("orphan")), "{:?}", applied);
+    assert!(!text.contains("CONT"), "{}", text);
+    assert!(text.contains("2 TEXT part\n\n0 TRLR"), "{}", text);
+}
+
+#[test]
 fn e009_missing_required() {
     // HEAD.GEDC and GEDC.VERS are {1:1}.
     assert!(has("0 HEAD\n1 CHAR UTF-8\n0 TRLR\n", "E009"));

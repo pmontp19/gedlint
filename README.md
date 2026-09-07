@@ -46,7 +46,7 @@ Prebuilt runners: linux x86_64, macOS ARM, Windows x86_64. `version` input selec
 
 ## Rules
 
-Structural: E001 level, E002 HEAD/TRLR (incl. HEAD-first, nothing after TRLR), E003 duplicate xref, E004 malformed xref, E005 orphan CONT/CONC, E007 CONC in 7.0 (reserved tag, spec 1.3), E008 duplicate singleton (SEX/HUSB/WIFE/GEDC/VERS, one detail substructure per event block), E009 missing required (HEAD.GEDC, GEDC.VERS).
+Structural: E001 level (levels stop at 99, so a text line starting with a year is an orphan, not a jump; blank lines are ignored), E002 HEAD/TRLR (incl. HEAD-first, nothing after TRLR), E003 duplicate xref, E004 malformed xref, E005 orphan CONT/CONC, E007 CONC in 7.0 (reserved tag, spec 1.3), E008 duplicate singleton (SEX/HUSB/WIFE/GEDC, VERS scoped by its HEAD parent so GEDC.VERS and SOUR.VERS coexist, one detail substructure per event block), E009 missing required (HEAD.GEDC, GEDC.VERS).
 Encoding: E101 invalid UTF-8 / split CONC (MyHeritage bug) with `--fix` (skipped for declared ANSEL/ASCII), W102 BOM (silent in 7.0, which recommends it) / mixed CRLF / control chars.
 Referential: E201 broken refs incl. level-2+ pointers (@VOID@ exempt), W202 FAMC/CHIL mismatch.
 Semantic: W301 death before birth / longevity >105 (DEAT Y without a date is excluded), W302 duplicates (name + birth ±2 years), W303 parent age, W304 child before marriage, W305 SEX (X valid only in 7.0), W306 enum values (ROLE/PEDI/QUAY/RESN/FAMC-STAT/NAME-TYPE/MEDI/LDS-STAT/DATA-EVEN from the 7.0 registries; HEAD.CHAR validated; FILE.FORM media type; OTHER wants a sibling PHRASE), W307 duplicate events with conflicting dates.
