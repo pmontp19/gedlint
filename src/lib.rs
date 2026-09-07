@@ -236,7 +236,8 @@ fn normalize_newlines(data: &[u8]) -> Cow<'_, [u8]> {
     Cow::Owned(out)
 }
 
-/// Cheap pre-scan of HEAD for version (HEAD.GEDC.VERS) and declared/// charset (HEAD.CHAR), so byte-level encoding rules can adapt
+/// Cheap pre-scan of HEAD for version (HEAD.GEDC.VERS) and declared
+/// charset (HEAD.CHAR), so byte-level encoding rules can adapt
 /// (ANSEL files are not UTF-8; a BOM is recommended by GEDCOM 7).
 fn scan_head(text: &str) -> (Version, Option<String>) {
     let mut version = Version::Unknown;
@@ -327,29 +328,16 @@ fn encoding_diags(data: &[u8], version: Version, charset: Option<&str>) -> Vec<D
         }
         found
     };
-    let has_lone_cr = {
-        let mut found = false;
-        let mut it = data.iter().peekable();
-        while let Some(&b) = it.next() {
-            if b == b'\r' {
-                match it.peek() {
-                    Some(&&b'\n') => {}
-                    _ => {
-                        found = true;
-                        break;
-                    }
-                }
-            }
-        }
-        found
-    };
-    if has_crlf && (has_lone_lf || has_lone_cr) {
+    // `data` arrives CR-normalized, so lone CRs no longer exist here: any
+    // lone LF next to a CRLF means the file mixes terminator styles
+    // (including a classic-Mac CR section, now normalized to LF).
+    if has_crlf && has_lone_lf {
         out.push(Diag::new(
             "W102",
             Category::Style,
             Severity::Warning,
             0,
-            "mixed CRLF/LF line endings (normalize to a single style)".into(),
+            "mixed line endings (CRLF and LF; normalize to a single style)".into(),
         ));
     }
 
@@ -623,6 +611,8 @@ fn check_enum(
     // (maximal70.ged: "RESN CONFIDENTIAL, LOCKED", "EVEN BIRT, DEAT").
     if version == Version::V70 && (tag == "RESN" || (tag == "EVEN" && parent_tag == "DATA")) {
         let all_ok = v.split(',').all(|t| {
+            // Empty tokens (trailing comma, "A, ,B") are tolerated:
+            // exporter quirk, the meaningful tokens still get validated.
             let t = t.trim();
             t.is_empty() || allowed.contains(&t)
         });
@@ -749,10 +739,11 @@ fn lint_lines(text: &str) -> Report {
     let mut cur_event: Option<(String, usize, u32)> = None;
     // W307 conflicting duplicate events: EvKey -> (DATE, line).
     let mut event_dates: HashMap<EvKey, (String, usize)> = HashMap::new();
-    // DIV events per record (line numbers): a MARR pair separated by one is
-    // a remarriage, not a conflicting duplicate (7.0 spec allows a single
-    // FAM with multiple MARR/DIV).
+    // DIV and MARR event lines per record: a MARR pair separated by a DIV
+    // is a remarriage and a DIV pair separated by a MARR is a serial
+    // divorce; the 7.0 spec allows a single FAM to hold multiple MARR/DIV.
     let mut div_lines: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut marr_lines: HashMap<String, Vec<usize>> = HashMap::new();
     // W402 slash balance must see the whole NAME value: a surname split
     // across CONC lines (Long26CC) is balanced as a whole but odd per line.
     let mut name_buf: Option<(String, usize, String)> = None;
@@ -784,7 +775,8 @@ fn lint_lines(text: &str) -> Report {
         }
     };
 
-    let flush_person = |diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d: Option<i64>, line: usize| {        if let (Some(bb), Some(dd)) = (b, d) {
+    let flush_person = |diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d: Option<i64>, line: usize| {
+        if let (Some(bb), Some(dd)) = (b, d) {
             if dd < 10000 && bb < 10000 && dd < bb {
                 push_capped(
                     diags,
@@ -1062,6 +1054,8 @@ fn lint_lines(text: &str) -> Report {
                     cur_event = Some((l.tag.clone(), n, lvl));
                     if l.tag == "DIV" {
                         div_lines.entry(xref.clone()).or_default().push(l.no);
+                    } else if l.tag == "MARR" {
+                        marr_lines.entry(xref.clone()).or_default().push(l.no);
                     }
                 }
                 // E009 EVEN/FACT instance counter (TYPE required in 7.0).
@@ -1243,15 +1237,22 @@ fn lint_lines(text: &str) -> Report {
 
         // Level >= 2.
         // NAME value continuation: append CONC verbatim, CONT after a space.
-        // Reaching here with name_buf set means the run is still open.
-        if (l.tag == "CONC" || l.tag == "CONT") && name_buf.is_some() {
-            if let Some((_, _, val)) = &mut name_buf {
-                if l.tag == "CONC" {
-                    val.push_str(&l.value);
-                } else {
-                    val.push(' ');
-                    val.push_str(&l.value);
+        // The run is only open while CONC/CONT directly follow the NAME at
+        // level 2: any other line (a SOUR between, or a CONC deeper down
+        // that belongs to a substructure like SOUR.PAGE) closes it first so
+        // foreign values are never absorbed into the NAME.
+        if name_buf.is_some() {
+            if lvl == 2 && (l.tag == "CONC" || l.tag == "CONT") {
+                if let Some((_, _, val)) = &mut name_buf {
+                    if l.tag == "CONC" {
+                        val.push_str(&l.value);
+                    } else {
+                        val.push(' ');
+                        val.push_str(&l.value);
+                    }
                 }
+            } else {
+                flush_name(&mut diags, &mut name_buf, &mut indi_name);
             }
         }
         // E008: VERS is {0:1} per HEAD substructure, scoped by its parent
@@ -1519,8 +1520,8 @@ fn lint_lines(text: &str) -> Report {
     }
 
     // W307: semantically single events twice with conflicting DATEs (classic
-    // merge leftover), except a MARR pair separated by a DIV: the 7.0 spec
-    // allows a single FAM to hold multiple MARR/DIV events (remarriage).
+    // merge leftover). MARR and DIV pairs separated by the counterpart event
+    // are a serial marriage/divorce (spec-legal in one FAM), not conflicts.
     {
         let mut by_event: HashMap<(String, String), Vec<EvHit>> = HashMap::new();
         for ((rec, ev, inst), (val, line)) in &event_dates {
@@ -1528,16 +1529,20 @@ fn lint_lines(text: &str) -> Report {
                 by_event.entry((rec.clone(), ev.clone())).or_default().push((*inst, val.clone(), *line));
             }
         }
+        let empty: Vec<usize> = Vec::new();
         for ((rec, ev), mut v) in by_event {
             v.sort();
-            let divs = div_lines.get(&rec).cloned().unwrap_or_default();
+            let excusers = match ev.as_str() {
+                "MARR" => div_lines.get(&rec).unwrap_or(&empty),
+                "DIV" => marr_lines.get(&rec).unwrap_or(&empty),
+                _ => &empty,
+            };
             let mut prev: Option<EvHit> = None;
             for hit in v {
                 if let Some((_, pval, pline)) = &prev {
                     if pval != &hit.1 {
-                        let divorced =
-                            ev == "MARR" && divs.iter().any(|d| *d > *pline && *d < hit.2);
-                        if !divorced {
+                        let excused = excusers.iter().any(|d| *d > *pline && *d < hit.2);
+                        if !excused {
                             push_capped(
                                 &mut diags,
                                 vec![Diag::new(
@@ -1864,7 +1869,20 @@ fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, version: Ve
 /// 2. Trim trailing whitespace.
 pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
     let mut applied = Vec::new();
-    let cr_only = data.contains(&b'\r') && !data.windows(2).any(|w| w == b"\r\n");
+    // Note CR normalization only when it actually changes bytes: lone CRs
+    // exist (a pure-CRLF file reassembles byte-identical, main.rs then
+    // prints nothing thanks to its fixed != data check).
+    let cr_fixable = {
+        let mut found = false;
+        let mut it = data.iter().peekable();
+        while let Some(&b) = it.next() {
+            if b == b'\r' && it.peek() != Some(&&b'\n') {
+                found = true;
+                break;
+            }
+        }
+        found
+    };
     let norm = normalize_newlines(data);
     let mut lines: Vec<Vec<u8>> = norm.split(|&b| b == b'\n').map(|l| l.to_vec()).collect();
 
@@ -1953,7 +1971,7 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
     if fixed_ws > 0 {
         applied.push(format!("style: trimmed trailing whitespace on {} lines", fixed_ws));
     }
-    if cr_only {
+    if cr_fixable {
         applied.push("style: normalized classic Mac CR line endings to LF".into());
     }
 

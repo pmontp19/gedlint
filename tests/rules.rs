@@ -505,6 +505,9 @@ fn w306_resn_list_70() {
     assert!(!has(&ok2, "W306"));
     let bad = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, BOGUS\n0 TRLR\n", HEAD70);
     assert!(has(&bad, "W306"));
+    // Trailing/empty tokens are tolerated (exporter quirk).
+    let tail = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL,\n0 TRLR\n", HEAD70);
+    assert!(!has(&tail, "W306"));
     // 5.5.1 RESN is a single enum (no lists); case-insensitive.
     let ok3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 RESN Locked\n");
     assert!(!has(&ok3, "W306"));
@@ -546,6 +549,19 @@ fn w307_remarriage_after_div_is_not_a_conflict() {
     assert!(!has(&g3, "W307"));
     // Without an intervening DIV it is still a conflict.
     let g2 = wrap551("0 @F1@ FAM\n1 MARR\n2 DATE 1911\n1 MARR\n2 DATE 1914\n");
+    assert!(has(&g2, "W307"));
+}
+
+#[test]
+fn w307_serial_marriage_divorce_ok() {
+    // MARR/DIV/MARR/DIV in one FAM is spec-legal (7.0 allows multiple
+    // MARR/DIV): the DIVs must not conflict with each other either.
+    let g = wrap551(
+        "0 @F1@ FAM\n1 MARR\n2 DATE 1910\n1 DIV\n2 DATE 1912\n1 MARR\n2 DATE 1914\n1 DIV\n2 DATE 1920\n",
+    );
+    assert!(!has(&g, "W307"), "{:?}", codes(&g));
+    // Two DIVs in the same marriage epoch (no MARR between) still conflict.
+    let g2 = wrap551("0 @F1@ FAM\n1 MARR\n2 DATE 1910\n1 DIV\n2 DATE 1912\n1 DIV\n2 DATE 1915\n");
     assert!(has(&g2, "W307"));
 }
 
@@ -649,6 +665,19 @@ fn w402_name_slashes_across_conc() {
     assert!(has(&g4, "W402"));
     // Without continuation, unbalanced still fires (existing behavior).
     assert!(has(&wrap551("0 @I1@ INDI\n1 NAME Joan /Oso\n"), "W402"));
+}
+
+#[test]
+fn w402_conc_under_substructure_not_absorbed() {
+    // A CONC under NAME's SOUR citation continues the source line, not the
+    // NAME: the run must close at the intervening substructure.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Joan /Garcia/\n2 SOUR @S1@\n3 PAGE married /the/ year\n4 CONC 1850 /with/ notes\n0 @S1@ SOUR\n1 TITL T\n",
+    );
+    assert!(!has(&g, "W402"), "{:?}", codes(&g));
+    // A non-continuation line at level 2 also closes the run.
+    let g2 = wrap551("0 @I1@ INDI\n1 NAME Joan /Oso\n2 SEX M\n2 CONC broken\n");
+    assert!(has(&g2, "W402"));
 }
 
 #[test]
