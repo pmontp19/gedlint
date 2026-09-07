@@ -5,6 +5,7 @@
 //! compilable to WASM unchanged: the CLI binary is a thin layer (fs + args).
 //! Zero dependencies.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
 
@@ -188,9 +189,10 @@ pub fn lint_bytes(data: &[u8]) -> Report {
 }
 
 fn lint_bytes_split(data: &[u8], _already_str: bool) -> Report {
-    let text = String::from_utf8_lossy(data).into_owned();
+    let data = normalize_newlines(data);
+    let text = String::from_utf8_lossy(&data).into_owned();
     let (version, charset) = scan_head(&text);
-    let diags: Vec<Diag> = encoding_diags(data, version, charset.as_deref());
+    let diags: Vec<Diag> = encoding_diags(&data, version, charset.as_deref());
 
     let mut r = lint_lines(&text);
     // Encoding diags go first (low line numbers), then semantic ones.
@@ -203,6 +205,35 @@ fn lint_bytes_split(data: &[u8], _already_str: bool) -> Report {
         r.version = version;
     }
     r
+}
+
+/// Bare CR is a legal line terminator in 5.5.1 (classic Mac; the original
+/// TGC551.ged uses it): normalize lone CR to LF, keep CRLF untouched.
+/// Borrows the input when there is nothing to do (the common case).
+fn normalize_newlines(data: &[u8]) -> Cow<'_, [u8]> {
+    if !data.contains(&b'\r') {
+        return Cow::Borrowed(data);
+    }
+    let mut out = Vec::with_capacity(data.len());
+    let mut i = 0;
+    while i < data.len() {
+        match data[i] {
+            b'\r' if data.get(i + 1) == Some(&b'\n') => {
+                out.push(b'\r');
+                out.push(b'\n');
+                i += 2;
+            }
+            b'\r' => {
+                out.push(b'\n');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    Cow::Owned(out)
 }
 
 /// Cheap pre-scan of HEAD for version (HEAD.GEDC.VERS) and declared
@@ -297,29 +328,16 @@ fn encoding_diags(data: &[u8], version: Version, charset: Option<&str>) -> Vec<D
         }
         found
     };
-    let has_lone_cr = {
-        let mut found = false;
-        let mut it = data.iter().peekable();
-        while let Some(&b) = it.next() {
-            if b == b'\r' {
-                match it.peek() {
-                    Some(&&b'\n') => {}
-                    _ => {
-                        found = true;
-                        break;
-                    }
-                }
-            }
-        }
-        found
-    };
-    if has_crlf && (has_lone_lf || has_lone_cr) {
+    // `data` arrives CR-normalized, so lone CRs no longer exist here: any
+    // lone LF next to a CRLF means the file mixes terminator styles
+    // (including a classic-Mac CR section, now normalized to LF).
+    if has_crlf && has_lone_lf {
         out.push(Diag::new(
             "W102",
             Category::Style,
             Severity::Warning,
             0,
-            "mixed CRLF/LF line endings (normalize to a single style)".into(),
+            "mixed line endings (CRLF and LF; normalize to a single style)".into(),
         ));
     }
 
@@ -387,6 +405,9 @@ const ROLE: &[&str] = &[
     "CHIL", "CLERGY", "FATH", "FRIEND", "GODP", "HUSB", "MOTH", "MULTIPLE", "NGHBR",
     "OFFICIATOR", "PARENT", "SPOU", "WIFE", "WITN", "OTHER",
 ];
+// 5.5.1 has no ASSO.ROLE; its ROLE belongs to the source citation
+// (SOUR.EVEN.ROLE) and has a different, smaller set.
+const ROLE551: &[&str] = &["chil", "husb", "wife", "moth", "fath", "spou"];
 const PEDI70: &[&str] = &["ADOPTED", "BIRTH", "FOSTER", "SEALING", "OTHER"];
 const PEDI551: &[&str] = &["adopted", "birth", "foster", "sealing", "other"];
 const QUAY: &[&str] = &["0", "1", "2", "3"];
@@ -414,8 +435,20 @@ const ORD_STAT: &[&str] = &[
     "BIC", "CANCELED", "CHILD", "COMPLETED", "DNS", "DNS_CAN", "EXCLUDED", "INFANT",
     "PRE", "PRE_1970", "STILLBORN", "SUBMITTED", "UNCLEARED",
 ];
-// SOUR.DATA.EVEN payloads (7.0 only).
-const EVENATTR: &[&str] = &["CENS", "EVEN", "FACT", "NCHI", "RESI"];
+// SOUR.DATA.EVEN payloads (7.0): type-List#Enum of event/attribute tags
+// (spec: "a parish register of births, deaths, and marriages would be
+// BIRT, DEAT, MARR").
+const EVENATTR: &[&str] = &[
+    "ADOP", "ANUL", "BAPM", "BARM", "BASM", "BIRT", "BLES", "BURI", "CAST", "CENS", "CHR",
+    "CHRA", "CONF", "CREM", "DEAT", "DIV", "DIVF", "DSCR", "EDUC", "EMIG", "ENGA", "EVEN",
+    "FACT", "FCOM", "GRAD", "IDNO", "IMMI", "MARB", "MARC", "MARL", "MARR", "MARS", "NATI",
+    "NATU", "NCHI", "OCCU", "ORDN", "PROB", "PROP", "RELI", "RESI", "RETI", "SSN", "TITL",
+    "WILL",
+];
+// W307 only watches events that are semantically single: one birth, one
+// death. Repeatable attributes (OCCU/RESI/CENS/EVEN/FACT) accumulate new
+// instances naturally, so differing dates there are not a merge leftover.
+const CONFLICT_EVENTS: &[&str] = &["BIRT", "CHR", "DEAT", "BURI", "MARR", "DIV", "BAPM", "CONF"];
 
 // (record, event, instance) key shared by the E008/E009/W307 trackers.
 type EvKey = (String, String, usize);
@@ -540,7 +573,13 @@ fn check_enum(
         return;
     }
     let set: Option<(&[&str], &str)> = match tag {
-        "ROLE" => Some((ROLE, "ASSO.ROLE")),
+        "ROLE" => {
+            if version == Version::V70 {
+                Some((ROLE, "ASSO.ROLE"))
+            } else {
+                Some((ROLE551, "ROLE"))
+            }
+        }
         "PEDI" => Some((
             if version == Version::V70 { PEDI70 } else { PEDI551 },
             "FAMC.PEDI",
@@ -567,8 +606,43 @@ fn check_enum(
         _ => None,
     };
     let Some((allowed, what)) = set else { return };
-    if allowed.contains(&v) {
-        if (tag == "ROLE" || tag == "PEDI" || tag == "TYPE") && (v == "OTHER" || v == "other") {
+    // 7.0 RESN and SOUR.DATA.EVEN payloads are type-List#Enum: a
+    // comma-separated list of enum values, each valid on its own
+    // (maximal70.ged: "RESN CONFIDENTIAL, LOCKED", "EVEN BIRT, DEAT").
+    if version == Version::V70 && (tag == "RESN" || (tag == "EVEN" && parent_tag == "DATA")) {
+        let all_ok = v.split(',').all(|t| {
+            // Empty tokens (trailing comma, "A, ,B") are tolerated:
+            // exporter quirk, the meaningful tokens still get validated.
+            let t = t.trim();
+            t.is_empty() || allowed.contains(&t)
+        });
+        if all_ok {
+            return;
+        }
+        let who = if record.is_empty() { format!("line {}", line) } else { record.to_string() };
+        push_capped(
+            diags,
+            vec![Diag::new(
+                "W306",
+                Category::Suspicious,
+                Severity::Warning,
+                line,
+                format!("{}: invalid {} value {:?} (expected: {})", who, what, v, allowed.join("|")),
+            )],
+        );
+        return;
+    }
+    // 5.5.1 enum checks accept any case: the spec spells them lowercase but
+    // commercial exporters capitalize ("TYPE Birth", "PEDI ADOPTED").
+    let ci = version == Version::V551;
+    let hit = if ci {
+        allowed.iter().any(|s| s.eq_ignore_ascii_case(v))
+    } else {
+        allowed.contains(&v)
+    };
+    if hit {
+        let is_other = if ci { v.eq_ignore_ascii_case("other") } else { v == "OTHER" };
+        if (tag == "ROLE" || tag == "PEDI" || tag == "TYPE") && is_other {
             if let Some((ptag, pline)) = parent_key {
                 pending_other.push((record.to_string(), ptag, pline, tag.to_string(), line));
             }
@@ -665,12 +739,41 @@ fn lint_lines(text: &str) -> Report {
     let mut cur_event: Option<(String, usize, u32)> = None;
     // W307 conflicting duplicate events: EvKey -> (DATE, line).
     let mut event_dates: HashMap<EvKey, (String, usize)> = HashMap::new();
+    // DIV and MARR event lines per record: a MARR pair separated by a DIV
+    // is a remarriage and a DIV pair separated by a MARR is a serial
+    // divorce; the 7.0 spec allows a single FAM to hold multiple MARR/DIV.
+    let mut div_lines: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut marr_lines: HashMap<String, Vec<usize>> = HashMap::new();
+    // W402 slash balance must see the whole NAME value: a surname split
+    // across CONC lines (Long26CC) is balanced as a whole but odd per line.
+    let mut name_buf: Option<(String, usize, String)> = None;
     // E009 EVEN/FACT without TYPE (7.0 only): EvKey line + typed set.
     let mut ef_inst: HashMap<(String, String), usize> = HashMap::new();
     let mut ef_line: HashMap<EvKey, usize> = HashMap::new();
     let mut ef_typed: HashSet<EvKey> = HashSet::new();
     // E009 LDS STAT without DATE (7.0 only): (record, event, stat line).
     let mut lds_stat: Vec<(String, String, usize)> = Vec::new();
+
+    // W402 check on the accumulated NAME value (NAME + CONC/CONT run).
+    let flush_name = |diags: &mut Vec<Diag>,
+                      buf: &mut Option<(String, usize, String)>,
+                      names: &mut HashMap<String, String>| {
+        if let Some((xref, line, val)) = buf.take() {
+            names.insert(xref.clone(), val.clone());
+            if val.matches('/').count() % 2 != 0 {
+                push_capped(
+                    diags,
+                    vec![Diag::new(
+                        "W402",
+                        Category::Style,
+                        Severity::Warning,
+                        line,
+                        format!("{}: NAME with unbalanced slashes: {}", xref, truncate(&val, 50)),
+                    )],
+                );
+            }
+        }
+    };
 
     let flush_person = |diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d: Option<i64>, line: usize| {
         if let (Some(bb), Some(dd)) = (b, d) {
@@ -722,6 +825,10 @@ fn lint_lines(text: &str) -> Report {
             prev_level = None;
             continue;
         };
+        // A NAME run ends here: any level <= 1 line closes the CONC/CONT run.
+        if lvl <= 1 {
+            flush_name(&mut diags, &mut name_buf, &mut indi_name);
+        }
         // E002: HEAD must be the first line; nothing may follow TRLR.
         if !l.raw.trim().is_empty() {
             if !first_done {
@@ -945,6 +1052,11 @@ fn lint_lines(text: &str) -> Report {
                     let n = event_inst.get(&key).copied().unwrap_or(0) + 1;
                     event_inst.insert(key, n);
                     cur_event = Some((l.tag.clone(), n, lvl));
+                    if l.tag == "DIV" {
+                        div_lines.entry(xref.clone()).or_default().push(l.no);
+                    } else if l.tag == "MARR" {
+                        marr_lines.entry(xref.clone()).or_default().push(l.no);
+                    }
                 }
                 // E009 EVEN/FACT instance counter (TYPE required in 7.0).
                 if l.tag == "EVEN" || l.tag == "FACT" {
@@ -1005,19 +1117,9 @@ fn lint_lines(text: &str) -> Report {
                         }
                     }
                     ("INDI", "NAME") => {
-                        indi_name.insert(xref.clone(), l.value.clone());
-                        if l.value.matches('/').count() % 2 != 0 {
-                            push_capped(
-                                &mut diags,
-                                vec![Diag::new(
-                                    "W402",
-                                    Category::Style,
-                                    Severity::Warning,
-                                    l.no,
-                                    format!("{}: NAME with unbalanced slashes: {}", xref, truncate(&l.value, 50)),
-                                )],
-                            );
-                        }
+                        // Value may continue via CONC/CONT: W402 runs on the
+                        // whole accumulated value at flush time.
+                        name_buf = Some((xref.clone(), l.no, l.value.clone()));
                     }
                     ("INDI", "SEX") => {
                         // E008: INDI.SEX is {0:1}.
@@ -1134,6 +1236,25 @@ fn lint_lines(text: &str) -> Report {
         }
 
         // Level >= 2.
+        // NAME value continuation: append CONC verbatim, CONT after a space.
+        // The run is only open while CONC/CONT directly follow the NAME at
+        // level 2: any other line (a SOUR between, or a CONC deeper down
+        // that belongs to a substructure like SOUR.PAGE) closes it first so
+        // foreign values are never absorbed into the NAME.
+        if name_buf.is_some() {
+            if lvl == 2 && (l.tag == "CONC" || l.tag == "CONT") {
+                if let Some((_, _, val)) = &mut name_buf {
+                    if l.tag == "CONC" {
+                        val.push_str(&l.value);
+                    } else {
+                        val.push(' ');
+                        val.push_str(&l.value);
+                    }
+                }
+            } else {
+                flush_name(&mut diags, &mut name_buf, &mut indi_name);
+            }
+        }
         // E008: VERS is {0:1} per HEAD substructure, scoped by its parent
         // block. HEAD.GEDC.VERS and HEAD.SOUR.VERS both appear in every
         // MyHeritage 5.5.1 export and are not duplicates of each other.
@@ -1170,6 +1291,14 @@ fn lint_lines(text: &str) -> Report {
             if l.tag == "PHRASE" {
                 if let Some((ptag, pline)) = &parent {
                     phrased.insert((rec.clone(), ptag.clone(), *pline));
+                    // A PHRASE may also hang under the OTHER-valued structure
+                    // itself (maximal70: "2 TYPE OTHER" + "3 PHRASE"): mark
+                    // the grandparent too, not only the sibling slot. The
+                    // stack already holds PHRASE itself at the top.
+                    if stack.len() >= 3 {
+                        let (gtag, gline) = &stack[stack.len() - 3];
+                        phrased.insert((rec.clone(), gtag.clone(), *gline));
+                    }
                 }
             } else {
                 check_enum(
@@ -1311,6 +1440,9 @@ fn lint_lines(text: &str) -> Report {
         }
     }
 
+    // A NAME run ending at EOF (NAME directly before TRLR) still needs W402.
+    flush_name(&mut diags, &mut name_buf, &mut indi_name);
+
     // E002: HEAD/TRLR obligatoris.
     if !saw_head {
         push_capped(
@@ -1387,33 +1519,49 @@ fn lint_lines(text: &str) -> Report {
         }
     }
 
-    // W307: same event twice with conflicting DATEs (classic merge leftover).
+    // W307: semantically single events twice with conflicting DATEs (classic
+    // merge leftover). MARR and DIV pairs separated by the counterpart event
+    // are a serial marriage/divorce (spec-legal in one FAM), not conflicts.
     {
         let mut by_event: HashMap<(String, String), Vec<EvHit>> = HashMap::new();
         for ((rec, ev, inst), (val, line)) in &event_dates {
-            by_event.entry((rec.clone(), ev.clone())).or_default().push((*inst, val.clone(), *line));
+            if CONFLICT_EVENTS.contains(&ev.as_str()) {
+                by_event.entry((rec.clone(), ev.clone())).or_default().push((*inst, val.clone(), *line));
+            }
         }
+        let empty: Vec<usize> = Vec::new();
         for ((rec, ev), mut v) in by_event {
             v.sort();
-            let mut seen: Vec<&String> = Vec::new();
-            for (_, val, line) in &v {
-                if !seen.contains(&val) {
-                    seen.push(val);
-                    if seen.len() > 1 {
-                        let vals: Vec<&str> = seen.iter().map(|s| s.as_str()).collect();
-                        push_capped(
-                            &mut diags,
-                            vec![Diag::new(
-                                "W307",
-                                Category::Suspicious,
-                                Severity::Warning,
-                                *line,
-                                format!("{}: duplicate {} with conflicting dates ({})", rec, ev, vals.join(" vs ")),
-                            )],
-                        );
-                        break;
+            let excusers = match ev.as_str() {
+                "MARR" => div_lines.get(&rec).unwrap_or(&empty),
+                "DIV" => marr_lines.get(&rec).unwrap_or(&empty),
+                _ => &empty,
+            };
+            let mut prev: Option<EvHit> = None;
+            for hit in v {
+                if let Some((_, pval, pline)) = &prev {
+                    if pval != &hit.1 {
+                        let excused = excusers.iter().any(|d| *d > *pline && *d < hit.2);
+                        if !excused {
+                            push_capped(
+                                &mut diags,
+                                vec![Diag::new(
+                                    "W307",
+                                    Category::Suspicious,
+                                    Severity::Warning,
+                                    hit.2,
+                                    format!(
+                                        "{}: duplicate {} with conflicting dates ({} vs {})",
+                                        rec, ev, pval, hit.1
+                                    ),
+                                )],
+                            );
+                            prev = None;
+                            continue;
+                        }
                     }
                 }
+                prev = Some(hit);
             }
         }
     }
@@ -1425,9 +1573,9 @@ fn lint_lines(text: &str) -> Report {
         }
         if !records.contains_key(target) {
             let kind = match tag.as_str() {
-                "FAMS" | "FAMC" => "a FAM",
-                "HUSB" | "WIFE" | "CHIL" => "an INDI",
-                _ => "a record",
+                "FAMS" | "FAMC" => "FAM",
+                "HUSB" | "WIFE" | "CHIL" => "INDI",
+                _ => "record",
             };
             push_capped(
                 &mut diags,
@@ -1436,7 +1584,7 @@ fn lint_lines(text: &str) -> Report {
                     Category::Correctness,
                     Severity::Error,
                     *line,
-                    format!("{}: {} {} points to nonexistent {}", from, tag, target, kind),
+                    format!("{}: {} {} points to a nonexistent {}", from, tag, target, kind),
                 )],
             );
         }
@@ -1675,22 +1823,8 @@ fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, version: Ve
             );
         }
     }
-    // FROM/TO pairing (DATE_PERIOD needs both halves).
-    let words: Vec<&str> = v.split_whitespace().collect();
-    let has_from = words.contains(&"FROM");
-    let has_to = words.contains(&"TO");
-    if has_from != has_to {
-        push_capped(
-            diags,
-            vec![Diag::new(
-                "W402",
-                Category::Style,
-                Severity::Warning,
-                line,
-                format!("DATE period needs FROM x TO y: {}", truncate(v, 50)),
-            )],
-        );
-    }
+    // FROM/TO pairing is NOT checked: DATE_PERIOD allows each half alone in
+    // both 5.5.1 (p.43) and 7.0 (TGC551LF uses standalone FROM and TO).
     // Balanced parentheses (DATE_PHRASE).
     if v.matches('(').count() != v.matches(')').count() {
         push_capped(
@@ -1735,7 +1869,22 @@ fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, version: Ve
 /// 2. Trim trailing whitespace.
 pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
     let mut applied = Vec::new();
-    let mut lines: Vec<Vec<u8>> = data.split(|&b| b == b'\n').map(|l| l.to_vec()).collect();
+    // Note CR normalization only when it actually changes bytes: lone CRs
+    // exist (a pure-CRLF file reassembles byte-identical, main.rs then
+    // prints nothing thanks to its fixed != data check).
+    let cr_fixable = {
+        let mut found = false;
+        let mut it = data.iter().peekable();
+        while let Some(&b) = it.next() {
+            if b == b'\r' && it.peek() != Some(&&b'\n') {
+                found = true;
+                break;
+            }
+        }
+        found
+    };
+    let norm = normalize_newlines(data);
+    let mut lines: Vec<Vec<u8>> = norm.split(|&b| b == b'\n').map(|l| l.to_vec()).collect();
 
     // 0. Orphans without a leading level.
     let mut fixed_orphans = 0;
@@ -1821,6 +1970,9 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
     }
     if fixed_ws > 0 {
         applied.push(format!("style: trimmed trailing whitespace on {} lines", fixed_ws));
+    }
+    if cr_fixable {
+        applied.push("style: normalized classic Mac CR line endings to LF".into());
     }
 
     let mut out = Vec::with_capacity(data.len());

@@ -470,8 +470,150 @@ fn w306_pedi_per_version() {
     assert!(has(&g2, "W306"));
     let g3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI adopted\n0 @F1@ FAM\n1 CHIL @I1@\n");
     assert!(!has(&g3, "W306"));
+    // Issue 9 (finding 4): 5.5.1 enum checks are case-insensitive; commercial
+    // exporters capitalize ("ADOPTED"). 7.0 stays strict (registry case).
     let g4 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI ADOPTED\n0 @F1@ FAM\n1 CHIL @I1@\n");
-    assert!(has(&g4, "W306"));
+    assert!(!has(&g4, "W306"), "{:?}", codes(&g4));
+}
+
+#[test]
+fn w306_551_enum_case_insensitive() {
+    // Issue 9 (The Kennedy Family.ged): `2 TYPE Birth` must not warn in 5.5.1.
+    let t = wrap551("0 @I1@ INDI\n1 NAME A /B/\n2 TYPE Birth\n");
+    assert!(!has(&t, "W306"), "{:?}", codes(&t));
+    let t2 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n2 TYPE MARRIED\n");
+    assert!(!has(&t2, "W306"));
+    // 7.0 registry spellings are uppercase: "Birth" is still flagged there.
+    let t3 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n2 TYPE Birth\n0 TRLR\n", HEAD70);
+    assert!(has(&t3, "W306"));
+    // MEDI under 5.5.1 accepts capitalized spellings.
+    let m = wrap551("0 @O1@ OBJE\n1 FILE\n2 FORM jpeg\n3 MEDI Photo\n");
+    assert!(!has(&m, "W306"));
+    // 5.5.1 has no ASSO.ROLE; source-citation ROLE has its own small set.
+    let r5 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE HUSB\n0 @I2@ INDI\n1 NAME C /D/\n");
+    assert!(!has(&r5, "W306"));
+    let r5b = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE CLERGY\n0 @I2@ INDI\n1 NAME C /D/\n");
+    assert!(has(&r5b, "W306"));
+}
+
+#[test]
+fn w306_resn_list_70() {
+    // Issue 9 (maximal70.ged): 7.0 RESN is type-List#Enum (comma-separated).
+    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, LOCKED\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok, "W306"), "{:?}", codes(&ok));
+    let ok2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, LOCKED, PRIVACY\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok2, "W306"));
+    let bad = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, BOGUS\n0 TRLR\n", HEAD70);
+    assert!(has(&bad, "W306"));
+    // Trailing/empty tokens are tolerated (exporter quirk).
+    let tail = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL,\n0 TRLR\n", HEAD70);
+    assert!(!has(&tail, "W306"));
+    // 5.5.1 RESN is a single enum (no lists); case-insensitive.
+    let ok3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 RESN Locked\n");
+    assert!(!has(&ok3, "W306"));
+    let bad3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 RESN confidential, locked\n");
+    assert!(has(&bad3, "W306"));
+}
+
+#[test]
+fn w306_data_even_list_70() {
+    // Issue 9 (maximal70.ged line 676): DATA.EVEN is a List#Enum of
+    // event/attribute tags: "BIRT, DEAT" and "MARR" are valid.
+    let ok = format!("{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN BIRT, DEAT\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok, "W306"), "{:?}", codes(&ok));
+    let ok2 = format!("{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN MARR\n0 TRLR\n", HEAD70);
+    assert!(!has(&ok2, "W306"));
+    let bad = format!("{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN BIRT, BOGUS\n0 TRLR\n", HEAD70);
+    assert!(has(&bad, "W306"));
+}
+
+#[test]
+fn e201_message_grammar() {
+    // Issue 9 (Queen.ged): "points to nonexistent a FAM" double article.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F9@\n");
+    let r = lint_str(&g);
+    let d = r.diags.iter().find(|d| d.code == "E201").unwrap();
+    assert!(d.msg.contains("points to a nonexistent FAM"), "{}", d.msg);
+    assert!(!d.msg.contains("nonexistent a"), "{}", d.msg);
+}
+
+#[test]
+fn w307_remarriage_after_div_is_not_a_conflict() {
+    // Issue 9 (remarriage1.ged): MARR 1911, DIV 1912, MARR 1914 in one FAM.
+    let g = wrap551(
+        "0 @F1@ FAM\n1 HUSB @I1@\n1 MARR\n2 DATE 1911\n1 DIV\n2 DATE 1912\n1 MARR\n2 DATE 1914\n0 @I1@ INDI\n1 NAME A /B/\n",
+    );
+    assert!(!has(&g, "W307"), "{:?}", codes(&g));
+    // The DIV need not carry a date: the event alone separates the marriages.
+    let g3 = wrap551("0 @F1@ FAM\n1 MARR\n2 DATE 1911\n1 DIV\n1 MARR\n2 DATE 1914\n");
+    assert!(!has(&g3, "W307"));
+    // Without an intervening DIV it is still a conflict.
+    let g2 = wrap551("0 @F1@ FAM\n1 MARR\n2 DATE 1911\n1 MARR\n2 DATE 1914\n");
+    assert!(has(&g2, "W307"));
+}
+
+#[test]
+fn w307_serial_marriage_divorce_ok() {
+    // MARR/DIV/MARR/DIV in one FAM is spec-legal (7.0 allows multiple
+    // MARR/DIV): the DIVs must not conflict with each other either.
+    let g = wrap551(
+        "0 @F1@ FAM\n1 MARR\n2 DATE 1910\n1 DIV\n2 DATE 1912\n1 MARR\n2 DATE 1914\n1 DIV\n2 DATE 1920\n",
+    );
+    assert!(!has(&g, "W307"), "{:?}", codes(&g));
+    // Two DIVs in the same marriage epoch (no MARR between) still conflict.
+    let g2 = wrap551("0 @F1@ FAM\n1 MARR\n2 DATE 1910\n1 DIV\n2 DATE 1912\n1 DIV\n2 DATE 1915\n");
+    assert!(has(&g2, "W307"));
+}
+
+#[test]
+fn w307_repeatable_events_exempt() {
+    // Issue 9 (TGC551LF): two OCCU/RESI/CENS with different dates is normal.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 OCCU Baker\n2 DATE 31 DEC 1997\n1 OCCU Miller\n2 DATE 31 DEC 1998\n");
+    assert!(!has(&g, "W307"), "{:?}", codes(&g));
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 RESI\n2 DATE 1900\n1 RESI\n2 DATE 1910\n1 CENS\n2 DATE 1901\n1 CENS\n2 DATE 1911\n",
+    );
+    assert!(!has(&g2, "W307"));
+    // Semantically single events remain checked.
+    let g3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1867\n1 BIRT\n2 DATE 1870\n");
+    assert!(has(&g3, "W307"));
+}
+
+#[test]
+fn cr_line_endings_parse() {
+    // Issue 9 (TGC551.ged): bare CR is a legal line terminator (5.5.1 s.1).
+    let g = "0 HEAD\r1 GEDC\r2 VERS 5.5.1\r1 CHAR ANSEL\r0 @I1@ INDI\r1 NAME A /B/\r0 TRLR\r";
+    let r = lint_bytes(g.as_bytes());
+    assert_eq!(r.version, Version::V551);
+    assert_eq!(r.lines, 7);
+    for code in ["E002", "E101", "E009", "W102", "E001"] {
+        assert!(!r.diags.iter().any(|d| d.code == code), "{}: {:?}", code, r.diags);
+    }
+    // CRLF still counts as one terminator.
+    let crlf = "0 HEAD\r\n1 GEDC\r\n2 VERS 7.0\r\n0 TRLR\r\n";
+    let r2 = lint_bytes(crlf.as_bytes());
+    assert_eq!(r2.lines, 4);
+    assert_eq!(r2.version, Version::V70);
+}
+
+#[test]
+fn w306_other_phrase_child_ok() {
+    // Issue 9 (maximal70.ged): PHRASE may hang under the OTHER-valued
+    // structure itself (3 ROLE OTHER / 4 PHRASE), not only beside it.
+    let g = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n3 PHRASE Teacher\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n",
+        HEAD70
+    );
+    assert!(!lint_str(&g).diags.iter().any(|d| d.code == "W306"), "{:?}", codes(&g));
+    // Sibling PHRASE keeps working.
+    let ok = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n2 PHRASE Teacher\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n",
+        HEAD70
+    );
+    assert!(!lint_str(&ok).diags.iter().any(|d| d.code == "W306"));
+    // And OTHER without any PHRASE still reports.
+    let g2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n", HEAD70);
+    assert!(lint_str(&g2).diags.iter().any(|d| d.code == "W306"));
 }
 
 #[test]
@@ -483,11 +625,7 @@ fn w306_medi_ignored_in_70() {
 
 #[test]
 fn w402_date_period_phrase_calendar() {
-    // FROM without TO, unbalanced parens, bad calendar escape: all W402.
-    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE FROM 1900\n");
-    assert!(has(&g, "W402"));
-    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE FROM 1900 TO 1910\n");
-    assert!(!has(&ok, "W402"));
+    // Unbalanced parens, bad calendar escape: all W402.
     let g2 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE (seen on stone\n");
     assert!(has(&g2, "W402"));
     let g3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE @#MARS@ 1900\n");
@@ -497,6 +635,49 @@ fn w402_date_period_phrase_calendar() {
     assert!(has(&ok3, "W402"));
     let ok4 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE @#GREGORIAN@ 1900\n");
     assert!(!has(&ok4, "W402"));
+}
+
+#[test]
+fn w402_one_sided_date_period_is_valid() {
+    // Issue 9 (TGC551LF BASM/ADOP): DATE_PERIOD allows each half alone
+    // (5.5.1 p.43 and 7.0 DATE_PERIOD both accept one-sided FROM/TO).
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BASM\n2 DATE FROM 31 DEC 1997\n");
+    assert!(!has(&g, "W402"), "{:?}", codes(&g));
+    let g2 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ADOP Y\n2 DATE TO 31 DEC 1997\n");
+    assert!(!has(&g2, "W402"), "{:?}", codes(&g2));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE FROM 1900 TO 1910\n");
+    assert!(!has(&ok, "W402"));
+}
+
+#[test]
+fn w402_name_slashes_across_conc() {
+    // Issue 9 (Long26CC.ged): a surname split across CONC makes each line
+    // unbalanced but the whole NAME balanced. Only the whole value counts.
+    let g = wrap551("0 @I1@ INDI\n1 NAME /VeryLongSurnameThatKeeps\n2 CONC Going/\n");
+    assert!(!has(&g, "W402"), "{:?}", codes(&g));
+    let g2 = wrap551("0 @I1@ INDI\n1 NAME Very /Long/\n2 CONC Name\n");
+    assert!(!has(&g2, "W402"));
+    // CONT also continues the value.
+    let g3 = wrap551("0 @I1@ INDI\n1 NAME /Surname\n2 CONT more/\n");
+    assert!(!has(&g3, "W402"));
+    // Genuinely odd totals across CONC still fire.
+    let g4 = wrap551("0 @I1@ INDI\n1 NAME Joan /Oso\n2 CONC broken\n");
+    assert!(has(&g4, "W402"));
+    // Without continuation, unbalanced still fires (existing behavior).
+    assert!(has(&wrap551("0 @I1@ INDI\n1 NAME Joan /Oso\n"), "W402"));
+}
+
+#[test]
+fn w402_conc_under_substructure_not_absorbed() {
+    // A CONC under NAME's SOUR citation continues the source line, not the
+    // NAME: the run must close at the intervening substructure.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Joan /Garcia/\n2 SOUR @S1@\n3 PAGE married /the/ year\n4 CONC 1850 /with/ notes\n0 @S1@ SOUR\n1 TITL T\n",
+    );
+    assert!(!has(&g, "W402"), "{:?}", codes(&g));
+    // A non-continuation line at level 2 also closes the run.
+    let g2 = wrap551("0 @I1@ INDI\n1 NAME Joan /Oso\n2 SEX M\n2 CONC broken\n");
+    assert!(has(&g2, "W402"));
 }
 
 #[test]
