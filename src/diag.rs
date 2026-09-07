@@ -51,18 +51,46 @@ impl Category {
     }
 }
 
+/// Ruleset every rule shipped so far belongs to: normative, on by default.
+/// Opt-in rulesets (RFC 014 section 0.5) carry their own name instead.
+pub(crate) const CORE: &str = "core";
+
 #[derive(Debug, Clone)]
 pub struct Diag {
     pub code: &'static str,
     pub category: Category,
+    /// Domain the rule belongs to ("core", and later opt-in rulesets).
+    /// Orthogonal to `category`, which is the rule's intent.
+    pub ruleset: &'static str,
     pub severity: Severity,
     pub line: usize,
+    /// 0-based **byte** offset of the span, never a char or UTF-16 offset:
+    /// slice the line's bytes at `col..col + len` and decode the three pieces.
+    /// Counted from the start of the line **as it exists in the file**, with
+    /// nothing stripped, so a UTF-8 BOM is the first 3 bytes of line 1 (RFC
+    /// 014 section 1). Only meaningful when `len > 0`.
+    pub col: u32,
+    /// Span length in **bytes**. `0` means "no span": highlight the whole line.
+    pub len: u32,
     pub msg: String,
 }
 
 impl Diag {
+    /// Spanless diagnostic: `ruleset` defaults to `core`, `col`/`len` to 0.
+    /// The signature is deliberately frozen so rules adopt spans one at a time.
     pub(crate) fn new(code: &'static str, category: Category, severity: Severity, line: usize, msg: String) -> Diag {
-        Diag { code, category, severity, line, msg }
+        Diag { code, category, ruleset: CORE, severity, line, col: 0, len: 0, msg }
+    }
+
+    /// Same as `new` plus the byte span of the offending substring.
+    pub(crate) fn with_span(code: &'static str, category: Category, severity: Severity, line: usize, col: u32, len: u32, msg: String) -> Diag {
+        Diag { code, category, ruleset: CORE, severity, line, col, len, msg }
+    }
+
+    /// Move a diagnostic out of `core` into an opt-in ruleset.
+    pub fn in_ruleset(mut self, ruleset: &'static str) -> Diag {
+        self.ruleset = ruleset;
+        self
     }
 }
 
@@ -125,10 +153,18 @@ impl Report {
             out.push_str(d.code);
             out.push_str("\",\"category\":\"");
             out.push_str(d.category.as_str());
+            // Additive keys (ruleset/col/len): no existing key changes name,
+            // type or meaning, so scripts/gh-report.js keeps working unmodified.
+            out.push_str("\",\"ruleset\":\"");
+            out.push_str(d.ruleset);
             out.push_str("\",\"severity\":\"");
             out.push_str(d.severity.tag().trim());
             out.push_str("\",\"line\":");
             out.push_str(&d.line.to_string());
+            out.push_str(",\"col\":");
+            out.push_str(&d.col.to_string());
+            out.push_str(",\"len\":");
+            out.push_str(&d.len.to_string());
             out.push_str(",\"message\":\"");
             out.push_str(&escape_json(&d.msg));
             out.push_str("\"}");

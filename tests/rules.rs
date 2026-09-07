@@ -1,7 +1,7 @@
 //! One rule per test with minimal fixtures (acceptance criterion 5).
 //! Each test builds the smallest GEDCOM that triggers a single rule.
 
-use gedlint::{Severity, Version, fix_bytes, lint_bytes, lint_str};
+use gedlint::{Diag, Severity, Version, compute_edits, fix_bytes, lint_bytes, lint_str};
 
 fn codes(input: &str) -> Vec<String> {
     lint_str(input).diags.iter().map(|d| d.code.to_string()).collect()
@@ -908,4 +908,213 @@ fn severity_filter() {
     let r = lint_str(&g);
     assert!(r.filtered(Severity::Error).is_empty());
     assert!(!r.filtered(Severity::Warning).is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Byte spans and the ruleset axis (issue 18, RFC 014 section 1).
+// ---------------------------------------------------------------------------
+
+/// Exactly what a viewer highlights: the raw line's bytes sliced at
+/// `col..col + len`, then decoded. Panics if the span is not on char
+/// boundaries, which is the point of the assertion.
+fn span_of<'a>(src: &'a str, d: &Diag) -> &'a str {
+    let raw = src.lines().nth(d.line - 1).expect("diagnostic line exists");
+    let (col, len) = (d.col as usize, d.len as usize);
+    // Byte slice then decode, exactly what the JS side does with TextDecoder.
+    let bytes: &[u8] = raw.as_bytes();
+    std::str::from_utf8(&bytes[col..col + len]).expect("span is valid UTF-8")
+}
+
+fn only(src: &str, code: &str) -> Diag {
+    let r = lint_str(src);
+    let mut hits = r.diags.into_iter().filter(|d| d.code == code);
+    let d = hits.next().unwrap_or_else(|| panic!("no {} in {:?}", code, lint_str(src).diags));
+    assert!(hits.next().is_none(), "expected a single {}", code);
+    d
+}
+
+#[test]
+fn spanless_diags_default_to_core_and_no_span() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F9@\n");
+    let d = only(&g, "E201");
+    assert_eq!(d.ruleset, "core");
+    assert_eq!((d.col, d.len), (0, 0), "len 0 means: highlight the whole line");
+}
+
+#[test]
+fn e004_span_covers_the_xref_token() {
+    let g = wrap551("0 @I1 INDI\n1 NAME A /B/\n");
+    let d = only(&g, "E004");
+    // "0 @I1 INDI": the token starts at byte 2 and is 3 bytes long.
+    assert_eq!((d.col, d.len), (2, 3));
+    assert_eq!(span_of(&g, &d), "@I1");
+}
+
+#[test]
+fn w401_span_is_byte_based_not_char_based() {
+    // Multi-byte UTF-8 before the span: "Lòria" is 6 bytes but 5 chars, so a
+    // char offset would point one byte short of the URL.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC Lòria https://example.com/x\n");
+    let d = only(&g, "W401");
+    let raw = g.lines().nth(d.line - 1).unwrap();
+    assert_eq!((d.col, d.len), (14, 21));
+    assert_eq!(raw.chars().take_while(|c| *c != 'h').count(), 13, "the char offset differs");
+    assert_eq!(span_of(&g, &d), "https://example.com/x");
+}
+
+#[test]
+fn w401_record_level_span_covers_the_url() {
+    // The level-1 entry point (PLAC directly under the record), whose message
+    // differs from the nested one.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 PLAC Lòria http://example.com\n");
+    let d = only(&g, "W401");
+    assert!(d.msg.contains("move it to NOTE"), "{}", d.msg);
+    assert_eq!(span_of(&g, &d), "http://example.com");
+}
+
+#[test]
+fn w401_span_runs_to_the_end_of_the_line() {
+    // No whitespace after the URL: the span ends at the end of the line.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC https://example.com/x\n");
+    let d = only(&g, "W401");
+    assert_eq!((d.col, d.len), (7, 21));
+    assert_eq!(span_of(&g, &d), "https://example.com/x");
+}
+
+#[test]
+fn e101_span_covers_the_orphan_continuation_bytes() {
+    // Same MyHeritage bug as e101_conc_split_fix: "é" (C3 A9) cut in half, so
+    // the A9 tail opens the CONC line. "2 CONC " is 7 bytes.
+    let mut data = Vec::new();
+    data.extend_from_slice("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME Jos".as_bytes());
+    data.push(0xC3);
+    data.extend_from_slice("\n2 CONC ".as_bytes());
+    data.push(0xA9);
+    data.extend_from_slice(" /Oso/\n0 TRLR\n".as_bytes());
+    let r = lint_bytes(&data);
+    let d = r.diags.iter().find(|d| d.code == "E101").expect("E101");
+    assert_eq!(d.line, 6);
+    assert_eq!((d.col, d.len), (7, 1));
+    let raw: &[u8] = data.split(|&b| b == b'\n').nth(d.line - 1).unwrap();
+    assert_eq!(&raw[d.col as usize..(d.col + d.len) as usize], &[0xA9]);
+}
+
+#[test]
+fn e101_whole_file_diag_has_no_span() {
+    // Invalid UTF-8 that is not a CONC split: reported against the file
+    // (line 0), where a per-line span would be meaningless.
+    let mut data = Vec::new();
+    data.extend_from_slice("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME A".as_bytes());
+    data.push(0xFF);
+    data.extend_from_slice("\n0 TRLR\n".as_bytes());
+    let r = lint_bytes(&data);
+    let d = r.diags.iter().find(|d| d.code == "E101").expect("E101");
+    assert_eq!(d.line, 0);
+    assert_eq!((d.col, d.len), (0, 0));
+}
+
+#[test]
+fn json_carries_the_additive_span_keys() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC Lòria https://example.com/x\n");
+    let j = lint_str(&g).to_json();
+    assert!(j.contains("\"ruleset\":\"core\""), "{}", j);
+    assert!(j.contains("\"col\":14,\"len\":21"), "{}", j);
+    // The keys gh-report.js reads keep their name, type and meaning.
+    assert!(j.contains("\"code\":\"W401\""), "{}", j);
+    assert!(j.contains("\"category\":\"style\""), "{}", j);
+    assert!(j.contains("\"severity\":\"WARN\""), "{}", j);
+}
+
+/// The bytes a consumer really has: the on-disk line, sliced at the span.
+/// Nothing is stripped first, so a BOM counts as 3 bytes of line 1.
+fn on_disk_span<'a>(data: &'a [u8], d: &Diag) -> &'a [u8] {
+    let line = data.split(|&b| b == b'\n').nth(d.line - 1).expect("diagnostic line exists");
+    &line[d.col as usize..(d.col + d.len) as usize]
+}
+
+#[test]
+fn e004_span_is_relative_to_the_on_disk_line_with_a_bom() {
+    // GEDCOM 7 recommends a BOM. The parser strips it, the file still has it,
+    // and col must address the file: the xref starts at byte 5, not byte 2.
+    let mut data = vec![0xEF, 0xBB, 0xBF];
+    data.extend_from_slice(b"0 @I1 INDI\n1 NAME A /B/\n0 TRLR\n");
+    let r = lint_bytes(&data);
+    let d = r.diags.iter().find(|d| d.code == "E004").expect("E004");
+    assert_eq!((d.line, d.col, d.len), (1, 5, 3));
+    assert_eq!(std::str::from_utf8(on_disk_span(&data, d)).unwrap(), "@I1");
+}
+
+#[test]
+fn w401_span_is_relative_to_the_on_disk_line_with_a_bom() {
+    let mut data = vec![0xEF, 0xBB, 0xBF];
+    data.extend_from_slice(b"2 PLAC http://example.com\n");
+    let r = lint_bytes(&data);
+    let d = r.diags.iter().find(|d| d.code == "W401").expect("W401");
+    assert_eq!((d.line, d.col), (1, 10));
+    assert_eq!(std::str::from_utf8(on_disk_span(&data, d)).unwrap(), "http://example.com");
+}
+
+#[test]
+fn spans_share_one_byte_base_across_rule_families() {
+    // E004 comes from the line pass (BOM stripped internally), E101 from the
+    // byte pass (BOM never stripped). Both must address the same bytes.
+    let mut data = vec![0xEF, 0xBB, 0xBF];
+    data.extend_from_slice("0 @I1 INDI\n1 NAME Jos".as_bytes());
+    data.push(0xC3);
+    data.extend_from_slice("\n2 CONC ".as_bytes());
+    data.push(0xA9);
+    data.extend_from_slice(" /Oso/\n0 TRLR\n".as_bytes());
+    let r = lint_bytes(&data);
+    let e004 = r.diags.iter().find(|d| d.code == "E004").expect("E004");
+    let e101 = r.diags.iter().find(|d| d.code == "E101").expect("E101");
+    assert_eq!(std::str::from_utf8(on_disk_span(&data, e004)).unwrap(), "@I1");
+    assert_eq!((e101.line, e101.col, e101.len), (3, 7, 1), "line 3 has no BOM, so no base");
+    assert_eq!(on_disk_span(&data, e101), &[0xA9]);
+}
+
+#[test]
+fn w401_span_skips_a_decoy_http_substring() {
+    // "chttpx" contains "http" but does not start a token: the span belongs to
+    // the real URL 12 bytes further along.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC Lòria chttpx http://example.com/x\n");
+    let d = only(&g, "W401");
+    assert_eq!(span_of(&g, &d), "http://example.com/x");
+}
+
+#[test]
+fn w401_without_a_url_token_has_no_span() {
+    // The rule fires on a bare "http" substring, so a value can trip it with
+    // no URL in it at all. Then there is nothing to point at: len 0.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC Reus chttpx\n");
+    let d = only(&g, "W401");
+    assert_eq!((d.col, d.len), (0, 0));
+}
+
+#[test]
+fn diag_line_and_edit_lines_use_the_same_numbering() {
+    // Cross-check with the structured fixes of #19: a span addresses bytes
+    // inside a line, an Edit addresses a range of lines, and both count lines
+    // the same way (1-based, after line-ending normalization). If these two
+    // ever disagreed, a viewer could not put a finding and its repair on the
+    // same row. Same E101 CONC split as the span test above.
+    let mut data = Vec::new();
+    data.extend_from_slice("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME Jos".as_bytes());
+    data.push(0xC3);
+    data.extend_from_slice("\n2 CONC ".as_bytes());
+    data.push(0xA9);
+    data.extend_from_slice(" /Oso/\n0 TRLR\n".as_bytes());
+    let d = lint_bytes(&data).diags.into_iter().find(|d| d.code == "E101").expect("E101");
+    let e = compute_edits(&data).into_iter().find(|e| e.code == "E101").expect("E101 edit");
+    // The diagnostic points at the CONC line; the repair replaces the pair.
+    assert_eq!(d.line, 6);
+    assert_eq!(e.lines, (5, 6));
+    assert!(e.lines.0 <= d.line && d.line <= e.lines.1, "diag line inside the edit range: {:?}", e.lines);
+}
+
+#[test]
+fn in_ruleset_moves_a_diag_out_of_core() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F9@\n");
+    let d = only(&g, "E201").in_ruleset("hygiene");
+    assert_eq!(d.ruleset, "hygiene");
+    assert_eq!(d.code, "E201", "only the ruleset changes");
 }

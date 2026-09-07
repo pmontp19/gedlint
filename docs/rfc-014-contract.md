@@ -112,6 +112,23 @@ the natural and zero-cost unit in Rust, and they are unambiguous. The JS side sl
 line's bytes at `col` and `col + len` and runs each of the three pieces through
 `TextDecoder`, which is both correct and fast. Do not convert to char offsets in Rust.
 
+**The normative base is the on-disk line**, that is: split the file on line terminators
+(`CR`, `LF` or `CRLF`), drop the terminator, and count bytes from the start of what is
+left. Nothing is stripped first. In particular the UTF-8 BOM that GEDCOM 7 recommends is
+the first three bytes of line 1, even though the engine skips it before parsing, so a
+span on line 1 of a BOM'd file starts at 3 or more. This is a single base for every rule:
+a consumer slices the line it read from the file without having to know which rule
+produced the diagnostic, and the byte-level rules (`E101`) and the line-level rules
+(`E004`, `W401`) cannot disagree about where a line begins.
+
+This is the same decision section 3 makes for `Edit.replacement`, and it is the same
+reason: a span has to address lines that are not valid UTF-8, since `E101` fires exactly
+when an exporter cut a character in two, and a char offset has nothing to count there.
+The two sections agree by construction and must stay that way. Spans address bytes,
+repairs carry bytes, and both number lines identically, 1-based after line-ending
+normalization, so a `Diag.line` and the `Edit.lines` range that repairs it land on the
+same rows. A reader arriving at either section should find the other agreeing.
+
 Constructors:
 
 ```rust

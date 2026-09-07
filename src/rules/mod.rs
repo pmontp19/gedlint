@@ -19,7 +19,7 @@ pub(crate) mod upgrade;
 use std::collections::HashSet;
 
 use crate::diag::{push_capped, Category, Diag, Report, Severity};
-use crate::parse::{detect_version, parse_line, truncate, Line};
+use crate::parse::{detect_version, parse_line, truncate, Line, BOM_LEN};
 
 use enums::EnumState;
 use events::Events;
@@ -30,11 +30,18 @@ use structure::Structure;
 
 pub(crate) fn lint_lines(text: &str) -> Report {
     // The BOM is not part of the grammar: it is reported in encoding_diags
-    // and stripped so "0 HEAD" on the first line is recognized.
+    // and stripped so "0 HEAD" on the first line is recognized. Spans, on the
+    // other hand, are on-disk offsets, so line 1 carries the stripped bytes as
+    // its span base and every span lands where the file really has it.
+    let bom = if text.starts_with('\u{FEFF}') { BOM_LEN } else { 0 };
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut diags: Vec<Diag> = Vec::new();
     let raw_lines: Vec<&str> = text.lines().collect();
-    let lines: Vec<Line> = raw_lines.iter().enumerate().map(|(i, l)| parse_line(i + 1, l)).collect();
+    let lines: Vec<Line> = raw_lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| parse_line(i + 1, l).with_span_base(if i == 0 { bom } else { 0 }))
+        .collect();
 
     // Version state (HEAD.GEDC.VERS).
     let version = detect_version(&lines);
