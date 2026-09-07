@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{BufReader, Write};
 use std::process::ExitCode;
 
-use gedlint::{Diag, FixSelection, Report, Severity, fix_bytes_with, lint_bytes, lint_reader};
+use gedlint::{Diag, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_bytes, lint_reader};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -21,6 +21,7 @@ fn help() -> String {
         --max N               cap on text diagnostics shown (0 = all; JSON always complete)\n  \
         --no-color            no ANSI colors\n  \
         --quiet               summary + exit code only\n  \
+        --explain [CODE]      explain a rule (no CODE: every rule by ruleset)\n  \
         -h, --help            this help\n  \
         -V, --version         version\n\
         \n\
@@ -45,6 +46,67 @@ fn color_for(sev: &Severity, no_color: bool) -> (&'static str, &'static str) {
         Severity::Error => ("\x1b[31m", "\x1b[0m"),
         Severity::Warning => ("\x1b[33m", "\x1b[0m"),
         Severity::Info => ("\x1b[36m", "\x1b[0m"),
+    }
+}
+
+/// `--explain [CODE]`: the rule registry rendered for a human. Without an
+/// argument it lists every rule grouped by ruleset; with one it prints the
+/// full entry for that rule, addressed by code or by `<ruleset>/<name>`.
+fn explain(what: Option<&str>) -> ExitCode {
+    let stdout = std::io::stdout();
+    let mut h = stdout.lock();
+    let Some(what) = what else {
+        for rs in gedlint::rulesets() {
+            let rules: Vec<&RuleMeta> = gedlint::RULES.iter().filter(|r| r.ruleset == rs).collect();
+            let on = if rules.iter().all(|r| r.default_enabled) { "on by default" } else { "off by default" };
+            let _ = writeln!(h, "{} ({} rules, {})", rs, rules.len(), on);
+            for r in rules {
+                let _ = writeln!(h, "  {:<5} {:<30} {}", r.code, r.name, r.title);
+            }
+            let _ = writeln!(h);
+        }
+        let _ = writeln!(h, "gedlint --explain <CODE> prints why one rule exists and how to satisfy it.");
+        return ExitCode::from(0);
+    };
+    let found = match what.split_once('/') {
+        Some((ruleset, name)) => gedlint::rule_by_name(ruleset, name),
+        None => gedlint::rule(&what.to_ascii_uppercase()),
+    };
+    let Some(r) = found else {
+        eprintln!("unknown rule: {} (run --explain with no argument to list every rule)", what);
+        return ExitCode::from(2);
+    };
+    let _ = writeln!(h, "{}  {}  [{}/{}]", r.code, r.title, r.ruleset, r.name);
+    let _ = writeln!(
+        h,
+        "\ncategory {}   severity {}   {}   {}\n",
+        r.category.as_str(),
+        r.default_severity.tag().trim().to_ascii_lowercase(),
+        if r.default_enabled { "on by default" } else { "off by default" },
+        if r.fixable { "fixable by --fix" } else { "no automatic fix" }
+    );
+    let _ = writeln!(h, "WHY");
+    wrapped(&mut h, r.why);
+    let _ = writeln!(h, "\nREMEDY");
+    wrapped(&mut h, r.remedy);
+    ExitCode::from(0)
+}
+
+/// Prose at a readable terminal width, indented two spaces.
+fn wrapped(h: &mut impl Write, text: &str) {
+    let mut line = String::new();
+    for w in text.split_whitespace() {
+        if !line.is_empty() && line.chars().count() + 1 + w.chars().count() > 76 {
+            let _ = writeln!(h, "  {}", line);
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(w);
+    }
+    if !line.is_empty() {
+        let _ = writeln!(h, "  {}", line);
     }
 }
 
@@ -82,6 +144,11 @@ fn main() -> ExitCode {
             "-V" | "--version" => {
                 println!("gedlint {}", VERSION);
                 return ExitCode::from(0);
+            }
+            "--explain" => {
+                // The code is optional: the next token unless it is an option.
+                let what = args.get(i + 1).filter(|a| !a.starts_with('-')).cloned();
+                return explain(what.as_deref());
             }
             "--format" => {
                 i += 1;
