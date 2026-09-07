@@ -10,6 +10,7 @@ jobs:
     # annotations, summary, outputs, fail-on matrix).
     # linux arm64 joins this matrix once a release carries the target.
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -44,8 +45,16 @@ jobs:
           path: smoke/warn.ged
           fail-on: warning
           version: v1
-      - name: Glob over several files
+      - name: Glob over several clean and warning files
         id: glob
+        uses: ./
+        with:
+          path: |
+            smoke/clean.ged
+            smoke/warn.ged
+          version: v1
+      - name: One bad file in a glob fails the whole step
+        id: glob-broken
         continue-on-error: true
         uses: ./
         with:
@@ -53,29 +62,34 @@ jobs:
             smoke/*.ged
             smoke/nested/*.ged
           version: v1
-      - name: Assert outcomes, outputs and summary
+      - name: Assert outcomes and outputs
         shell: bash
         env:
           WARN_OUTCOME: ${{ steps.warn.outcome }}
-          GLOB_OUTCOME: ${{ steps.glob.outcome }}
+          GLOB_BROKEN_OUTCOME: ${{ steps.glob-broken.outcome }}
           WARN_IGNORED_WARNINGS: ${{ steps.warn-ignored.outputs.warnings }}
           WARN_IGNORED_ERRORS: ${{ steps.warn-ignored.outputs.errors }}
           WARN_IGNORED_FILES: ${{ steps.warn-ignored.outputs.files }}
           WARN_IGNORED_EXIT: ${{ steps.warn-ignored.outputs.exit-code }}
+          GLOB_FILES: ${{ steps.glob.outputs.files }}
+          GLOB_ERRORS: ${{ steps.glob.outputs.errors }}
+          GLOB_WARNINGS: ${{ steps.glob.outputs.warnings }}
+          GLOB_EXIT: ${{ steps.glob.outputs.exit-code }}
         run: |
           set -euo pipefail
           assert() { [ "$2" = "$3" ] || { echo "FAIL $1: expected $3, got $2"; exit 1; }; }
           assert "warn outcome" "$WARN_OUTCOME" failure
-          assert "glob outcome" "$GLOB_OUTCOME" failure
+          assert "glob-broken outcome" "$GLOB_BROKEN_OUTCOME" failure
           assert "warn-ignored errors" "$WARN_IGNORED_ERRORS" 0
           assert "warn-ignored warnings" "$WARN_IGNORED_WARNINGS" 1
           assert "warn-ignored files" "$WARN_IGNORED_FILES" 1
           assert "warn-ignored exit-code" "$WARN_IGNORED_EXIT" 1
-          # The summary accumulates one block per action call in this job.
-          grep -q '^## gedlint' "$GITHUB_STEP_SUMMARY"
-          grep -q '| `W305` | warning | suspicious |' "$GITHUB_STEP_SUMMARY"
-          grep -q '| `E201` | error | correctness |' "$GITHUB_STEP_SUMMARY"
-          grep -q 'smoke/nested/broken.ged' "$GITHUB_STEP_SUMMARY"
+          assert "glob files" "$GLOB_FILES" 2
+          assert "glob errors" "$GLOB_ERRORS" 0
+          assert "glob warnings" "$GLOB_WARNINGS" 1
+          assert "glob exit-code" "$GLOB_EXIT" 1
+          # Summary content is asserted in the ci job: GITHUB_STEP_SUMMARY is a
+          # fresh file per step, so a later step cannot read what the action wrote.
   ci:
     runs-on: ubuntu-latest
     permissions:
