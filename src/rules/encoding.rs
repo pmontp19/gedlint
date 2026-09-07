@@ -1,0 +1,104 @@
+//! Byte-level encoding rules, run before the line parser: E101 and W102.
+
+use crate::diag::{Category, Diag, Severity};
+use crate::parse::Version;
+
+/// E101/W102: UTF-8, BOM, continuation byte at line start (MyHeritage bug
+/// splitting multibyte sequences across CONC lines), mixed CRLF, controls.
+/// `charset` is the declared HEAD.CHAR: ANSEL/ASCII files are not UTF-8,
+/// so E101 does not apply to them. A BOM is recommended by GEDCOM 7
+/// (spec 1.1) and only warned about otherwise.
+pub(crate) fn encoding_diags(data: &[u8], version: Version, charset: Option<&str>) -> Vec<Diag> {
+    let mut out = Vec::new();
+    let non_utf8 = matches!(charset, Some("ANSEL") | Some("ASCII") | Some("IBMPC") | Some("MACINTOSH"));
+    if data.starts_with(&[0xEF, 0xBB, 0xBF]) && version != Version::V70 {
+        out.push(Diag::new(
+            "W102",
+            Category::Style,
+            Severity::Warning,
+            1,
+            "UTF-8 BOM at start (GEDCOM 5.5.x tools may choke on it; 7.0 recommends it)".into(),
+        ));
+    }
+    let has_crlf = data.windows(2).any(|w| w == b"\r\n");
+    let has_lone_lf = {
+        let mut prev_cr = false;
+        let mut found = false;
+        for &b in data {
+            if b == b'\n' && !prev_cr {
+                found = true;
+                break;
+            }
+            prev_cr = b == b'\r';
+        }
+        found
+    };
+    // `data` arrives CR-normalized, so lone CRs no longer exist here: any
+    // lone LF next to a CRLF means the file mixes terminator styles
+    // (including a classic-Mac CR section, now normalized to LF).
+    if has_crlf && has_lone_lf {
+        out.push(Diag::new(
+            "W102",
+            Category::Style,
+            Severity::Warning,
+            0,
+            "mixed line endings (CRLF and LF; normalize to a single style)".into(),
+        ));
+    }
+
+    // Lines starting with a UTF-8 continuation byte (0x80..=0xBF):
+    // symptom of the MyHeritage bug (character split across CONC).
+    // Skipped for declared single-byte encodings (ANSEL et al).
+    let mut bad = 0usize;
+    let mut first = 0usize;
+    if !non_utf8 {
+        for (i, line) in data.split(|&b| b == b'\n').enumerate() {
+            let l = if line.last() == Some(&b'\r') { &line[..line.len() - 1] } else { line };
+            // Skip the "N CONC ..." header: the useful content starts after it.
+            let payload = conc_payload(l);
+            if payload.first().map(|b| (0x80..=0xBF).contains(b)).unwrap_or(false) {
+                bad += 1;
+                if first == 0 {
+                    first = i + 1;
+                }
+            }
+        }
+    }
+    if bad > 0 {
+        out.push(Diag::new(
+            "E101",
+            Category::Correctness,
+            Severity::Error,
+            first,
+            format!(
+                "{} lines start with a UTF-8 continuation byte (character split across CONC lines, MyHeritage bug; try --fix)",
+                bad
+            ),
+        ));
+    }
+    if std::str::from_utf8(data).is_err() && bad == 0 && !non_utf8 {
+        out.push(Diag::new(
+            "E101",
+            Category::Correctness,
+            Severity::Error,
+            0,
+            "the file is not valid UTF-8".into(),
+        ));
+    }
+    out
+}
+
+/// Returns the payload after "N CONC " if present, else the whole line.
+fn conc_payload(line: &[u8]) -> &[u8] {
+    // Find " CONC " at byte level.
+    let pat = b"CONC ";
+    if let Some(p) = line.windows(pat.len()).position(|w| w == pat) {
+        &line[p + pat.len()..]
+    } else if let Some(p) = line.windows(4).position(|w| w == b"CONC") {
+        let rest = &line[p + 4..];
+        let rest = if rest.first() == Some(&b' ') { &rest[1..] } else { rest };
+        rest
+    } else {
+        line
+    }
+}
