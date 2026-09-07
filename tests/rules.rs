@@ -135,6 +135,12 @@ fn w401_plac_url_multibyte_no_panic() {
 }
 
 #[test]
+fn w403_note_html() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 NOTE first line<br>second line\n");
+    assert!(has(&g, "W403"));
+}
+
+#[test]
 fn w402_name_slashes() {
     let g = wrap551("0 @I1@ INDI\n1 NAME Joan /Oso\n");
     assert!(has(&g, "W402"));

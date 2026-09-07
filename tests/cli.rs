@@ -166,3 +166,12 @@ fn explain_unknown_rule_exits_2() {
         assert!(String::from_utf8_lossy(&o.stderr).contains("unknown rule"));
     }
 }
+
+#[test]
+fn explain_rejects_an_option_in_place_of_a_code() {
+    // Silently printing the whole listing would hide the typo.
+    let o = Command::new(bin()).arg("--explain").arg("--fix").output().unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("takes a rule code"));
+    assert!(o.stdout.is_empty());
+}

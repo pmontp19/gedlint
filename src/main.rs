@@ -146,9 +146,15 @@ fn main() -> ExitCode {
                 return ExitCode::from(0);
             }
             "--explain" => {
-                // The code is optional: the next token unless it is an option.
-                let what = args.get(i + 1).filter(|a| !a.starts_with('-')).cloned();
-                return explain(what.as_deref());
+                // The code is optional, but another option in its place is a
+                // mistake, not a request for the whole listing.
+                match args.get(i + 1) {
+                    Some(a) if a.starts_with('-') => {
+                        eprintln!("--explain takes a rule code, not {} (try --explain with no argument)", a);
+                        return ExitCode::from(2);
+                    }
+                    what => return explain(what.map(String::as_str)),
+                }
             }
             "--format" => {
                 i += 1;

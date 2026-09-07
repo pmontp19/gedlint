@@ -150,7 +150,7 @@ other valid answer if you are not migrating yet.",
         fixable: false,
         title: "Keep the one-per-record fields to a single instance",
         why: "The specification allows exactly one SEX per person, one HUSB and one WIFE per family, one GEDC \
-in the header, one DATE or PLAC inside a given event block. A second copy is almost always a merge \
+in the header, and one of each detail such as DATE, PLAC or CAUS inside a given event block. A second copy is almost always a merge \
 leftover, and importers silently keep whichever they read first or last: the birth date your program \
 shows afterwards may not be the one you meant to keep.",
         remedy: "Decide which value is right, delete the other, and give genuinely different information its \
@@ -218,10 +218,13 @@ export, re-export the whole tree instead.",
         why: "These lines are valid 5.5.1 and are not errors today: they only have no home in GEDCOM 7. RELA \
 became the enumerated ROLE, HEAD.CHAR disappeared because 7.0 is always UTF-8, PEDI values are uppercase, \
 and a BET range has to be complete and in chronological order. A 7.0 reader given them ignores or reports \
-the line, so the relationship description or the date range stops travelling with your tree.",
+the line, so the relationship description or the date range stops travelling with your tree. One of the \
+checks is not about the migration at all: a BET range whose years run backwards is reported on a 5.5.1 \
+file too, because no reader expects a range to end before it starts.",
         remedy: "When you migrate, swap RELA for an enumerated ROLE with a PHRASE holding the free text, \
 delete \"1 CHAR\", uppercase the PEDI value, and write ranges as \"BET <earlier> AND <later>\". The \
-migration guide is at gedcom.io/migrate. Nothing has to change while you stay on 5.5.1.",
+migration guide is at gedcom.io/migrate. Apart from putting a backwards range the right way round, \
+nothing has to change while you stay on 5.5.1.",
     },
     RuleMeta {
         code: "U502",
@@ -254,8 +257,9 @@ line at all, so the file is rejected as malformed (7.0 recommends the BOM, and i
 CRLF and LF mixed in one file confuse older parsers and make every later diff unreadable. Stray control \
 characters ride along inside names and notes and surface as boxes or as broken text.",
         remedy: "Save 5.5.1 files as UTF-8 without BOM, pick one line ending for the whole file, and remove \
-the control characters from the values carrying them. `gedlint --fix` normalizes classic Mac CR endings \
-and trailing whitespace as part of its whole-file pass.",
+the control characters from the values that carry them. None of that is automatic. Independently of this \
+warning, and whether or not it fired, `gedlint --fix` always rewrites classic Mac CR line endings to LF: \
+that is whole-file preprocessing, not a repair of this rule.",
     },
     RuleMeta {
         code: "W202",
@@ -381,7 +385,8 @@ wording in a PHRASE beside it.",
         default_enabled: true,
         fixable: false,
         title: "Reconcile single events recorded twice with different dates",
-        why: "A person has one birth and one death, so the same event twice with two different dates is the \
+        why: "A person is born, christened, baptized, confirmed and buried once each, and a given marriage \
+or divorce happens on a single date, so one of those events twice with two different dates is the \
 fingerprint of a merge where neither date won. Programs keep one of them, usually the first, so the date \
 you end up looking at may not be the researched one and the other is lost at the next export. A \
 remarriage, MARR then DIV then MARR, is a legitimate sequence and is not flagged.",

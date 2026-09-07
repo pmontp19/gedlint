@@ -1,6 +1,16 @@
 //! The registry must describe exactly the rules the engine has, no more and
 //! no fewer. An orphan entry or an undocumented code fails here rather than
 //! reaching the config validator, the generated docs or the web viewer.
+//!
+//! The set of codes the engine can emit is read out of its sources. That is
+//! sound only because `every_diagnostic_carries_a_literal_code` forbids a
+//! computed code at the call site, and because comments are stripped before
+//! anything is collected, so a code quoted in prose cannot invent one.
+//!
+//! What no static check here can see: a rule whose code literal is present
+//! but whose emission path is dead. `every_core_rule_has_a_fixture` is the
+//! partial guard, partial because it only asserts the code is named in
+//! `tests/rules.rs`, not that the fixture still triggers it.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -8,21 +18,61 @@ use std::path::{Path, PathBuf};
 
 use gedlint::{rule, rule_by_name, rulesets, Category, RULES};
 
-/// Every `"E001"`-shaped literal in the engine sources. Codes are always
-/// written out at the `Diag::new` call site (nothing builds one at runtime),
-/// so this is the set of codes the engine can actually emit.
+/// The constructors that can put a diagnostic into a report. `with_span` is
+/// added by #18 and has no call sites yet; naming it now means the invariant
+/// covers it the day it does.
+const DIAG_CTORS: &[&str] = &["Diag::new(", "Diag::with_span("];
+
+/// Every rule code the engine can emit: the first argument of every
+/// diagnostic constructor call in the engine sources.
 fn engine_codes() -> BTreeSet<String> {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut out = BTreeSet::new();
-    for f in rs_files(&src) {
-        // registry.rs is the table under test; main.rs only renders it.
-        let name = f.file_name().unwrap().to_string_lossy().into_owned();
-        if name == "registry.rs" || name == "main.rs" {
-            continue;
+    for (_, arg) in diag_call_args() {
+        if let Some(c) = code_literal(&arg) {
+            out.insert(c);
         }
-        collect_codes(&fs::read_to_string(&f).unwrap(), &mut out);
     }
     assert!(!out.is_empty(), "no rule codes found under src/: the scanner is broken, not the registry");
+    out
+}
+
+/// `(file, the first argument as written)` for every diagnostic constructor
+/// call in the engine, comments already stripped.
+fn diag_call_args() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for f in engine_files() {
+        let file = f.file_name().unwrap().to_string_lossy().into_owned();
+        let text = strip_comments(&fs::read_to_string(&f).unwrap());
+        for ctor in DIAG_CTORS {
+            let mut from = 0;
+            while let Some(p) = text[from..].find(ctor) {
+                let at = from + p + ctor.len();
+                // Enough to see a code literal; the call is often multi-line.
+                out.push((file.clone(), text[at..].trim_start().chars().take(24).collect()));
+                from = at;
+            }
+        }
+    }
+    out
+}
+
+/// The code in `"E001", ...`, or None when the argument is anything else.
+fn code_literal(arg: &str) -> Option<String> {
+    let b = arg.as_bytes();
+    let ok = b.len() >= 6
+        && b[0] == b'"'
+        && matches!(b[1], b'E' | b'W' | b'U')
+        && b[2..5].iter().all(u8::is_ascii_digit)
+        && b[5] == b'"';
+    ok.then(|| arg[1..5].to_string())
+}
+
+/// The engine sources. `registry.rs` is the table under test and `main.rs`
+/// only renders it; neither can emit a diagnostic.
+fn engine_files() -> Vec<PathBuf> {
+    let mut out = rs_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"));
+    out.retain(|f| !matches!(f.file_name().unwrap().to_string_lossy().as_ref(), "registry.rs" | "main.rs"));
+    out.sort();
     out
 }
 
@@ -39,16 +89,87 @@ fn rs_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn collect_codes(text: &str, out: &mut BTreeSet<String>) {
+/// Rust source with line and block comments removed. String and char
+/// literals are copied verbatim: `'"'` in `src/diag.rs` would otherwise open
+/// a string that swallows real code.
+fn strip_comments(text: &str) -> String {
     let b = text.as_bytes();
-    for i in 0..b.len().saturating_sub(5) {
-        let is_code = b[i] == b'"'
-            && matches!(b[i + 1], b'E' | b'W' | b'U')
-            && b[i + 2..i + 5].iter().all(u8::is_ascii_digit)
-            && b[i + 5] == b'"';
-        if is_code {
-            out.insert(text[i + 1..i + 5].to_string());
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\'' {
+            let n = char_literal_len(b, i);
+            out.extend_from_slice(&b[i..i + n]);
+            i += n;
+        } else if b[i] == b'"' {
+            out.push(b'"');
+            i += 1;
+            while i < b.len() && b[i] != b'"' {
+                let n = if b[i] == b'\\' && i + 1 < b.len() { 2 } else { 1 };
+                out.extend_from_slice(&b[i..i + n]);
+                i += n;
+            }
+            if i < b.len() {
+                out.push(b'"');
+                i += 1;
+            }
+        } else if b[i] == b'/' && b.get(i + 1) == Some(&b'/') {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+        } else if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            let mut depth = 1;
+            i += 2;
+            while i < b.len() && depth > 0 {
+                if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                    depth += 1;
+                    i += 2;
+                } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            out.push(b' ');
+        } else {
+            out.push(b[i]);
+            i += 1;
         }
+    }
+    String::from_utf8(out).expect("only ASCII delimiters are ever sliced on")
+}
+
+/// Length of the char literal at `i`, or 1 for a lifetime such as `'static`.
+fn char_literal_len(b: &[u8], i: usize) -> usize {
+    if b.get(i + 1) == Some(&b'\\') {
+        // '\n', '\\', '\'', '\u{7f}': past the escaped char, then the quote.
+        let mut j = i + 3;
+        while j < b.len() && b[j] != b'\'' {
+            j += 1;
+        }
+        if j < b.len() { j - i + 1 } else { 1 }
+    } else if b.get(i + 2) == Some(&b'\'') {
+        3
+    } else {
+        1
+    }
+}
+
+#[test]
+fn every_diagnostic_carries_a_literal_code() {
+    // The completeness check below reads codes out of the sources, so a code
+    // assembled at runtime would ship a rule that no static check can see.
+    let sites = diag_call_args();
+    assert!(sites.len() >= 40, "only {} diagnostic constructor calls found: the scanner is broken", sites.len());
+    for (file, arg) in &sites {
+        assert!(
+            code_literal(arg).is_some(),
+            "{}: a diagnostic code must be a bare \"E001\"-shaped literal at the call site, \
+             or the registry cannot be checked against it; found: {}",
+            file,
+            arg
+        );
     }
 }
 
@@ -60,6 +181,19 @@ fn registry_and_engine_agree_on_the_set_of_codes() {
     let orphans: Vec<&String> = registry.difference(&engine).collect();
     assert!(undocumented.is_empty(), "codes the engine emits with no RULES entry: {:?}", undocumented);
     assert!(orphans.is_empty(), "RULES entries the engine never emits: {:?}", orphans);
+}
+
+#[test]
+fn every_core_rule_has_a_fixture() {
+    // Deliberately weak: it proves the code is named in the per-rule fixture
+    // file, not that the fixture still triggers it. It is the only thing
+    // standing between a rule whose emission path goes dead and a green run,
+    // because the code literal stays in the sources either way.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("rules.rs");
+    let fixtures = fs::read_to_string(path).unwrap();
+    for r in RULES.iter().filter(|r| r.ruleset == "core") {
+        assert!(fixtures.contains(r.code), "{} has no fixture in tests/rules.rs", r.code);
+    }
 }
 
 #[test]

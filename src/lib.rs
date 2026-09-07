@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn json_escapes() {
-        let r = Report { version: Version::V551, lines: 1, individuals: 0, families: 0, diags: vec![Diag::new("E1", Category::Correctness, Severity::Error, 1, "a\"b\\c".into())] };
+        let r = Report { version: Version::V551, lines: 1, individuals: 0, families: 0, diags: vec![Diag::new("E001", Category::Correctness, Severity::Error, 1, "a\"b\\c".into())] };
         let j = r.to_json();
         assert!(j.contains("a\\\"b\\\\c"));
     }
