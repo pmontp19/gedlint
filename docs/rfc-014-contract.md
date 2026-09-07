@@ -183,20 +183,47 @@ pub struct Edit {
     /// Inclusive 1-based line range this edit replaces.
     pub lines: (usize, usize),
     /// Replacement lines, without terminators. Empty vec = delete the range.
-    pub replacement: Vec<String>,
+    pub replacement: Vec<Vec<u8>>,
     pub applicability: Applicability,
     /// One line for the UI: "rejoin CONC split inside a UTF-8 sequence".
     pub note: String,
 }
 
-/// Compute every candidate repair without applying any.
+/// Which repairs a caller wants. `Default` is the `--fix` contract.
+pub struct FixSelection {
+    pub only: Vec<String>,   // rule codes, ASCII case-insensitive; empty = all
+    pub allow_unsafe: bool,  // also apply MaybeIncorrect
+}
+
+/// Compute every candidate repair without applying any. Returned in repair
+/// priority order (see below), not line order.
 pub fn compute_edits(data: &[u8]) -> Vec<Edit>;
 
 /// Apply a chosen subset. Edits must not overlap; overlapping ranges are
 /// resolved by keeping the first and dropping the rest, and the dropped ones
 /// are returned so the caller can re-run.
 pub fn apply_edits(data: &[u8], edits: &[Edit]) -> (Vec<u8>, Vec<Edit>);
+
+/// Whole-file preprocessing (below), and `fix_bytes` with a selection.
+pub fn normalize_endings(data: &[u8]) -> (Cow<'_, [u8]>, bool);
+pub fn fix_bytes_with(data: &[u8], sel: &FixSelection) -> (Vec<u8>, Vec<String>);
 ```
+
+**`replacement` is bytes, not `String`.** Amended from `Vec<String>` during
+implementation, for the same reason `col`/`len` in section 1 are byte offsets: the E101
+repair rejoins a UTF-8 sequence the exporter cut in two, so the input lines are by
+definition not valid UTF-8, and neither is the joined result when the split is
+pathological (`Jos<C3>` + `2 CONC <A9><A9> x`). `Vec<String>` cannot hold those bytes,
+and a lossy conversion would corrupt exactly the files the repair exists for. Rules that
+work on text build one with `line.into_bytes()`.
+
+`compute_edits` returns edits in **repair priority order** (`E001`, then `E101`, then
+`style`), because `apply_edits` keeps the first of two overlapping edits and a structural
+repair has to win over a cosmetic one on the same line. A dropped edit still reserves its
+lines, so a lower-priority edit cannot slip inside the range of a repair that is merely
+postponed. Trailing whitespace has no rule code (the linter does not report it), so its
+edits carry the pseudo-code `style`, which is what the `--fix` report line has always
+printed.
 
 A line-range model, not an intra-line span model, because the existing repairs are not
 all intra-line: rejoining a split `CONC` replaces two lines with one, and prefixing an
@@ -204,7 +231,9 @@ orphan line with `CONT` rewrites one line in place. Line ranges express both, pl
 deletion.
 
 Line-ending normalization (classic Mac `CR`) stays a whole-file preprocessing step with
-its own flag. It is not a per-rule edit and must not be modelled as one.
+its own flag. It is not a per-rule edit and must not be modelled as one. It is also not
+selectable: `compute_edits` and `apply_edits` both split lines on `\n`, so every repair
+assumes it has run.
 
 `fix_bytes` survives unchanged as a thin wrapper, so `tests/cli.rs` and the `--fix`
 contract in `README.md` keep holding:
@@ -214,6 +243,15 @@ pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
     // normalize line endings, then apply every Safe edit
 }
 ```
+
+It applies **one pass per rule code, in priority order**, and deliberately not a
+fixpoint. One pass per code because two edits on one line (an orphan that also has
+trailing whitespace) overlap by construction, so a single `apply_edits` call cannot land
+both. Not a fixpoint because re-running a code repairs things `--fix` never reported:
+rejoining a `CONC` can turn a blank line into a levelless one, and a second `E001` pass
+would prefix it with `CONT`, inventing a record the linter never asked about. The next
+`--fix` picks up whatever the previous one exposed. Adding a repair therefore means
+naming its code in the order list, which a debug assertion enforces.
 
 **`--fix` policy is unchanged and non-negotiable** (`AGENTS.md`): only safe, invertible
 repairs, always with a `.bak`, never a semantic change. Concretely, for the new rulesets
