@@ -10,6 +10,7 @@
 //! that is the only part of a diagnostic a user can act on.
 
 use crate::diag::{Category, Severity};
+use crate::fix::Applicability;
 
 /// Everything known about one rule, independently of any file being linted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,11 +27,10 @@ pub struct RuleMeta {
     pub default_severity: Severity,
     /// False for every rule in a non-core ruleset.
     pub default_enabled: bool,
-    /// Whether `--fix` carries a repair for this rule.
-    ///
-    /// Contract section 2 types this `Option<Applicability>`; `Applicability`
-    /// is defined by #19 in `src/fix.rs` and that issue owns the upgrade.
-    pub fixable: bool,
+    /// The repair `--fix` carries for this rule, if any. `None` means the
+    /// rule reports and the user decides; `Some(Safe)` is applied by a bare
+    /// `--fix`, `Some(MaybeIncorrect)` only under `--fix --unsafe`.
+    pub fixable: Option<Applicability>,
     /// One imperative line: what the file should do instead.
     pub title: &'static str,
     /// What breaks in consumer software, concretely.
@@ -48,7 +48,7 @@ pub const RULES: &[RuleMeta] = &[
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: true,
+        fixable: Some(Applicability::Safe),
         title: "Start every line with a level number, one deeper at most",
         why: "The level number at the start of a line is the only thing that says what the line belongs to. \
 A line without one (a note or a source transcription that wrapped onto its own line is the usual cause) \
@@ -66,7 +66,7 @@ For a level jump, add the missing intermediate line or lower the level so it gro
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Open the file with HEAD and close it with TRLR",
         why: "A GEDCOM file is an envelope: HEAD first, TRLR last. Readers take the version and the character \
 set from the header before anything else, so a file that starts with a record or ends without TRLR is \
@@ -83,7 +83,7 @@ into one file is the usual origin.",
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Give every record its own identifier",
         why: "The @I123@ identifier is how one record points at another. When two records share it, every \
 pointer that names it becomes ambiguous and importers resolve it to whichever of the two they read last: \
@@ -99,7 +99,7 @@ and export again.",
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Write identifiers as @XREF@, with no spaces",
         why: "An identifier must be an @...@ token with no spaces and no nesting. A malformed one matches \
 nothing, so every link into that record breaks at once: the person keeps their name but arrives in the \
@@ -115,7 +115,7 @@ where this normally comes from.",
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Anchor every CONT and CONC to the line it continues",
         why: "CONT and CONC continue the value of the line directly above them, one level up, and they never \
 nest inside each other. One that hangs from nothing, or from another CONT or CONC, continues nothing: \
@@ -131,7 +131,7 @@ chain one under another: \"1 NOTE line one\", \"2 CONT line two\", \"2 CONT line
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Drop CONC from 7.0 files and carry long values on CONT",
         why: "GEDCOM 7 removed CONC and reserved the tag (spec 1.3), so a 7.0 reader is entitled to refuse the \
 file outright or to skip the line. Skipping it costs you the tail of the value: a long note or place name \
@@ -147,7 +147,7 @@ other valid answer if you are not migrating yet.",
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Keep the one-per-record fields to a single instance",
         why: "The specification allows exactly one SEX per person, one HUSB and one WIFE per family, one GEDC \
 in the header, and one of each detail such as DATE, PLAC or CAUS inside a given event block. A second copy is almost always a merge \
@@ -163,7 +163,7 @@ own block. A second marriage is a second MARR event, not a second DATE inside th
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Supply the substructures the specification requires",
         why: "Some lines are not optional. The header needs GEDC with its VERS, which is how a reader learns \
 whether the file is 5.5.1 or 7.0; in 7.0 a custom EVEN or FACT needs a TYPE and an LDS ordinance STAT \
@@ -179,7 +179,7 @@ under each custom EVEN or FACT, and a DATE under each ordinance STAT.",
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: true,
+        fixable: Some(Applicability::Safe),
         title: "Keep every character whole and the file in valid UTF-8",
         why: "MyHeritage cuts long values at a fixed byte count, and when the cut falls inside an accented \
 character its two halves end up on different CONC lines. What is left is not valid UTF-8: where \
@@ -196,7 +196,7 @@ whole file is in a legacy encoding instead, convert it to UTF-8, or declare the 
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Point only at records that exist in the same file",
         why: "A pointer such as \"1 FAMC @F12@\" promises that @F12@ is in the file. When it is not, the link \
 is simply lost on import: the child arrives without parents, the citation without its source, the person \
@@ -213,7 +213,7 @@ export, re-export the whole tree instead.",
         category: Category::Upgrade,
         default_severity: Severity::Info,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Replace the 5.5.1 constructs that GEDCOM 7.0 dropped",
         why: "These lines are valid 5.5.1 and are not errors today: they only have no home in GEDCOM 7. RELA \
 became the enumerated ROLE, HEAD.CHAR disappeared because 7.0 is always UTF-8, PEDI values are uppercase, \
@@ -233,7 +233,7 @@ nothing has to change while you stay on 5.5.1.",
         category: Category::Upgrade,
         default_severity: Severity::Info,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Declare the vendor extension tags that a 7.0 file carries",
         why: "Tags beginning with an underscore are private extensions: _MARNM for a married name, _UPD for \
 MyHeritage's last-changed stamp, _APID for an Ancestry source link. They survive into 7.0 as undocumented \
@@ -250,7 +250,7 @@ married name fits a second \"1 NAME\" with \"2 TYPE MARRIED\" under it.",
         category: Category::Style,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Keep the bytes plain: no BOM, one line ending, no controls",
         why: "A byte-order mark in front of \"0 HEAD\" stops many 5.5.x readers from recognizing the first \
 line at all, so the file is rejected as malformed (7.0 recommends the BOM, and it is not flagged there). \
@@ -268,7 +268,7 @@ that is whole-file preprocessing, not a repair of this rule.",
         category: Category::Suspicious,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Keep FAMC and CHIL pointing back at each other",
         why: "A parent-child link is written twice: the child says \"1 FAMC @F1@\" and the family answers with \
 \"1 CHIL @I1@\". With only one half present, what you see depends on which half your program reads first: \
@@ -285,7 +285,7 @@ program normally restores both halves at once.",
         category: Category::Suspicious,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Check deaths before births and lifespans over 105 years",
         why: "A death before a birth, or a life longer than 105 years, is nearly always a mistyped year, a \
 date read from the wrong column of a parish register, or two different people merged into one. Nothing \
@@ -302,7 +302,7 @@ wrong.",
         category: Category::Suspicious,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Review same-name people born within two years of each other",
         why: "Two records with the same name and birth years two years apart or less are the classic result \
 of importing the same branch twice, or of a merge that matched nothing. Left alone they split one \
@@ -319,7 +319,7 @@ happens constantly, nothing needs to change.",
         category: Category::Suspicious,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Check parents implausibly young or old at a child's birth",
         why: "A parent under 13, a mother over 50 or a father over 70 at a child's birth usually means the \
 child is attached to the wrong generation, most often a grandparent linked as a parent. The tree then has one generation too few, and \
@@ -335,7 +335,7 @@ rather than assume the link is wrong.",
         category: Category::Suspicious,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Check children born before the marriage date of their family",
         why: "This is often simply true and needs no change at all. It is flagged because the other common \
 cause is a wrong marriage year, or a child of an earlier union attached to the later family, which puts \
@@ -351,7 +351,7 @@ sits where they belong.",
         category: Category::Suspicious,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Use the SEX values the version allows: M, F, U, and X in 7.0",
         why: "SEX carries one letter: M, F or U in 5.5.1, plus X in 7.0. Anything else, a whole word or a \
 blank value included, is not understood, so importers store U instead. The person then shows up with a \
@@ -366,7 +366,7 @@ you want to say in words about a person's gender belongs in a NOTE, not in this 
         category: Category::Suspicious,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Spell enumerated values the way the specification lists them",
         why: "Fields such as PEDI, ROLE, QUAY, RESN, NAME.TYPE, FAMC.STAT, an ordinance STAT, HEAD.CHAR and \
 the media type of a FILE take their value from a fixed list. A value outside the list is dropped rather \
@@ -383,7 +383,7 @@ wording in a PHRASE beside it.",
         category: Category::Suspicious,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Reconcile single events recorded twice with different dates",
         why: "A person is born, christened, baptized, confirmed and buried once each, and a given marriage \
 or divorce happens on a single date, so one of those events twice with two different dates is the \
@@ -401,7 +401,7 @@ own event block with its own PLAC and SOUR.",
         category: Category::Style,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Keep URLs out of PLAC and put the link where links belong",
         why: "MyHeritage writes the address of its place catalogue into the place name itself. The place then \
 imports as the literal text \"Sabadell, https://...\", which matches nothing that anyone else wrote for \
@@ -418,7 +418,7 @@ Barcelona, Spain\".",
         category: Category::Style,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Write NAME and DATE values in the shape the format defines",
         why: "A surname is delimited by a pair of slashes and a date is \"DD MMM YYYY\" with an English \
 three-letter month. With a slash missing the importer reads the whole string as a given name, so the \
@@ -436,7 +436,7 @@ the original wording in a PHRASE or a NOTE when it matters.",
         category: Category::Style,
         default_severity: Severity::Warning,
         default_enabled: true,
-        fixable: false,
+        fixable: None,
         title: "Store notes as plain text, not as HTML",
         why: "Exporters that keep notes in a rich-text editor write the markup out exactly as it stands, so \
 <br>, &nbsp; and whole <notexml> wrappers end up inside the note. GEDCOM notes are plain text: the \

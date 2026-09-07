@@ -12,11 +12,11 @@
 //! partial guard, partial because it only asserts the code is named in
 //! `tests/rules.rs`, not that the fixture still triggers it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use gedlint::{rule, rule_by_name, rulesets, Category, RULES};
+use gedlint::{rule, rule_by_name, rulesets, Applicability, Category, RULES};
 
 /// The constructors that can put a diagnostic into a report. `with_span` is
 /// added by #18 and has no call sites yet; naming it now means the invariant
@@ -304,21 +304,43 @@ fn category_matches_what_the_engine_emits() {
 }
 
 #[test]
-fn fixable_marks_exactly_what_fix_bytes_repairs() {
+fn fixable_matches_the_repairs_fix_really_carries() {
     // A file with both repairs: an orphan line (E001) and a UTF-8 character
-    // split across CONC lines (E101).
+    // split across CONC lines (E101). Kept dynamic on purpose: a rule that
+    // gains a repair the fixture does not trigger fails here, which is the
+    // prompt to extend the fixture rather than to hardcode a list.
     let mut src: Vec<u8> = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT caf".to_vec();
     src.push(0xC3);
     src.extend_from_slice(b"\n2 CONC ");
     src.push(0xA9);
     src.extend_from_slice(b"\norphan line\n0 TRLR\n");
+
+    // What the engine proposes, with the applicability it proposes it at.
+    // `compute_edits` also emits the "style" pseudo-code for trailing
+    // whitespace, which is whole-file cosmetics with no rule behind it.
+    let (normalized, _) = gedlint::normalize_endings(&src);
+    let mut proposed: BTreeMap<&'static str, Applicability> = BTreeMap::new();
+    for e in gedlint::compute_edits(&normalized) {
+        if rule(e.code).is_none() {
+            continue;
+        }
+        if let Some(prev) = proposed.insert(e.code, e.applicability) {
+            assert_eq!(prev, e.applicability, "{}: two applicabilities, RuleMeta.fixable records one", e.code);
+        }
+    }
+    let marked: BTreeMap<&'static str, Applicability> =
+        RULES.iter().filter_map(|r| r.fixable.map(|a| (r.code, a))).collect();
+    assert_eq!(proposed, marked, "RuleMeta.fixable must match the edits compute_edits carries");
+
+    // And end to end: a bare --fix applies the Safe ones and says so.
     let (_, applied) = gedlint::fix_bytes(&src);
-    let repaired: BTreeSet<&str> = applied
+    let reported: BTreeSet<&str> = applied
         .iter()
         .filter_map(|note| note.split_once(':'))
         .map(|(code, _)| code)
         .filter(|code| rule(code).is_some())
         .collect();
-    let marked: BTreeSet<&str> = RULES.iter().filter(|r| r.fixable).map(|r| r.code).collect();
-    assert_eq!(repaired, marked, "fixable in RULES must match what --fix actually repairs: {:?}", applied);
+    let safe: BTreeSet<&str> =
+        RULES.iter().filter(|r| r.fixable == Some(Applicability::Safe)).map(|r| r.code).collect();
+    assert_eq!(reported, safe, "a bare --fix applies exactly the Safe repairs: {:?}", applied);
 }

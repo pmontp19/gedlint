@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{BufReader, Write};
 use std::process::ExitCode;
 
-use gedlint::{Diag, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_bytes, lint_reader};
+use gedlint::{Applicability, Diag, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_bytes, lint_reader};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -83,7 +83,11 @@ fn explain(what: Option<&str>) -> ExitCode {
         r.category.as_str(),
         r.default_severity.tag().trim().to_ascii_lowercase(),
         if r.default_enabled { "on by default" } else { "off by default" },
-        if r.fixable { "fixable by --fix" } else { "no automatic fix" }
+        match r.fixable {
+            Some(Applicability::Safe) => "fixable by --fix",
+            Some(Applicability::MaybeIncorrect) => "fixable, but only under --fix --unsafe",
+            None => "no automatic fix",
+        }
     );
     let _ = writeln!(h, "WHY");
     wrapped(&mut h, r.why);
