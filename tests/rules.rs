@@ -122,6 +122,19 @@ fn w401_plac_url() {
 }
 
 #[test]
+fn w401_plac_url_multibyte_no_panic() {
+    // truncate() used to slice at byte 60, panicking on multibyte chars.
+    let pad = "x".repeat(59) + "é";
+    let g = wrap551(&format!(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC {pad} https://example.com/{}\n",
+        "y".repeat(100)
+    ));
+    let r = lint_str(&g);
+    assert!(r.diags.iter().any(|d| d.code == "W401"));
+    assert_eq!(r.exit_code(), 1);
+}
+
+#[test]
 fn w402_name_slashes() {
     let g = wrap551("0 @I1@ INDI\n1 NAME Joan /Oso\n");
     assert!(has(&g, "W402"));

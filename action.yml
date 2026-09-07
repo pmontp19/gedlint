@@ -1,0 +1,63 @@
+name: "gedlint"
+description: "GEDCOM linter (MyHeritage quirks, referential and semantic checks)"
+branding:
+  icon: "git-branch"
+  color: "blue"
+inputs:
+  path:
+    description: "Path to the .ged file (quoted, no shell expansion)"
+    required: true
+  fail-on:
+    description: "'error' (default) or 'warning'"
+    required: false
+    default: "error"
+  format:
+    description: "'text' (default) or 'json'"
+    required: false
+    default: "text"
+  version:
+    description: "gedlint release with prebuilt binaries (e.g. v0.5.0)"
+    required: false
+    default: "v0.5.0"
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      env:
+        GEDLINT_PATH: ${{ inputs.path }}
+        GEDLINT_FAIL_ON: ${{ inputs.fail-on }}
+        GEDLINT_FORMAT: ${{ inputs.format }}
+        GEDLINT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$GEDLINT_FAIL_ON" in error|warning) ;; *) echo "fail-on must be error|warning"; exit 2;; esac
+        case "$GEDLINT_FORMAT" in text|json) ;; *) echo "format must be text|json"; exit 2;; esac
+        OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        ARCH="$(uname -m)"
+        case "$OS-$ARCH" in
+          linux-x86_64) TARGET="x86_64-unknown-linux-gnu"; ARCHIVE="tar.gz"; BIN_NAME="gedlint";;
+          darwin-arm64|darwin-aarch64) TARGET="aarch64-apple-darwin"; ARCHIVE="tar.gz"; BIN_NAME="gedlint";;
+          mingw*-x86_64|msys*-x86_64|windowsnt-x86_64) TARGET="x86_64-pc-windows-msvc"; ARCHIVE="zip"; BIN_NAME="gedlint.exe";;
+          *) echo "unsupported runner: $OS/$ARCH (prebuilt: linux x86_64, macOS ARM, Windows x86_64)"; exit 2;;
+        esac
+        URL="https://github.com/pmontp19/gedlint/releases/download/${GEDLINT_VERSION}/gedlint-${GEDLINT_VERSION}-${TARGET}.${ARCHIVE}"
+        WORK="$(mktemp -d -t gedlint.XXXXXX)"
+        trap 'rm -rf "$WORK"' EXIT
+        curl -fSL "$URL" -o "$WORK/pkg.$ARCHIVE"
+        if [ "$ARCHIVE" = "zip" ]; then
+          unzip -q "$WORK/pkg.$ARCHIVE" -d "$WORK"
+        else
+          tar xzf "$WORK/pkg.$ARCHIVE" -C "$WORK"
+        fi
+        BIN="$WORK/gedlint-${GEDLINT_VERSION}-${TARGET}/${BIN_NAME}"
+        if [ "$GEDLINT_FORMAT" = "json" ]; then
+          "$BIN" --format json "$GEDLINT_PATH"
+        else
+          "$BIN" "$GEDLINT_PATH"
+        fi
+        CODE=$?
+        # 0/1/2 are the contract; any other code (crash, misuse) always fails
+        if [ $CODE -gt 2 ]; then exit $CODE; fi
+        if [ "$GEDLINT_FAIL_ON" = "warning" ] && [ $CODE -ne 0 ]; then exit $CODE; fi
+        if [ "$GEDLINT_FAIL_ON" = "error" ] && [ $CODE -eq 2 ]; then exit 2; fi
+        exit 0

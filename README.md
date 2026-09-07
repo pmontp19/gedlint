@@ -23,6 +23,18 @@ Exit codes: 0 clean, 1 warnings, 2 errors.
 
 `--fix` only applies safe repairs (E001 orphan lines get a CONT prefix, E101 split CONC rejoined, trailing whitespace trimmed) and always writes a `.bak` copy. `--max N` caps text output (JSON is always complete); `--severity` sets the minimum level shown.
 
+## GitHub Action
+
+```yaml
+- uses: pmontp19/gedlint@v1
+  with:
+    path: tree.ged
+    fail-on: error # or 'warning'
+    format: text   # or 'json'
+```
+
+Prebuilt runners: linux x86_64, macOS ARM, Windows x86_64. `version` input selects the release binary (default matches the latest release).
+
 ## Design
 
 - **Linter, not just a validator**: categories (correctness / suspicious / style / upgrade), configurable severities, `--fix`. clippy/eslint model.
