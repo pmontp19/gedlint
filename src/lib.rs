@@ -490,10 +490,12 @@ fn norm_name(s: &str) -> String {
 }
 
 fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n {
+    // Cut on char boundaries: &s[..n] panics when n splits a multibyte char
+    // (e.g. a long Catalan PLAC with a URL near byte 60).
+    if s.chars().count() <= n {
         s.to_string()
     } else {
-        format!("{}...", &s[..n])
+        format!("{}...", s.chars().take(n).collect::<String>())
     }
 }
 
