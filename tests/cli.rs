@@ -130,3 +130,48 @@ fn help_exit_0() {
     assert_eq!(o.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&o.stdout).contains("USAGE"));
 }
+
+#[test]
+fn explain_lists_every_rule() {
+    let o = Command::new(bin()).arg("--explain").output().unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    let s = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(s.starts_with("core ("), "the listing groups by ruleset: {}", &s[..s.len().min(60)]);
+    for r in gedlint::RULES {
+        assert!(s.contains(r.code) && s.contains(r.name), "{} missing from --explain", r.code);
+    }
+}
+
+#[test]
+fn explain_one_rule_by_code_or_by_name() {
+    // The code is matched case-insensitively; the name needs its ruleset.
+    for arg in ["w202", "core/asymmetric-famc-chil"] {
+        let o = Command::new(bin()).arg("--explain").arg(arg).output().unwrap();
+        assert_eq!(o.status.code(), Some(0), "--explain {}", arg);
+        let s = String::from_utf8_lossy(&o.stdout).into_owned();
+        assert!(s.contains("W202") && s.contains("asymmetric-famc-chil"));
+        assert!(s.contains("suspicious") && s.contains("warn") && s.contains("no automatic fix"));
+        assert!(s.contains("WHY") && s.contains("REMEDY"));
+    }
+    // A fixable rule says so.
+    let o = Command::new(bin()).arg("--explain").arg("E101").output().unwrap();
+    assert!(String::from_utf8_lossy(&o.stdout).contains("fixable by --fix"));
+}
+
+#[test]
+fn explain_unknown_rule_exits_2() {
+    for arg in ["NOPE", "core/nope", "nope/asymmetric-famc-chil"] {
+        let o = Command::new(bin()).arg("--explain").arg(arg).output().unwrap();
+        assert_eq!(o.status.code(), Some(2), "--explain {}", arg);
+        assert!(String::from_utf8_lossy(&o.stderr).contains("unknown rule"));
+    }
+}
+
+#[test]
+fn explain_rejects_an_option_in_place_of_a_code() {
+    // Silently printing the whole listing would hide the typo.
+    let o = Command::new(bin()).arg("--explain").arg("--fix").output().unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("takes a rule code"));
+    assert!(o.stdout.is_empty());
+}

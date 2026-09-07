@@ -7,19 +7,22 @@
 //!
 //! Layout: `diag` holds the output types, `parse` the line grammar, `rules`
 //! the single streaming pass and the rule groups it drives, `fix` the safe
-//! `--fix` repairs as selectable `Edit`s. Everything public is re-exported
-//! here, so the crate's public API is exactly what this file names.
+//! `--fix` repairs as selectable `Edit`s, `registry` the rule metadata table
+//! every consumer reads. Everything public is re-exported here, so the
+//! crate's public API is exactly what this file names.
 
 use std::io::BufRead;
 
 mod diag;
 mod fix;
 mod parse;
+mod registry;
 mod rules;
 
 pub use diag::{Category, Diag, Report, Severity};
 pub use fix::{apply_edits, compute_edits, fix_bytes, fix_bytes_with, normalize_endings, Applicability, Edit, FixSelection};
 pub use parse::Version;
+pub use registry::{rule, rule_by_name, rulesets, RuleMeta, RULES};
 
 use parse::{normalize_newlines, scan_head};
 use rules::encoding::encoding_diags;
@@ -88,7 +91,7 @@ mod tests {
 
     #[test]
     fn json_escapes() {
-        let r = Report { version: Version::V551, lines: 1, individuals: 0, families: 0, diags: vec![Diag::new("E1", Category::Correctness, Severity::Error, 1, "a\"b\\c".into())] };
+        let r = Report { version: Version::V551, lines: 1, individuals: 0, families: 0, diags: vec![Diag::new("E001", Category::Correctness, Severity::Error, 1, "a\"b\\c".into())] };
         let j = r.to_json();
         assert!(j.contains("a\\\"b\\\\c"));
     }
