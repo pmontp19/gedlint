@@ -273,6 +273,56 @@ fn e005_orphan_cont() {
 }
 
 #[test]
+fn e005_level_zero_cont_mid_file() {
+    // Issue 8: a level-0 CONT mid-file has no parent (nothing is at
+    // level -1), regardless of how many non-blank lines came before it.
+    let g = wrap551("0 CONT orfe\n");
+    assert!(has(&g, "E005"));
+}
+
+#[test]
+fn e005_no_fire_on_empty_value_parent() {
+    // A parent with an empty value is still a structural parent: E005 is
+    // not value-based. `2 TEXT` carries no value but is a valid parent
+    // for the `3 CONT` that continues it.
+    let g = wrap551("0 @S1@ SOUR\n1 DATA\n2 TEXT\n3 CONT foo\n");
+    assert!(!has(&g, "E005"));
+}
+
+#[test]
+fn e005_cont_under_conc() {
+    // CONT/CONC are pseudo-substructures of the value-bearing line and
+    // never nest: a CONT hanging off a CONC is malformed.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n2 CONC foo\n3 CONT bar\n");
+    assert!(has(&g, "E005"));
+}
+
+#[test]
+fn e005_cont_under_cont() {
+    // Same rule, the other CONT/CONC branch: a CONT hanging off a CONT
+    // (not just a CONC) is also malformed. Kills a mutant that drops the
+    // `parent_tag == "CONT"` half of the E005 OR (the CONC-only test
+    // above still passes under that mutation).
+    let g = wrap551("0 @I1@ INDI\n1 NOTE A\n2 CONT B\n3 CONT C\n");
+    assert!(has(&g, "E005"));
+}
+
+#[test]
+fn e005_no_fire_on_sibling_conts() {
+    // Consecutive CONT siblings under the same parent are legal.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A\n2 CONT B\n2 CONT C\n");
+    assert!(!has(&g, "E005"));
+}
+
+#[test]
+fn e005_no_fire_across_blank_line() {
+    // A blank line does not touch the parent stack, so a CONT after one
+    // still sees the last real line as its parent.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A\n\n2 CONT B\n");
+    assert!(!has(&g, "E005"));
+}
+
+#[test]
 fn u502_vendor_tag() {
     // MyHeritage _UPD is a vendor tag: upgrade info, never an error.
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 _UPD 20240101\n");

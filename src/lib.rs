@@ -713,7 +713,6 @@ fn lint_lines(text: &str) -> Report {
     let mut first_done = false;
     let mut after_trlr = false;
     let mut prev_level: Option<u32> = None;
-    let mut expect_conc_parent = false;
     // Parent stack for context-sensitive rules (enums, OTHER/PHRASE):
     // stack[i] is the tag/line of the nearest preceding line at level i.
     let mut stack: Vec<(String, usize)> = Vec::new();
@@ -897,18 +896,29 @@ fn lint_lines(text: &str) -> Report {
             );
         }
 
-        // CONT/CONC must hang off a parent level.
-        if (l.tag == "CONT" || l.tag == "CONC") && !expect_conc_parent {
-            push_capped(
-                &mut diags,
-                vec![Diag::new(
-                    "E005",
-                    Category::Correctness,
-                    Severity::Error,
-                    l.no,
-                    format!("{} with no parent line (must continue a value)", l.tag),
-                )],
-            );
+        // CONT/CONC must hang off a parent line one level up (structural
+        // check, not value-based: a parent with an empty value, e.g.
+        // `2 TEXT` followed by `3 CONT foo`, is still a valid parent since
+        // the value is optional in both 5.5.1 and 7.0). CONT/CONC are
+        // pseudo-substructures of the value-bearing line and never nest,
+        // so a CONT/CONC hanging off another CONT/CONC is also malformed.
+        // Note: on input that already trips E001 (a level jump skips a
+        // level), the truncate above is a no-op and `parent` resolves to
+        // the nearest actual ancestor rather than the true one-level-up
+        // line, so this check can miss a genuine orphan in that case.
+        if l.tag == "CONT" || l.tag == "CONC" {
+            let nested_under_cont_conc = parent_tag == "CONT" || parent_tag == "CONC";
+            if parent.is_none() || nested_under_cont_conc {
+                let msg = if parent.is_none() {
+                    format!("{} has no parent line to continue", l.tag)
+                } else {
+                    format!("{} cannot continue a {} line (CONT/CONC do not nest)", l.tag, parent_tag)
+                };
+                push_capped(
+                    &mut diags,
+                    vec![Diag::new("E005", Category::Correctness, Severity::Error, l.no, msg)],
+                );
+            }
         }
         // E007: CONC was removed in 7.0 (spec 1.3, reserved tag): reflow to CONT.
         if version == Version::V70 && l.tag == "CONC" {
@@ -923,8 +933,6 @@ fn lint_lines(text: &str) -> Report {
                 )],
             );
         }
-        expect_conc_parent = !l.raw.trim().is_empty();
-
         // ASCII controls (other than \t).
         if l.raw.chars().any(|c| c.is_control() && c != '\t') {
             push_capped(
