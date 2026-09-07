@@ -152,6 +152,17 @@ pub(crate) fn norm_name(s: &str) -> String {
     s.to_lowercase().replace('/', " ").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Byte span `(col, len)` of `needle` inside `raw`, shaped for
+/// `Diag::with_span`. Byte offsets, never char or UTF-16 offsets: the
+/// consumer slices the raw line's bytes and decodes the pieces.
+/// `(0, 0)` means "no span" and is what an absent needle yields.
+pub(crate) fn byte_span(raw: &str, needle: &str) -> (u32, u32) {
+    match raw.find(needle) {
+        Some(at) => (at as u32, needle.len() as u32),
+        None => (0, 0),
+    }
+}
+
 pub(crate) fn truncate(s: &str, n: usize) -> String {
     // Cut on char boundaries: &s[..n] panics when n splits a multibyte char
     // (e.g. a long Catalan PLAC with a URL near byte 60).

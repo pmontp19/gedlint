@@ -20,16 +20,29 @@ pub(crate) fn check_control_chars(diags: &mut Vec<Diag>, l: &Line) {
     }
 }
 
+/// Byte span of the URL inside a PLAC line: from "http" to the next
+/// whitespace, or to the end of the line. The level is numeric and the tag is
+/// PLAC, so the first "http" of the raw line is necessarily inside the value.
+fn url_span(raw: &str) -> (u32, u32) {
+    let Some(at) = raw.find("http") else { return (0, 0) };
+    let rest = &raw[at..];
+    let len = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    (at as u32, len as u32)
+}
+
 /// W401 at level 1: URL inside PLAC (MyHeritage quirk).
 pub(crate) fn check_plac_url_record(diags: &mut Vec<Diag>, l: &Line) {
     if l.tag == "PLAC" && l.value.contains("http") {
+        let (col, len) = url_span(&l.raw);
         push_capped(
             diags,
-            vec![Diag::new(
+            vec![Diag::with_span(
                 "W401",
                 Category::Style,
                 Severity::Warning,
                 l.no,
+                col,
+                len,
                 format!("PLAC with URL (MyHeritage quirk): move it to NOTE: {}", truncate(&l.value, 60)),
             )],
         );
@@ -55,13 +68,16 @@ pub(crate) fn check_note_html(diags: &mut Vec<Diag>, l: &Line) {
 /// W401 below level 1: nested PLAC with URL (MyHeritage quirk).
 pub(crate) fn check_plac_url(diags: &mut Vec<Diag>, l: &Line) {
     if l.tag == "PLAC" && l.value.contains("http") {
+        let (col, len) = url_span(&l.raw);
         push_capped(
             diags,
-            vec![Diag::new(
+            vec![Diag::with_span(
                 "W401",
                 Category::Style,
                 Severity::Warning,
                 l.no,
+                col,
+                len,
                 format!("PLAC with URL (MyHeritage quirk): {}", truncate(&l.value, 60)),
             )],
         );
