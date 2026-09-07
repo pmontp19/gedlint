@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use crate::diag::{push_capped, Category, Diag, Severity};
-use crate::parse::{byte_span, is_pointer, truncate, Line, Version};
+use crate::parse::{is_pointer, truncate, Line, Version};
 
 /// Skeleton state carried across the single pass.
 #[derive(Default)]
@@ -82,7 +82,7 @@ pub(crate) fn check_xref_syntax(diags: &mut Vec<Diag>, l: &Line) {
         // Span: the xref token. It is the second whitespace-separated field
         // and everything before it is the numeric level, so the first
         // occurrence of the token in the raw line is the token itself.
-        let (col, len) = byte_span(&l.raw, &l.xref);
+        let (col, len) = l.span_of(&l.xref);
         push_capped(
             diags,
             vec![Diag::with_span(

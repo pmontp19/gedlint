@@ -64,9 +64,11 @@ pub struct Diag {
     pub ruleset: &'static str,
     pub severity: Severity,
     pub line: usize,
-    /// 0-based **byte** offset of the span inside the raw line, never a char
-    /// or UTF-16 offset: slice the line's bytes at `col..col + len` and decode
-    /// the three pieces. Only meaningful when `len > 0`.
+    /// 0-based **byte** offset of the span, never a char or UTF-16 offset:
+    /// slice the line's bytes at `col..col + len` and decode the three pieces.
+    /// Counted from the start of the line **as it exists in the file**, with
+    /// nothing stripped, so a UTF-8 BOM is the first 3 bytes of line 1 (RFC
+    /// 014 section 1). Only meaningful when `len > 0`.
     pub col: u32,
     /// Span length in **bytes**. `0` means "no span": highlight the whole line.
     pub len: u32,

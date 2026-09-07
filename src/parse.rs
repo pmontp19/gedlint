@@ -91,7 +91,43 @@ pub(crate) struct Line {
     pub(crate) tag: String,
     pub(crate) value: String,
     pub(crate) raw: String,
+    /// Byte offset of `value` inside `raw`. Relative to `raw`, so feed it to
+    /// `span_at`, which is what converts to on-disk coordinates.
+    pub(crate) value_col: usize,
+    /// Bytes this line has in the file before `raw` starts. Non-zero only for
+    /// line 1 of a BOM'd file: the parser never sees the BOM, but the file a
+    /// consumer slices does, so every span has to add it back.
+    pub(crate) span_base: u32,
 }
+
+impl Line {
+    /// Byte span of `needle` inside this line, in the on-disk coordinates a
+    /// consumer slices with. `(0, 0)`, i.e. "no span", when the needle is
+    /// absent. Never char or UTF-16 offsets.
+    pub(crate) fn span_of(&self, needle: &str) -> (u32, u32) {
+        match self.raw.find(needle) {
+            Some(at) => self.span_at(at, needle.len()),
+            None => (0, 0),
+        }
+    }
+
+    /// Same, for an offset already resolved against `raw`. The `u32` casts
+    /// would truncate past 4 GiB, which no single GEDCOM line reaches (5.5.1
+    /// caps a line at 255 characters and real exporters stay far below).
+    pub(crate) fn span_at(&self, at: usize, len: usize) -> (u32, u32) {
+        (self.span_base + at as u32, len as u32)
+    }
+
+    /// Record how many bytes of the on-disk line the parser skipped.
+    pub(crate) fn with_span_base(mut self, base: u32) -> Line {
+        self.span_base = base;
+        self
+    }
+}
+
+/// A UTF-8 BOM, which GEDCOM 7 recommends, is stripped before parsing but is
+/// still in the file: it is the first `BOM_LEN` bytes of line 1.
+pub(crate) const BOM_LEN: u32 = 3;
 
 /// Deepest legal level (5.5.1 ch. 1). A bigger leading number is text, not a
 /// level: a biography continuation line may start with a year ("1936 va ...").
@@ -120,7 +156,11 @@ pub(crate) fn parse_line(no: usize, raw: &str) -> Line {
     } else {
         (String::new(), second.to_string(), rest.trim().to_string())
     };
-    Line { no, level: lvl, xref, tag, value, raw: raw.to_string() }
+    // The value is always trimmed out of a slice that runs to the end of the
+    // line, so it ends where the line's trailing whitespace begins: that
+    // pins its offset exactly, without re-walking the split.
+    let value_col = if value.is_empty() { 0 } else { raw.trim_end().len() - value.len() };
+    Line { no, level: lvl, xref, tag, value, raw: raw.to_string(), value_col, span_base: 0 }
 }
 
 pub(crate) fn is_pointer(s: &str) -> bool {
@@ -150,17 +190,6 @@ pub(crate) fn year_of(s: &str) -> Option<i64> {
 
 pub(crate) fn norm_name(s: &str) -> String {
     s.to_lowercase().replace('/', " ").split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Byte span `(col, len)` of `needle` inside `raw`, shaped for
-/// `Diag::with_span`. Byte offsets, never char or UTF-16 offsets: the
-/// consumer slices the raw line's bytes and decodes the pieces.
-/// `(0, 0)` means "no span" and is what an absent needle yields.
-pub(crate) fn byte_span(raw: &str, needle: &str) -> (u32, u32) {
-    match raw.find(needle) {
-        Some(at) => (at as u32, needle.len() as u32),
-        None => (0, 0),
-    }
 }
 
 pub(crate) fn truncate(s: &str, n: usize) -> String {

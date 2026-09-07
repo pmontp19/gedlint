@@ -1025,6 +1025,71 @@ fn json_carries_the_additive_span_keys() {
     assert!(j.contains("\"severity\":\"WARN\""), "{}", j);
 }
 
+/// The bytes a consumer really has: the on-disk line, sliced at the span.
+/// Nothing is stripped first, so a BOM counts as 3 bytes of line 1.
+fn on_disk_span<'a>(data: &'a [u8], d: &Diag) -> &'a [u8] {
+    let line = data.split(|&b| b == b'\n').nth(d.line - 1).expect("diagnostic line exists");
+    &line[d.col as usize..(d.col + d.len) as usize]
+}
+
+#[test]
+fn e004_span_is_relative_to_the_on_disk_line_with_a_bom() {
+    // GEDCOM 7 recommends a BOM. The parser strips it, the file still has it,
+    // and col must address the file: the xref starts at byte 5, not byte 2.
+    let mut data = vec![0xEF, 0xBB, 0xBF];
+    data.extend_from_slice(b"0 @I1 INDI\n1 NAME A /B/\n0 TRLR\n");
+    let r = lint_bytes(&data);
+    let d = r.diags.iter().find(|d| d.code == "E004").expect("E004");
+    assert_eq!((d.line, d.col, d.len), (1, 5, 3));
+    assert_eq!(std::str::from_utf8(on_disk_span(&data, d)).unwrap(), "@I1");
+}
+
+#[test]
+fn w401_span_is_relative_to_the_on_disk_line_with_a_bom() {
+    let mut data = vec![0xEF, 0xBB, 0xBF];
+    data.extend_from_slice(b"2 PLAC http://example.com\n");
+    let r = lint_bytes(&data);
+    let d = r.diags.iter().find(|d| d.code == "W401").expect("W401");
+    assert_eq!((d.line, d.col), (1, 10));
+    assert_eq!(std::str::from_utf8(on_disk_span(&data, d)).unwrap(), "http://example.com");
+}
+
+#[test]
+fn spans_share_one_byte_base_across_rule_families() {
+    // E004 comes from the line pass (BOM stripped internally), E101 from the
+    // byte pass (BOM never stripped). Both must address the same bytes.
+    let mut data = vec![0xEF, 0xBB, 0xBF];
+    data.extend_from_slice("0 @I1 INDI\n1 NAME Jos".as_bytes());
+    data.push(0xC3);
+    data.extend_from_slice("\n2 CONC ".as_bytes());
+    data.push(0xA9);
+    data.extend_from_slice(" /Oso/\n0 TRLR\n".as_bytes());
+    let r = lint_bytes(&data);
+    let e004 = r.diags.iter().find(|d| d.code == "E004").expect("E004");
+    let e101 = r.diags.iter().find(|d| d.code == "E101").expect("E101");
+    assert_eq!(std::str::from_utf8(on_disk_span(&data, e004)).unwrap(), "@I1");
+    assert_eq!((e101.line, e101.col, e101.len), (3, 7, 1), "line 3 has no BOM, so no base");
+    assert_eq!(on_disk_span(&data, e101), &[0xA9]);
+}
+
+#[test]
+fn w401_span_skips_a_decoy_http_substring() {
+    // "chttpx" contains "http" but does not start a token: the span belongs to
+    // the real URL 12 bytes further along.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC Lòria chttpx http://example.com/x\n");
+    let d = only(&g, "W401");
+    assert_eq!(span_of(&g, &d), "http://example.com/x");
+}
+
+#[test]
+fn w401_without_a_url_token_has_no_span() {
+    // The rule fires on a bare "http" substring, so a value can trip it with
+    // no URL in it at all. Then there is nothing to point at: len 0.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC Reus chttpx\n");
+    let d = only(&g, "W401");
+    assert_eq!((d.col, d.len), (0, 0));
+}
+
 #[test]
 fn in_ruleset_moves_a_diag_out_of_core() {
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F9@\n");
