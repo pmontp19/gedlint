@@ -50,12 +50,15 @@ runs:
           tar xzf "$WORK/pkg.$ARCHIVE" -C "$WORK"
         fi
         BIN="$WORK/gedlint-${GEDLINT_VERSION}-${TARGET}/${BIN_NAME}"
+        # set -e aborts on nonzero exits: suspend it around the linter call
+        set +e
         if [ "$GEDLINT_FORMAT" = "json" ]; then
           "$BIN" --format json "$GEDLINT_PATH"
         else
           "$BIN" "$GEDLINT_PATH"
         fi
         CODE=$?
+        set -e
         # 0/1/2 are the contract; any other code (crash, misuse) always fails
         if [ $CODE -gt 2 ]; then exit $CODE; fi
         if [ "$GEDLINT_FAIL_ON" = "warning" ] && [ $CODE -ne 0 ]; then exit $CODE; fi
