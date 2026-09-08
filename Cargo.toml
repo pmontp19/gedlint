@@ -8,6 +8,7 @@ license = "MIT"
 [lib]
 name = "gedlint"
 path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "gedlint"

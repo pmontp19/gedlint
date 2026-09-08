@@ -1,0 +1,35 @@
+0 HEAD
+1 SOUR MyHeritage
+2 NAME MyHeritage Family Tree Builder
+2 VERS 8.2.0.0
+1 GEDC
+2 VERS 5.5.1  
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Maria /Rovira, Font/
+2 SURN Rovira, Font
+1 SEX F
+1 BIRT
+2 DATE 12 MAR 1901
+2 PLAC L√≤ria,, Barcelona
+1 DEAT
+2 DATE 1899
+1 FAMC @F1@
+1 NOTE A note the exporter wrapped
+because it lost the CONT prefix
+1 _UPD 12 FEB 2020 10:00:00
+0 @I2@ INDI
+1 NAME Jos√
+2 CONC © /Oso/
+1 SEX Q
+1 BIRT
+2 DATE 3 APR 1904
+2 PLAC Vic https://maps.example.com/vic
+1 FAMC @F1@
+0 @I3@ INDI
+1 NAME Ant√≤nia /CLOS/
+1 SEX F
+0 @F1@ FAM
+1 HUSB @I9@
+1 CHIL @I1@
+0 TRLR

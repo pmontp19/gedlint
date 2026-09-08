@@ -9,7 +9,7 @@
 //! they name the software that breaks and how the breakage looks, because
 //! that is the only part of a diagnostic a user can act on.
 
-use crate::diag::{Category, Severity};
+use crate::diag::{escape_json, Category, Severity};
 use crate::fix::Applicability;
 
 /// Everything known about one rule, independently of any file being linted.
@@ -544,5 +544,49 @@ pub fn rulesets() -> Vec<&'static str> {
             out.push(r.ruleset);
         }
     }
+    out
+}
+
+/// The registry as JSON (issue 15): the web viewer's finding card renders
+/// `title` / `why` / `remedy` straight from here, so the page and the CLI's
+/// `--explain` cannot drift. Same serialization conventions as
+/// `Report::to_json`: severity strings, `escape_json` for text.
+pub fn rules_to_json() -> String {
+    let mut out = String::with_capacity(RULES.len() * 640);
+    out.push('[');
+    for (i, r) in RULES.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"code\":\"");
+        out.push_str(r.code);
+        out.push_str("\",\"name\":\"");
+        out.push_str(r.name);
+        out.push_str("\",\"ruleset\":\"");
+        out.push_str(r.ruleset);
+        out.push_str("\",\"category\":\"");
+        out.push_str(r.category.as_str());
+        out.push_str("\",\"default_severity\":\"");
+        out.push_str(r.default_severity.tag().trim());
+        out.push_str("\",\"default_enabled\":");
+        out.push_str(if r.default_enabled { "true" } else { "false" });
+        out.push_str(",\"fixable\":");
+        match r.fixable {
+            None => out.push_str("null"),
+            Some(a) => {
+                out.push('"');
+                out.push_str(a.as_str());
+                out.push('"');
+            }
+        }
+        out.push_str(",\"title\":\"");
+        out.push_str(&escape_json(r.title));
+        out.push_str("\",\"why\":\"");
+        out.push_str(&escape_json(r.why));
+        out.push_str("\",\"remedy\":\"");
+        out.push_str(&escape_json(r.remedy));
+        out.push_str("\"}");
+    }
+    out.push(']');
     out
 }
