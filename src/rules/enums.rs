@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use crate::diag::{push_capped, Category, Diag, Severity};
+use crate::diag::{Category, Diag, Severity};
 use crate::parse::Version;
 use crate::rules::events::LDS_EVENTS;
 
@@ -75,16 +75,13 @@ pub(crate) fn check_enum(
     if tag == "FORM" && parent_tag == "FILE" && version == Version::V70 {
         if !v.contains('/') || v.chars().any(char::is_whitespace) {
             let who = if record.is_empty() { format!("line {}", line) } else { record.to_string() };
-            push_capped(
-                diags,
-                vec![Diag::new(
-                    "W306",
-                    Category::Suspicious,
-                    Severity::Warning,
-                    line,
-                    format!("{}: invalid media type {:?} (use image/jpeg etc.)", who, v),
-                )],
-            );
+            diags.push(Diag::new(
+                "W306",
+                Category::Suspicious,
+                Severity::Warning,
+                line,
+                format!("{}: invalid media type {:?} (use image/jpeg etc.)", who, v)
+            ));
         }
         return;
     }
@@ -136,16 +133,13 @@ pub(crate) fn check_enum(
             return;
         }
         let who = if record.is_empty() { format!("line {}", line) } else { record.to_string() };
-        push_capped(
-            diags,
-            vec![Diag::new(
-                "W306",
-                Category::Suspicious,
-                Severity::Warning,
-                line,
-                format!("{}: invalid {} value {:?} (expected: {})", who, what, v, allowed.join("|")),
-            )],
-        );
+        diags.push(Diag::new(
+            "W306",
+            Category::Suspicious,
+            Severity::Warning,
+            line,
+            format!("{}: invalid {} value {:?} (expected: {})", who, what, v, allowed.join("|"))
+        ));
         return;
     }
     // 5.5.1 enum checks accept any case: the spec spells them lowercase but
@@ -166,16 +160,13 @@ pub(crate) fn check_enum(
         return;
     }
     let who = if record.is_empty() { format!("line {}", line) } else { record.to_string() };
-    push_capped(
-        diags,
-        vec![Diag::new(
-            "W306",
-            Category::Suspicious,
-            Severity::Warning,
-            line,
-            format!("{}: invalid {} value {:?} (expected: {})", who, what, v, allowed.join("|")),
-        )],
-    );
+    diags.push(Diag::new(
+        "W306",
+        Category::Suspicious,
+        Severity::Warning,
+        line,
+        format!("{}: invalid {} value {:?} (expected: {})", who, what, v, allowed.join("|"))
+    ));
 }
 
 /// End of run: OTHER enum values want a sibling PHRASE with the free text.
@@ -184,16 +175,13 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &EnumState) {
     for (rec, ptag, pline, tag, line) in &st.pending_other {
         if !st.phrased.contains(&(rec.clone(), ptag.clone(), *pline)) {
             let who = if rec.is_empty() { format!("line {}", line) } else { rec.clone() };
-            push_capped(
-                diags,
-                vec![Diag::new(
-                    "W306",
-                    Category::Suspicious,
-                    Severity::Info,
-                    *line,
-                    format!("{}: {} OTHER without a sibling PHRASE (add the free-text phrase)", who, tag),
-                )],
-            );
+            diags.push(Diag::new(
+                "W306",
+                Category::Suspicious,
+                Severity::Info,
+                *line,
+                format!("{}: {} OTHER without a sibling PHRASE (add the free-text phrase)", who, tag)
+            ));
         }
     }
 }

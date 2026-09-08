@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::diag::{push_capped, Category, Diag, Severity};
+use crate::diag::{Category, Diag, Severity};
 use crate::parse::{inner_ptr, is_pointer, truncate, Line};
 use crate::rules::individuals::People;
 
@@ -33,16 +33,13 @@ pub(crate) fn open_record(
     let mut cur = None;
     if !l.xref.is_empty() {
         if let Some((_, first_line)) = st.records.get(&l.xref) {
-            push_capped(
-                diags,
-                vec![Diag::new(
-                    "E003",
-                    Category::Correctness,
-                    Severity::Error,
-                    l.no,
-                    format!("duplicate xref {} (first at line {})", l.xref, first_line),
-                )],
-            );
+            diags.push(Diag::new(
+                "E003",
+                Category::Correctness,
+                Severity::Error,
+                l.no,
+                format!("duplicate xref {} (first at line {})", l.xref, first_line)
+            ));
         } else {
             st.records.insert(l.xref.clone(), (l.tag.clone(), l.no));
             match l.tag.as_str() {
@@ -59,11 +56,6 @@ pub(crate) fn open_record(
                 }
             }
         }
-    } else if l.tag != "HEAD" && l.tag != "TRLR" && l.tag != "SUBM" && l.tag != "SUBN" {
-        // Level-0 records without xref (except HEAD/TRLR) are suspicious.
-        if !l.tag.is_empty() && l.tag.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
-            // Tag sol al nivell 0: p. ex. "0 @X@ OBJE" ja cobert; altrament ho deixem passar.
-        }
     }
     cur
 }
@@ -79,16 +71,13 @@ pub(crate) fn indi_fam_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, xre
             st.indi_famc.entry(xref.to_string()).or_default().push((inner_ptr(&l.value).to_string(), l.no));
         }
     } else if !l.value.is_empty() {
-        push_capped(
-            diags,
-            vec![Diag::new(
-                "E201",
-                Category::Correctness,
-                Severity::Error,
-                l.no,
-                format!("{}: {} amb valor no punter: {}", xref, l.tag, truncate(&l.value, 40)),
-            )],
-        );
+        diags.push(Diag::new(
+            "E201",
+            Category::Correctness,
+            Severity::Error,
+            l.no,
+            format!("{}: {} with a non-pointer value: {}", xref, l.tag, truncate(&l.value, 40))
+        ));
     }
 }
 
@@ -108,16 +97,13 @@ pub(crate) fn fam_member_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, x
             "HUSB" | "WIFE" => {
                 let slot = if l.tag == "HUSB" { &mut st.fam_husb } else { &mut st.fam_wife };
                 if let Some((_, first)) = slot.get(xref) {
-                    push_capped(
-                        diags,
-                        vec![Diag::new(
-                            "E008",
-                            Category::Correctness,
-                            Severity::Error,
-                            l.no,
-                            format!("duplicate {} in {} (first at line {})", l.tag, xref, first),
-                        )],
-                    );
+                    diags.push(Diag::new(
+                        "E008",
+                        Category::Correctness,
+                        Severity::Error,
+                        l.no,
+                        format!("duplicate {} in {} (first at line {})", l.tag, xref, first)
+                    ));
                 } else {
                     slot.insert(xref.to_string(), (t, l.no));
                 }
@@ -157,16 +143,13 @@ pub(crate) fn finish_refs(diags: &mut Vec<Diag>, st: &Graph) {
                 "HUSB" | "WIFE" | "CHIL" => "INDI",
                 _ => "record",
             };
-            push_capped(
-                diags,
-                vec![Diag::new(
-                    "E201",
-                    Category::Correctness,
-                    Severity::Error,
-                    *line,
-                    format!("{}: {} {} points to a nonexistent {}", from, tag, target, kind),
-                )],
-            );
+            diags.push(Diag::new(
+                "E201",
+                Category::Correctness,
+                Severity::Error,
+                *line,
+                format!("{}: {} {} points to a nonexistent {}", from, tag, target, kind)
+            ));
         }
     }
 }
@@ -183,16 +166,13 @@ pub(crate) fn finish_symmetry(diags: &mut Vec<Diag>, st: &Graph) {
             let listed = st.fam_chil.get(f).map(|c| c.iter().any(|(c_x, _)| c_x == xref)).unwrap_or(false);
             let fam_exists = st.records.get(f).map(|r| r.0 == "FAM").unwrap_or(false);
             if fam_exists && !listed {
-                push_capped(
-                    diags,
-                    vec![Diag::new(
-                        "W202",
-                        Category::Suspicious,
-                        Severity::Warning,
-                        *fam_line,
-                        format!("{}: declares FAMC {} but the FAM does not list them as CHIL", xref, f),
-                    )],
-                );
+                diags.push(Diag::new(
+                    "W202",
+                    Category::Suspicious,
+                    Severity::Warning,
+                    *fam_line,
+                    format!("{}: declares FAMC {} but the FAM does not list them as CHIL", xref, f)
+                ));
             }
         }
     }
@@ -200,16 +180,13 @@ pub(crate) fn finish_symmetry(diags: &mut Vec<Diag>, st: &Graph) {
         for (c, chil_line) in chils {
             let declares = st.indi_famc.get(c).map(|v| v.iter().any(|(f, _)| f == fam)).unwrap_or(false);
             if !declares && st.records.contains_key(c) {
-                push_capped(
-                    diags,
-                    vec![Diag::new(
-                        "W202",
-                        Category::Suspicious,
-                        Severity::Warning,
-                        *chil_line,
-                        format!("{}: lists CHIL {} but the INDI declares no FAMC", fam, c),
-                    )],
-                );
+                diags.push(Diag::new(
+                    "W202",
+                    Category::Suspicious,
+                    Severity::Warning,
+                    *chil_line,
+                    format!("{}: lists CHIL {} but the INDI declares no FAMC", fam, c)
+                ));
             }
         }
     }

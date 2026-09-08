@@ -277,11 +277,3 @@ pub(crate) fn escape_json(s: &str) -> String {
     }
     o
 }
-
-/// No global cap during collection: a real file (516 `_UPD`)
-/// must not hide errors behind infos. The limit applies at output time
-/// via `--max N` (0 = unlimited). The name is kept to avoid touching
-/// every call site.
-pub(crate) fn push_capped(dst: &mut Vec<Diag>, mut v: Vec<Diag>) {
-    dst.append(&mut v);
-}

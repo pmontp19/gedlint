@@ -176,7 +176,7 @@ fn e101_conc_split_fix() {
     data.push(0xA9);
     data.extend_from_slice(" /Oso/\n0 TRLR\n".as_bytes());
     let r = lint_bytes(&data);
-    assert!(r.diags.iter().any(|d| d.code == "E101"), "cal E101, trobat: {:?}", r.diags);
+    assert!(r.diags.iter().any(|d| d.code == "E101"), "expected E101, got: {:?}", r.diags);
     let (fixed, applied) = fix_bytes(&data);
     assert!(!applied.is_empty());
     let r2 = lint_bytes(&fixed);
@@ -240,6 +240,16 @@ fn deat_y_without_date_is_not_longevity() {
     // DEAT Y without DATE = death with unknown date, not 8097 years.
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1902\n1 DEAT Y\n");
     assert!(!has(&g, "W301"));
+}
+
+#[test]
+fn deat_y_with_a_date_is_still_checked() {
+    // Issue 31: the old `indi_died_unknown` set (written, never read) looked
+    // like it was meant to exclude every DEAT Y from W301. It never did, and
+    // must not: a DEAT Y carrying a subordinate DATE is a real death year,
+    // so an impossible one still warns.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1902\n1 DEAT Y\n2 DATE 1850\n");
+    assert!(has(&g, "W301"), "{:?}", codes(&g));
 }
 
 #[test]
@@ -360,6 +370,27 @@ fn u501_lowercase_pedi() {
     // 5.5.1 lowercase PEDI values must be uppercase in 7.0.
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI birth\n0 @F1@ FAM\n1 CHIL @I1@\n");
     assert!(has(&g, "U501"));
+}
+
+#[test]
+fn u501_rela_reads_identically_at_both_levels() {
+    // Issue 29: the sublevel variant of U501 used to emit its message in
+    // Catalan while the level-1 variant was English. Both must read alike.
+    let l1 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 RELA ret\n");
+    let sub = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 RELA ret\n0 @I2@ INDI\n1 NAME C /D/\n");
+    let d1 = only(&l1, "U501");
+    let dsub = only(&sub, "U501");
+    assert!(d1.msg.contains("RELA removed in 7.0"), "{}", d1.msg);
+    assert_eq!(d1.msg, dsub.msg, "both U501 RELA variants must emit the same wording");
+}
+
+#[test]
+fn e201_non_pointer_value_message() {
+    // Issue 29: the E201 branch for a non-pointer FAMS/FAMC value used to
+    // emit its message in Catalan.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMS not-a-pointer\n");
+    let d = only(&g, "E201");
+    assert!(d.msg.contains("with a non-pointer value"), "{}", d.msg);
 }
 
 #[test]

@@ -2,9 +2,9 @@
 //! ages and children born before the marriage (W303/W304) and the duplicate
 //! heuristic (W302).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use crate::diag::{push_capped, Category, Diag, Severity};
+use crate::diag::{Category, Diag, Severity};
 use crate::parse::{norm_name, year_of, Line, Version};
 use crate::rules::graph::Graph;
 
@@ -13,9 +13,6 @@ use crate::rules::graph::Graph;
 pub(crate) struct People {
     pub(crate) indi_birth: HashMap<String, Option<i64>>,
     pub(crate) indi_death: HashMap<String, Option<i64>>,
-    // Dead with unknown date (DEAT Y without DATE): counts as dead
-    // but stays out of W301 (no year, no longevity to check).
-    pub(crate) indi_died_unknown: HashSet<String>,
     pub(crate) indi_name: HashMap<String, String>,
     pub(crate) indi_sex: HashMap<String, (String, usize)>,
     pub(crate) fam_marr: HashMap<String, Option<i64>>,
@@ -25,16 +22,13 @@ pub(crate) struct People {
 pub(crate) fn record_sex(diags: &mut Vec<Diag>, st: &mut People, l: &Line, xref: &str) {
     // E008: INDI.SEX is {0:1}.
     if let Some((_, first)) = st.indi_sex.get(xref) {
-        push_capped(
-            diags,
-            vec![Diag::new(
-                "E008",
-                Category::Correctness,
-                Severity::Error,
-                l.no,
-                format!("duplicate SEX in {} (first at line {})", xref, first),
-            )],
-        );
+        diags.push(Diag::new(
+            "E008",
+            Category::Correctness,
+            Severity::Error,
+            l.no,
+            format!("duplicate SEX in {} (first at line {})", xref, first)
+        ));
     } else {
         st.indi_sex.insert(xref.to_string(), (l.value.clone(), l.no));
     }
@@ -58,10 +52,10 @@ pub(crate) fn record_event_year(st: &mut People, l: &Line, xref: &str, kind: &st
             }
         }
     }
-    if l.tag == "DEAT" && l.value.trim() == "Y" {
-        // Dead with unknown date: not a year, stays out of W301.
-        st.indi_died_unknown.insert(xref.to_string());
-    }
+    // "DEAT Y" (dead, date unknown) records no year here, which is what
+    // keeps it out of the W301 checks in `finish_lifespans`: they need a
+    // birth year and a death year. A DEAT Y with a subordinate DATE still
+    // records the year via `record_sub_date`, and is checked like any other.
 }
 
 /// BIRT/DEAT/MARR DATE below level 1: the authoritative year for W301-W304.
@@ -72,8 +66,6 @@ pub(crate) fn record_sub_date(st: &mut People, l: &Line, cur_sub: &str, cur: &Op
                 if let Some(y) = year_of(&l.value) {
                     st.indi_birth.insert(xref, Some(y));
                 }
-            } else if kind == "FAM" && cur_sub == "MARR" {
-                // No-op: MARR is handled below.
             }
         }
     }
@@ -99,28 +91,22 @@ pub(crate) fn record_sub_date(st: &mut People, l: &Line, cur_sub: &str, cur: &Op
 pub(crate) fn flush_person(diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d: Option<i64>, line: usize) {
     if let (Some(bb), Some(dd)) = (b, d) {
         if dd < 10000 && bb < 10000 && dd < bb {
-            push_capped(
-                diags,
-                vec![Diag::new(
-                    "W301",
-                    Category::Suspicious,
-                    Severity::Warning,
-                    line,
-                    format!("{}: died ({}) before being born ({})", xref, dd, bb),
-                )],
-            );
+            diags.push(Diag::new(
+                "W301",
+                Category::Suspicious,
+                Severity::Warning,
+                line,
+                format!("{}: died ({}) before being born ({})", xref, dd, bb)
+            ));
         }
         if dd < 10000 && dd - bb > 105 {
-            push_capped(
-                diags,
-                vec![Diag::new(
-                    "W301",
-                    Category::Suspicious,
-                    Severity::Warning,
-                    line,
-                    format!("{}: {} - {} = {} years, please verify", xref, bb, dd, dd - bb),
-                )],
-            );
+            diags.push(Diag::new(
+                "W301",
+                Category::Suspicious,
+                Severity::Warning,
+                line,
+                format!("{}: {} - {} = {} years, please verify", xref, bb, dd, dd - bb)
+            ));
         }
     }
 }
@@ -159,19 +145,16 @@ pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Gra
                         let age = cb - pb;
                         let max = if rol == "mother" { 50 } else { 70 };
                         if age < 13 || age > max {
-                            push_capped(
-                                diags,
-                                vec![Diag::new(
-                                    "W303",
-                                    Category::Suspicious,
-                                    Severity::Warning,
-                                    child_line,
-                                    format!(
-                                        "{}: {} {} (b. {}) was {} at {}'s birth (b. {})",
-                                        fam, rol, px, pb, age, c, cb
-                                    ),
-                                )],
-                            );
+                            diags.push(Diag::new(
+                                "W303",
+                                Category::Suspicious,
+                                Severity::Warning,
+                                child_line,
+                                format!(
+                                    "{}: {} {} (b. {}) was {} at {}'s birth (b. {})",
+                                    fam, rol, px, pb, age, c, cb
+                                )
+                            ));
                         }
                     }
                 }
@@ -179,16 +162,13 @@ pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Gra
             // Child born before the marriage (when a MARR date exists).
             if let Some(Some(m)) = st.fam_marr.get(fam) {
                 if cb < *m {
-                    push_capped(
-                        diags,
-                        vec![Diag::new(
-                            "W304",
-                            Category::Suspicious,
-                            Severity::Warning,
-                            child_line,
-                            format!("{}: {} born ({}) before marriage ({})", fam, c, cb, m),
-                        )],
-                    );
+                    diags.push(Diag::new(
+                        "W304",
+                        Category::Suspicious,
+                        Severity::Warning,
+                        child_line,
+                        format!("{}: {} born ({}) before marriage ({})", fam, c, cb, m)
+                    ));
                 }
             }
         }
@@ -204,16 +184,13 @@ pub(crate) fn finish_sex(diags: &mut Vec<Diag>, st: &People, version: Version) {
             _ => matches!(v.trim(), "M" | "F" | "U"),
         };
         if !ok {
-            push_capped(
-                diags,
-                vec![Diag::new(
-                    "W305",
-                    Category::Suspicious,
-                    Severity::Warning,
-                    *line,
-                    format!("{}: invalid SEX ({}), expected M/F/U{}", xref, v, if version == Version::V70 { "/X" } else { "" }),
-                )],
-            );
+            diags.push(Diag::new(
+                "W305",
+                Category::Suspicious,
+                Severity::Warning,
+                *line,
+                format!("{}: invalid SEX ({}), expected M/F/U{}", xref, v, if version == Version::V70 { "/X" } else { "" })
+            ));
         }
     }
 }
@@ -239,16 +216,13 @@ pub(crate) fn finish_duplicates(diags: &mut Vec<Diag>, st: &People, graph: &Grap
         for a in 0..v.len() {
             for b in a + 1..v.len() {
                 if (v[a].1 - v[b].1).abs() <= 2 {
-                    push_capped(
-                        diags,
-                        vec![Diag::new(
-                            "W302",
-                            Category::Suspicious,
-                            Severity::Warning,
-                            graph.records.get(&v[b].0).map(|r| r.1).unwrap_or(0),
-                            format!("possible duplicate: {} (b. {}) vs {} (b. {})", v[a].0, v[a].1, v[b].0, v[b].1),
-                        )],
-                    );
+                    diags.push(Diag::new(
+                        "W302",
+                        Category::Suspicious,
+                        Severity::Warning,
+                        graph.records.get(&v[b].0).map(|r| r.1).unwrap_or(0),
+                        format!("possible duplicate: {} (b. {}) vs {} (b. {})", v[a].0, v[a].1, v[b].0, v[b].1)
+                    ));
                 }
             }
         }

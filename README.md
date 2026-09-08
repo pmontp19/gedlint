@@ -11,12 +11,12 @@ Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 
 ## Status
 
-Working MVP: `cargo test` (97 tests: 2 unit + 79 rule + 10 CLI + 6 golden), `cargo clippy` clean, `cargo llvm-cov` 91.4% regions (lib 92.4%, main 79.4%), release validated at 4.5MB in 0.13s, `cargo check --target wasm32-unknown-unknown` OK. Prebuilt binaries (linux/macOS/Windows) attached to releases. Validated against a real 520-person MyHeritage tree (found 175 strict-grammar errors the previous validator missed: HTML continuations without CONT, plus encoding quirks). Rule set audited against the 5.5.1 and 7.0 specs (E007/E008/E009/W306 from the registries); two rounds of hand-rolled mutation testing (15/19), all survivors covered with regression tests. External dataset audit (issue #9): official spec corpora vendored and pinned in `tests/golden.rs` — the FamilySearch 7.0 reference files and the GEDCOM Committee TGC551 pair lint without false positives.
+Working MVP: `cargo test` green across the unit tests and eight integration suites (rule fixtures, CLI, `--fix` end-to-end, config, engine fixes, baseline, golden corpora, registry), `cargo clippy --all-targets` clean, coverage kept above the 84% regions floor (`cargo llvm-cov`), release validated at 4.5MB in 0.13s, `cargo check --target wasm32-unknown-unknown` OK. Prebuilt binaries (linux/macOS/Windows) attached to releases. Validated against a real 520-person MyHeritage tree (found 175 strict-grammar errors the previous validator missed: HTML continuations without CONT, plus encoding quirks). Rule set audited against the 5.5.1 and 7.0 specs (E007/E008/E009/W306 from the registries); two rounds of hand-rolled mutation testing (15/19), all survivors covered with regression tests. External dataset audit (issue #9): official spec corpora vendored and pinned in `tests/golden.rs` — the FamilySearch 7.0 reference files and the GEDCOM Committee TGC551 pair lint without false positives.
 
 ## Usage
 
 ```
-gedlint [--fix [--only CODE] [--unsafe]] [--format text|json] [--severity error|warning|info] [--max N] [--verbose] [--no-color] [--quiet] <file.ged>
+gedlint [--fix [--only CODE] [--unsafe]] [--config PATH | --no-config] [--baseline FILE | --write-baseline FILE] [--format text|json] [--severity error|warning|info] [--max N] [--verbose] [--no-color] [--quiet] <file.ged>
 gedlint --explain [CODE]
 ```
 
@@ -24,7 +24,11 @@ Exit codes: 0 clean, 1 warnings, 2 errors.
 
 The default text output groups diagnostics by rule code (worst severity and most occurrences first, one line per code, `N occurrences (--verbose to list all)`) and ends with a `Categories:`/`Rules:` footer; `--verbose` lists every occurrence in the classic per-line format. The same grouping lives in the engine (`Report::grouped()`) and is shared with the GitHub Action's job summary and the web viewer, so the three cannot drift.
 
-`--explain W202` prints what the rule is about, what breaks in other genealogy programs when a file violates it and what to do instead; `--explain` alone lists every rule grouped by ruleset. A rule is addressable by code (`W202`) or by `<ruleset>/<name>` (`core/asymmetric-famc-chil`), the same two spellings the configuration will accept. Unknown rule: exit 2.
+`--explain W202` prints what the rule is about, what breaks in other genealogy programs when a file violates it and what to do instead; `--explain` alone lists every rule grouped by ruleset. A rule is addressable by code (`W202`) or by `<ruleset>/<name>` (`core/asymmetric-famc-chil`), the same two spellings the configuration accepts. Unknown rule: exit 2.
+
+Configuration is a `gedlint.toml` looked up next to the linted file and in every parent directory: it sets presets and per-rule severities, addressed by code or `<ruleset>/<name>`. An unknown rule, preset or spelling is an error, never a silent no-op. `--config PATH` names the file explicitly; `--no-config` skips discovery and runs the built-ins only.
+
+For adopting gedlint on a legacy tree: `--write-baseline FILE` records every current finding (keyed by rule code plus a line-independent message fingerprint, with counts) and exits 0; `--baseline FILE` then fails only on findings beyond the recorded counts. Findings fixed later show up as ratchet progress, and re-running `--write-baseline` prunes them.
 
 `--fix` only applies safe repairs (E001 orphan lines get a CONT prefix, E101 split CONC rejoined, trailing whitespace trimmed, classic Mac CR line endings normalized to LF) and always writes a `.bak` copy. `--max N` caps the text output (rule groups in the default view, individual diagnostics under `--verbose`; JSON is always complete); `--severity` sets the minimum level shown.
 
@@ -67,23 +71,29 @@ GitHub renders at most 10 annotations per severity per step; the job summary alw
 ## Design
 
 - **Linter, not just a validator**: categories (correctness / suspicious / style / upgrade), configurable severities, `--fix`. clippy/eslint model.
-- **`src/lib.rs`**: pure engine (`lint_str`, `lint_bytes`, `lint_reader`, `fix_bytes`, `compute_edits`/`apply_edits`, `Report::to_json`). No fs or process usage: compiles to WASM unchanged. Streaming line-by-line parsing (`BufRead`).
+- **Engine layout**: `src/lib.rs` is only the public API surface: re-exports plus the thin `lint_str` / `lint_bytes` / `lint_reader` entry points over the modules beside it (`diag` for the report, grouping and JSON, `parse` for the line grammar, `registry` for rule metadata, `rules` for the one streaming pass driving one module per domain, `fix` for structured safe repairs, `config` for `gedlint.toml`, `baseline` for the ratchet file). Nothing under `src/` except `main.rs` touches fs, process, env or net, so the engine compiles to WASM unchanged.
 - **`src/main.rs`**: thin CLI layer (hand-rolled args, zero dependencies, manual ANSI colors).
 - **`src/registry.rs`**: `RULES`, one `RuleMeta` per rule (code, name, ruleset, category, default severity, `fixable: Option<Applicability>`, title, why, remedy). Single source of truth for `--explain`, and for the config validator, the generated docs and the web viewer's finding card as they land. `tests/registry.rs` fails the build if a code the engine emits has no entry, or an entry names a code the engine never emits.
 - **Version**: detected via `HEAD.GEDC.VERS`; the rule set applies per version. `U5xx` rules flag the 5.5.1 to 7.0 upgrade path (see https://gedcom.io/migrate/).
 - **No global diagnostic cap**: every diagnostic is collected (a real file with 516 `_UPD` infos once hid errors behind a 200-item cap); output limiting is opt-in via `--max`.
-- **Tests**: `tests/rules.rs` (one minimal fixture per rule plus an own 7.0 fixture), `tests/cli.rs` (end-to-end: formats, exit codes, `--fix`/`.bak`, `--severity`, `--max`) and `tests/golden.rs` (vendored official corpora pinned: minimal/maximal 7.0, remarriage, same-sex, escapes, TGC551 CR/LF twins; provenance in `tests/fixtures/golden/README.md`).
+- **Tests**: one integration suite per area, no shared state: `tests/rules.rs` (minimal fixture per rule plus version behavior), `tests/cli.rs` and `tests/cli_fix.rs` (end-to-end: formats, exit codes, `--fix`/`.bak`, `--severity`, `--max`), `tests/config.rs`, `tests/fixes.rs`, `tests/baseline.rs`, `tests/registry.rs` and `tests/golden.rs` (vendored official corpora pinned: minimal/maximal 7.0, remarriage, same-sex, escapes, TGC551 CR/LF twins; provenance in `tests/fixtures/golden/README.md`).
 
 ## Rules
 
-Structural: E001 level (levels stop at 99, so a text line starting with a year is an orphan, not a jump; blank lines are ignored), E002 HEAD/TRLR (incl. HEAD-first, nothing after TRLR), E003 duplicate xref, E004 malformed xref, E005 orphan CONT/CONC, E007 CONC in 7.0 (reserved tag, spec 1.3), E008 duplicate singleton (SEX/HUSB/WIFE/GEDC, VERS scoped by its HEAD parent so GEDC.VERS and SOUR.VERS coexist, one detail substructure per event block), E009 missing required (HEAD.GEDC, GEDC.VERS).
-Encoding: E101 invalid UTF-8 / split CONC (MyHeritage bug) with `--fix` (skipped for declared ANSEL/ASCII), W102 BOM (silent in 7.0, which recommends it) / mixed line endings / control chars. Bare CR (classic Mac, TGC551) is a legal terminator: parsed like LF, normalized by `--fix`.
-Referential: E201 broken refs incl. level-2+ pointers (@VOID@ exempt), W202 FAMC/CHIL mismatch.
-Semantic: W301 death before birth / longevity >105 (DEAT Y without a date is excluded), W302 duplicates (name + birth ±2 years), W303 parent age, W304 child before marriage, W305 SEX (X valid only in 7.0), W306 enum values (ROLE/PEDI/QUAY/RESN/FAMC-STAT/NAME-TYPE/MEDI/LDS-STAT/DATA-EVEN from the registries; 7.0 exact, 5.5.1 case-insensitive; RESN and DATA.EVEN accept comma-separated lists; HEAD.CHAR validated; FILE.FORM media type; OTHER wants a PHRASE beside or under the value), W307 duplicate single-instance events with conflicting dates (repeatable OCCU/RESI/CENS exempt; a MARR/DIV pair separated by the counterpart is a serial marriage, not a conflict).
-Style/MyHeritage quirks: W401 URL inside PLAC, W402 non-standard NAME/DATE (NAME slash balance across CONC continuations; BET without AND and range order; parens; calendar escapes; one-sided FROM/TO periods are valid), W403 NOTE with HTML.
-Upgrade: U501 RELA/PEDI/BET/CHAR (7.0 changes, incl. out-of-order ranges), U502 vendor tags `_MARNM`/`_UPD`/Ancestry (kept as undocumented extensions, SCHMA recommended). E009 also covers EVEN/FACT without TYPE and LDS STAT without DATE (7.0 only).
+The rule code's number block says what domain a rule belongs to, and the block is stable API (RFC 014):
 
-Full entry for any code, in plain language: `gedlint --explain <CODE>`.
+| Block | Domain |
+|---|---|
+| `E0xx` | structural: levels, HEAD/TRLR placement, duplicate xrefs, required records |
+| `E1xx` / `W1xx` | encoding: UTF-8, split CONC, BOM, line endings, control characters |
+| `E2xx` / `W2xx` | referential: broken pointers, FAMC/CHIL symmetry |
+| `W3xx` | semantic: impossible dates, duplicates, parent ages, SEX, enum values, conflicting events |
+| `W4xx` | style and exporter quirks (PLAC URLs, NAME/DATE style, NOTE HTML) |
+| `U5xx` | 5.5.1 to 7.0 upgrade path |
+
+The registry (`RULES` in `src/registry.rs`) is the single source of truth for what each rule does, why it matters to consumer software and how to fix a finding; the tests keep the engine and the registry from drifting apart, and this README no longer duplicates them.
+
+Full entry for any code, in plain language: `gedlint --explain <CODE>` (`--explain` alone lists every rule by ruleset).
 
 ## State of the art (research summary, Sep 2026)
 

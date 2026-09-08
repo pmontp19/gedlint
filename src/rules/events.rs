@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::diag::{push_capped, Category, Diag, Severity};
+use crate::diag::{Category, Diag, Severity};
 use crate::parse::{Line, Version};
 
 // Common individual/family events whose detail singletons are {0:1}.
@@ -130,19 +130,16 @@ pub(crate) fn check_detail_singletons(
                 }
                 let key = (rec.to_string(), ev.clone(), inst, l.tag.clone());
                 if let Some(first) = st.event_seen.get(&key) {
-                    push_capped(
-                        diags,
-                        vec![Diag::new(
-                            "E008",
-                            Category::Correctness,
-                            Severity::Error,
-                            l.no,
-                            format!(
-                                "duplicate {} in {} {} (block {}, first at line {})",
-                                l.tag, rec, ev, inst, first
-                            ),
-                        )],
-                    );
+                    diags.push(Diag::new(
+                        "E008",
+                        Category::Correctness,
+                        Severity::Error,
+                        l.no,
+                        format!(
+                            "duplicate {} in {} {} (block {}, first at line {})",
+                            l.tag, rec, ev, inst, first
+                        )
+                    ));
                 } else {
                     st.event_seen.insert(key, l.no);
                 }
@@ -159,29 +156,23 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Events, version: Version) {
     if version == Version::V70 {
         for ((rec, tag, inst), line) in &st.ef_line {
             if !st.ef_typed.contains(&(rec.clone(), tag.clone(), *inst)) {
-                push_capped(
-                    diags,
-                    vec![Diag::new(
-                        "E009",
-                        Category::Correctness,
-                        Severity::Error,
-                        *line,
-                        format!("{}: {} without required TYPE (7.0)", rec, tag),
-                    )],
-                );
-            }
-        }
-        for (rec, ev, sline) in &st.lds_stat {
-            push_capped(
-                diags,
-                vec![Diag::new(
+                diags.push(Diag::new(
                     "E009",
                     Category::Correctness,
                     Severity::Error,
-                    *sline,
-                    format!("{}: {} STAT without required DATE (7.0)", rec, ev),
-                )],
-            );
+                    *line,
+                    format!("{}: {} without required TYPE (7.0)", rec, tag)
+                ));
+            }
+        }
+        for (rec, ev, sline) in &st.lds_stat {
+            diags.push(Diag::new(
+                "E009",
+                Category::Correctness,
+                Severity::Error,
+                *sline,
+                format!("{}: {} STAT without required DATE (7.0)", rec, ev)
+            ));
         }
     }
 
@@ -209,19 +200,16 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Events, version: Version) {
                     if pval != &hit.1 {
                         let excused = excusers.iter().any(|d| *d > *pline && *d < hit.2);
                         if !excused {
-                            push_capped(
-                                diags,
-                                vec![Diag::new(
-                                    "W307",
-                                    Category::Suspicious,
-                                    Severity::Warning,
-                                    hit.2,
-                                    format!(
-                                        "{}: duplicate {} with conflicting dates ({} vs {})",
-                                        rec, ev, pval, hit.1
-                                    ),
-                                )],
-                            );
+                            diags.push(Diag::new(
+                                "W307",
+                                Category::Suspicious,
+                                Severity::Warning,
+                                hit.2,
+                                format!(
+                                    "{}: duplicate {} with conflicting dates ({} vs {})",
+                                    rec, ev, pval, hit.1
+                                )
+                            ));
                             prev = None;
                             continue;
                         }
