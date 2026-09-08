@@ -19,6 +19,7 @@
 
 ## Quality gates (run all three)
 
+- `cargo fmt --check` (the toolchain is pinned in `rust-toolchain.toml`, so this matches CI)
 - `cargo test` (gates: rule fixtures in tests/rules.rs, CLI in tests/cli.rs)
 - `cargo clippy --all-targets` (must be clean)
 - `cargo llvm-cov --summary-only --all-targets` (floor: 84% regions total; raise it when you add code)
