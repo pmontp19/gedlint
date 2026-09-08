@@ -1,7 +1,17 @@
 //! One rule per test with minimal fixtures (acceptance criterion 5).
 //! Each test builds the smallest GEDCOM that triggers a single rule.
 
-use gedlint::{Diag, Severity, Version, compute_edits, fix_bytes, lint_bytes, lint_str};
+use gedlint::{Diag, FixSelection, Severity, Version, compute_edits, fix_bytes, fix_bytes_with, lint_bytes, lint_str};
+
+
+fn codes_with(input: &str, preset: &str) -> Vec<String> {
+    let cfg = gedlint::parse_config(&format!("[lints]\npresets = [\"{}\"]\n", preset)).unwrap();
+    gedlint::lint_str_with(input, &cfg).diags.iter().map(|d| d.code.to_string()).collect()
+}
+
+fn has_with(input: &str, code: &str, preset: &str) -> bool {
+    codes_with(input, preset).iter().any(|c| c == code)
+}
 
 fn codes(input: &str) -> Vec<String> {
     lint_str(input).diags.iter().map(|d| d.code.to_string()).collect()
@@ -1343,4 +1353,206 @@ fn json_carries_the_engine_groups() {
         "{}",
         j
     );
+}
+
+#[test]
+fn w601_no_comma_in_surname() {
+    // Assert exactly two tokens inside the surname slashes!
+    let g2 = wrap551("0 @I1@ INDI\n1 NAME A /Cognom1, Cognom2/\n");
+    assert!(has_with(&g2, "W601", "hispanic-naming"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /Cognom1 Cognom2/\n");
+    assert!(!has_with(&ok, "W601", "hispanic-naming"));
+}
+
+#[test]
+fn w601_fires_on_surn_subtag_alone() {
+    // The defect lives ONLY in the structured subtag; the NAME value is clean.
+    let g = wrap551("0 @I1@ INDI\n1 NAME Maria /Montpeo Osso/\n2 SURN Montpeo, Osso\n");
+    assert!(has_with(&g, "W601", "hispanic-naming"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME Maria /Montpeo Osso/\n2 SURN Montpeo Osso\n");
+    assert!(!has_with(&ok, "W601", "hispanic-naming"));
+}
+
+#[test]
+fn w601_name_and_surn_defect_is_one_diagnostic() {
+    // Same defect in both places: one defect, one diagnostic (why says so).
+    let g = wrap551("0 @I1@ INDI\n1 NAME Maria /Montpeo, Osso/\n2 SURN Montpeo, Osso\n");
+    let n = codes_with(&g, "hispanic-naming").iter().filter(|c| c.as_str() == "W601").count();
+    assert_eq!(n, 1, "exactly one W601 per record: {:?}", codes_with(&g, "hispanic-naming"));
+}
+
+#[test]
+fn w601_repair_ignores_three_tokens() {
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Cognom1, Cognom2, Cognom3/\n0 TRLR\n".to_vec();
+    let (_fixed, applied) = fix_bytes(&data);
+    assert!(!applied.iter().any(|a| a.contains("W601")));
+    
+    // Repair works for exactly two tokens
+    let data2 = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Cognom1, Cognom2/\n0 TRLR\n".to_vec();
+    let (fixed2, applied2) = fix_bytes(&data2);
+    assert!(applied2.iter().any(|a| a.contains("W601")));
+    assert!(String::from_utf8_lossy(&fixed2).contains("/Cognom1 Cognom2/"));
+}
+
+#[test]
+fn w601_repair_covers_surn_same_conservative_shape() {
+    // Two tokens in 2 SURN: safe repair.
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME Maria /Montpeo Osso/\n2 SURN Montpeo, Osso\n0 TRLR\n".to_vec();
+    let (fixed, applied) = fix_bytes(&data);
+    assert!(applied.iter().any(|a| a.contains("W601")));
+    assert!(String::from_utf8_lossy(&fixed).contains("2 SURN Montpeo Osso"));
+
+    // Three tokens in 2 SURN: reported by the rule, never repaired.
+    let data3 = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n2 SURN Un, Dos, Tres\n0 TRLR\n".to_vec();
+    let (_f3, applied3) = fix_bytes(&data3);
+    assert!(!applied3.iter().any(|a| a.contains("W601")));
+
+    // A NOTE value that contains the tag text is not mistaken for the line.
+    let note = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 NOTE his SURN was Un, Dos\n0 TRLR\n".to_vec();
+    let (f2, applied2) = fix_bytes(&note);
+    assert!(!applied2.iter().any(|a| a.contains("W601")));
+    assert!(String::from_utf8_lossy(&f2).contains("NOTE his SURN was Un, Dos"));
+
+    // A SURN under some other level-1 tag (here _MARNM) is out of scope:
+    // the diagnostic does not fire there, so neither may the repair.
+    let stray = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Prat/\n1 _MARNM Un, Dos\n2 SURN Un, Dos\n0 TRLR\n".to_vec();
+    let sel = FixSelection { allow_unsafe: true, ..Default::default() };
+    let (f3, applied3) = fix_bytes_with(&stray, &sel);
+    assert!(!applied3.iter().any(|a| a.contains("W601") || a.contains("W702")));
+    assert!(String::from_utf8_lossy(&f3).contains("2 SURN Un, Dos"));
+}
+
+#[test]
+fn w602_no_married_name() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n2 _MARNM C\n");
+    assert!(has_with(&g, "W602", "hispanic-naming"));
+    
+    // W602 produces no edit
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n2 _MARNM C\n0 TRLR\n".to_vec();
+    let edits = compute_edits(&data);
+    assert!(!edits.iter().any(|e| e.code == "W602"));
+}
+
+#[test]
+fn w603_no_abbreviated_given_name() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME Fco. /Perez/\n");
+    assert!(has_with(&g, "W603", "hispanic-naming"));
+}
+
+#[test]
+fn w603_fires_on_givn_subtag_alone() {
+    // The abbreviation lives ONLY in 2 GIVN; the NAME value is clean.
+    let g = wrap551("0 @I1@ INDI\n1 NAME Fco /Perez/\n2 GIVN Fco.\n");
+    assert!(has_with(&g, "W603", "hispanic-naming"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME Fco /Perez/\n2 GIVN Francesc\n");
+    assert!(!has_with(&ok, "W603", "hispanic-naming"));
+
+    // Same abbreviation in NAME and GIVN: one diagnostic.
+    let both = wrap551("0 @I1@ INDI\n1 NAME Fco. /Perez/\n2 GIVN Fco.\n");
+    let n = codes_with(&both, "hispanic-naming").iter().filter(|c| c.as_str() == "W603").count();
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn w701_polluted_name() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME Joan (b. 1850) /Perez/\n");
+    assert!(has_with(&g, "W701", "hygiene"));
+    let g2 = wrap551("0 @I1@ INDI\n1 NAME Joan /Perez (twin)/\n");
+    assert!(has_with(&g2, "W701", "hygiene"));
+    
+    // legitimate names it must not flag, including Catalan house name
+    let ok = wrap551("0 @I1@ INDI\n1 NAME Joan /Perez (cal Ferrer)/\n");
+    assert!(!has_with(&ok, "W701", "hygiene"));
+    let ok2 = wrap551("0 @I1@ INDI\n1 NAME Joan /Perez (can X)/\n");
+    assert!(!has_with(&ok2, "W701", "hygiene"));
+    let ok3 = wrap551("0 @I1@ INDI\n1 NAME Joan /Perez (Mas Y)/\n");
+    assert!(!has_with(&ok3, "W701", "hygiene"));
+}
+
+#[test]
+fn w701_fires_on_surn_subtag_alone() {
+    // The pollution lives ONLY in 2 SURN; the NAME value is clean.
+    let g = wrap551("0 @I1@ INDI\n1 NAME Pere /Valles/\n2 SURN Valles (moliner)\n");
+    assert!(has_with(&g, "W701", "hygiene"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME Pere /Valles/\n2 SURN Valles\n");
+    assert!(!has_with(&ok, "W701", "hygiene"));
+
+    // Same pollution in NAME and SURN: one diagnostic.
+    let both = wrap551("0 @I1@ INDI\n1 NAME Pere /Valles (moliner)/\n2 SURN Valles (moliner)\n");
+    let n = codes_with(&both, "hygiene").iter().filter(|c| c.as_str() == "W701").count();
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn w702_all_caps_name() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME Joan /PEREZ/\n");
+    assert!(has_with(&g, "W702", "hygiene"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME Joan /Perez/\n");
+    assert!(!has_with(&ok, "W702", "hygiene"));
+}
+
+#[test]
+fn w702_fires_on_surn_subtag_alone() {
+    // The all-caps surname lives ONLY in 2 SURN; the NAME value is clean.
+    let g = wrap551("0 @I1@ INDI\n1 NAME Anna /Puig/\n2 SURN PUIG SOLE\n");
+    assert!(has_with(&g, "W702", "hygiene"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME Anna /Puig/\n2 SURN Puig Sole\n");
+    assert!(!has_with(&ok, "W702", "hygiene"));
+
+    // All-caps in both NAME slot and SURN: one diagnostic.
+    let both = wrap551("0 @I1@ INDI\n1 NAME Anna /PUIG SOLE/\n2 SURN PUIG SOLE\n");
+    let n = codes_with(&both, "hygiene").iter().filter(|c| c.as_str() == "W702").count();
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn w702_surn_repair_is_maybe_incorrect_only() {
+    // A bare --fix (Safe only) must not touch the SURN value.
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME Anna /Puig/\n2 SURN PUIG SOLE\n0 TRLR\n".to_vec();
+    let (f1, applied) = fix_bytes(&data);
+    assert!(!applied.iter().any(|a| a.contains("W702")));
+    assert!(String::from_utf8_lossy(&f1).contains("2 SURN PUIG SOLE"));
+
+    // --unsafe reaches it.
+    let sel = FixSelection { allow_unsafe: true, ..Default::default() };
+    let (fixed, applied2) = fix_bytes_with(&data, &sel);
+    assert!(applied2.iter().any(|a| a.contains("W702")));
+    assert!(String::from_utf8_lossy(&fixed).contains("2 SURN Puig Sole"));
+}
+
+#[test]
+fn w703_malformed_place() {
+    let g = wrap551("0 @I1@ INDI\n1 BIRT\n2 PLAC Alcover, , Tarragona\n");
+    assert!(has_with(&g, "W703", "hygiene"));
+    let g2 = wrap551("0 @I1@ INDI\n1 BIRT\n2 PLAC Alcover,,Tarragona\n");
+    assert!(has_with(&g2, "W703", "hygiene"));
+    
+    // No W703 double-reporting on URL (W401 already reports it)
+    let url = wrap551("0 @I1@ INDI\n1 BIRT\n2 PLAC Reus https://example.com/x\n");
+    assert!(has(&url, "W401"));
+    assert!(!has_with(&url, "W703", "hygiene"));
+    
+    // Doubled commas repair is Safe
+    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 BIRT\n2 PLAC Alcover, , Tarragona\n0 TRLR\n".to_vec();
+    let (fixed, applied) = fix_bytes(&data);
+    assert!(applied.iter().any(|a| a.contains("W703")));
+    assert!(String::from_utf8_lossy(&fixed).contains("PLAC Alcover, Tarragona"));
+}
+
+
+
+#[test]
+fn hispanic_naming_rules_are_off_by_default() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME Fco. /A, B/\n2 GIVN Fco.\n2 SURN A, B\n2 _MARNM C\n");
+    assert!(!has(&g, "W601"));
+    assert!(!has(&g, "W602"));
+    assert!(!has(&g, "W603"));
+}
+
+#[test]
+fn hygiene_rules_are_off_by_default() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A (1) /B/\n2 SURN B (2)\n0 @I2@ INDI\n1 NAME A /CAPS/\n2 SURN CAPS\n1 BIRT\n2 PLAC X, , Y\n");
+    assert!(!has(&g, "W701"));
+    assert!(!has(&g, "W702"));
+    assert!(!has(&g, "W703"));
 }

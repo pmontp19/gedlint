@@ -449,3 +449,11 @@ fn config_flag_without_value_exit_2() {
     assert_eq!(o.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&o.stderr).contains("--config needs a path"));
 }
+
+#[test]
+fn w702_produces_no_edit_under_bare_fix() {
+    let input = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /CAPS/\n0 TRLR\n";
+    let (fixed, applied) = gedlint::fix_bytes(input.as_bytes());
+    assert!(!applied.iter().any(|a| a.contains("W702")));
+    assert_eq!(fixed, input.as_bytes());
+}

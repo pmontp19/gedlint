@@ -15,6 +15,8 @@ pub(crate) mod names;
 pub(crate) mod structure;
 pub(crate) mod style;
 pub(crate) mod upgrade;
+pub(crate) mod hispanic_naming;
+pub(crate) mod hygiene;
 
 use std::collections::HashSet;
 
@@ -81,7 +83,7 @@ pub(crate) fn lint_lines(text: &str) -> Report {
         };
         // A NAME run ends here: any level <= 1 line closes the CONC/CONT run.
         if lvl <= 1 {
-            names::flush(&mut diags, &mut names.name_buf, &mut people.indi_name);
+            names::flush(&mut diags, &mut names, &mut people.indi_name);
         }
         structure::check_position(&mut diags, &mut structure, l, lvl);
         structure::check_level_jump(&mut diags, &mut structure, l, lvl);
@@ -104,6 +106,7 @@ pub(crate) fn lint_lines(text: &str) -> Report {
             }
             // Birth/death resolve at record change via the already stored maps.
             cur_sub.clear();
+            names.reported.clear();
             events.cur_event = None;
             structure::enter_record(&mut structure, l);
             cur = graph::open_record(&mut diags, &mut graph, &mut people, l);
@@ -138,6 +141,8 @@ pub(crate) fn lint_lines(text: &str) -> Report {
                     }
                 }
                 style::check_plac_url_record(&mut diags, l);
+                hygiene::check_malformed_place(&mut diags, l);
+                hispanic_naming::check_married_name(&mut diags, l);
                 style::check_note_html(&mut diags, l);
                 upgrade::check_rela_record(&mut diags, l, version);
                 upgrade::check_vendor_tag(&mut diags, l, version);
@@ -159,6 +164,12 @@ pub(crate) fn lint_lines(text: &str) -> Report {
 
         // Level >= 2.
         names::continue_value(&mut diags, &mut names, &mut people.indi_name, l, lvl);
+        // SURN/GIVN under the NAME: the structured fields the hispanic-naming
+        // and hygiene rulesets also read. After continue_value, so a defect
+        // in both 1 NAME and the subtag is one diagnostic, not two.
+        if parent_tag == "NAME" {
+            names::check_subtag(&mut diags, &mut names, &l.tag, &l.value, l.no);
+        }
         structure::check_head_vers(&mut diags, &mut structure, l, lvl, &parent);
         graph::sub_pointer(&mut graph, l, &cur);
         // W306 enum values + OTHER/PHRASE tracking.
@@ -196,6 +207,8 @@ pub(crate) fn lint_lines(text: &str) -> Report {
         individuals::record_sub_date(&mut people, l, &cur_sub, &cur);
         upgrade::check_pedi_case(&mut diags, l, version);
         style::check_plac_url(&mut diags, l);
+        hygiene::check_malformed_place(&mut diags, l);
+        hispanic_naming::check_married_name(&mut diags, l);
         // DATE with suspicious format (non-ENG months, lowercase "about"...).
         if l.tag == "DATE" && !l.value.is_empty() {
             dates::check_date_style(&mut diags, l.no, &l.value, version);
@@ -203,7 +216,7 @@ pub(crate) fn lint_lines(text: &str) -> Report {
     }
 
     // A NAME run ending at EOF (NAME directly before TRLR) still needs W402.
-    names::flush(&mut diags, &mut names.name_buf, &mut people.indi_name);
+    names::flush(&mut diags, &mut names, &mut people.indi_name);
 
     structure::finish(&mut diags, &structure);
     enums::finish(&mut diags, &enum_state);
