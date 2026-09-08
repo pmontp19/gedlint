@@ -234,9 +234,13 @@ pathological (`Jos<C3>` + `2 CONC <A9><A9> x`). `Vec<String>` cannot hold those 
 and a lossy conversion would corrupt exactly the files the repair exists for. Rules that
 work on text build one with `line.into_bytes()`.
 
-`compute_edits` returns edits in **repair priority order** (`E001`, then `E101`, then
-`style`), because `apply_edits` keeps the first of two overlapping edits and a structural
-repair has to win over a cosmetic one on the same line. A dropped edit still reserves its
+`compute_edits` returns edits in **repair priority order** (`E001`, then `style`, then
+`E101`), because `apply_edits` keeps the first of two overlapping edits and the pass
+that runs first decides what a later pass on the same lines reads. `E001` precedes
+`E101` because the `CONT` prefix is what the rejoin reads; `style` precedes `E101`
+because trailing whitespace must be gone before the rejoin absorbs the line, or a pad
+lands between the two halves of the cut UTF-8 sequence and the repaired file is still
+invalid (#36). A dropped edit still reserves its
 lines, so a lower-priority edit cannot slip inside the range of a repair that is merely
 postponed. Trailing whitespace has no rule code (the linter does not report it), so its
 edits carry the pseudo-code `style`, which is what the `--fix` report line has always

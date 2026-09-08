@@ -241,8 +241,10 @@ fn a_rejoin_keeps_bytes_that_are_not_valid_utf8() {
 
 #[test]
 fn compute_edits_returns_repairs_in_priority_order() {
-    // Structural before cosmetic: the CONT prefix is what the rejoin reads,
-    // and trimming a line the rejoin is about to absorb would change it.
+    // The pass that runs first decides what a later pass on the same lines
+    // reads: E001 before E101 (the CONT prefix is what the rejoin reads),
+    // and style before E101 (a pad the rejoin absorbs must not land
+    // between the halves of the cut character, #36).
     let data = [HEAD, b"0 @S1@ SOUR\n1 DATA\n2 TEXT part  \norphan line  \n0 TRLR\n"].concat();
     let codes: Vec<&str> = compute_edits(&data).iter().map(|e| e.code).collect();
     assert_eq!(codes, vec!["E001", "style", "style"]);
@@ -329,7 +331,12 @@ fn fix_bytes_only_repairs_what_it_reports() {
     data.extend_from_slice(b"\n0 TRLR\n");
 
     let (fixed, applied) = fix_bytes(&data);
-    assert_eq!(applied, vec!["E101: rejoined 1 CONC lines with split UTF-8"]);
+    // style runs first (#36), so the whitespace-only line is trimmed and
+    // reported before the rejoin absorbs it.
+    assert_eq!(
+        applied,
+        vec!["style: trimmed trailing whitespace on 1 lines", "E101: rejoined 1 CONC lines with split UTF-8"]
+    );
     let text = String::from_utf8_lossy(&fixed).into_owned();
     assert!(!text.contains("CONT"), "no CONT was reported, so none may appear: {}", text);
     // The exposed line is a genuine E001, and a second run repairs it.
@@ -345,7 +352,7 @@ fn fix_bytes_matches_a_hand_applied_selection() {
     // in the same order must give the same bytes.
     let data = [HEAD, b"0 @S1@ SOUR\n1 DATA\n2 TEXT part  \norphan line  \n0 TRLR\n"].concat();
     let mut cur = data.clone();
-    for code in ["E001", "E101", "style"] {
+    for code in ["E001", "style", "E101"] {
         let chosen: Vec<Edit> = compute_edits(&cur).into_iter().filter(|e| e.code == code).collect();
         if chosen.is_empty() {
             continue;
@@ -401,6 +408,67 @@ fn a_conc_tag_without_a_space_is_still_rejoined() {
     let (fixed, applied) = fix_bytes(&data);
     assert_eq!(applied, vec!["E101: rejoined 1 CONC lines with split UTF-8"]);
     assert!(String::from_utf8(fixed).unwrap().contains("1 NAME José /Oso/"));
+}
+
+#[test]
+fn a_padded_anchor_is_trimmed_before_the_rejoin() {
+    // MyHeritage pads lines with trailing spaces. Trimmed after the rejoin,
+    // the pad lands between the two halves of the cut character and the
+    // file is still not valid UTF-8 (#36): --fix reports success and E101
+    // fires again. Trimming runs first, so the pad is gone before the
+    // rejoin absorbs the line.
+    let mut data = Vec::new();
+    data.extend_from_slice(HEAD);
+    data.extend_from_slice(b"0 @I1@ INDI\n1 NAME Jos");
+    data.push(0xC3);
+    data.extend_from_slice(b"  \n2 CONC ");
+    data.push(0xA9);
+    data.extend_from_slice(b" /Oso/\n0 TRLR\n");
+
+    let (fixed, applied) = fix_bytes(&data);
+    assert_eq!(
+        applied,
+        vec!["style: trimmed trailing whitespace on 1 lines", "E101: rejoined 1 CONC lines with split UTF-8"]
+    );
+    let text = String::from_utf8(fixed.clone()).unwrap();
+    assert!(text.contains("1 NAME José /Oso/"), "{}", text);
+    assert!(!lint_bytes(&fixed).diags.iter().any(|d| d.code == "E101"), "{}", text);
+
+    // Repairing twice changes nothing.
+    let (again, applied_again) = fix_bytes(&fixed);
+    assert_eq!(again, fixed);
+    assert!(applied_again.is_empty(), "{:?}", applied_again);
+}
+
+#[test]
+fn a_crlf_rejoin_stays_crlf() {
+    // The joined line must take the anchor's CR: a bare LF inside an
+    // otherwise CRLF file is exactly the W102 the linter then reports (#36).
+    let mut data = Vec::new();
+    data.extend_from_slice(b"0 HEAD\r\n1 GEDC\r\n2 VERS 5.5.1\r\n0 @I1@ INDI\r\n1 NAME Jos");
+    data.push(0xC3);
+    data.extend_from_slice(b"\r\n2 CONC ");
+    data.push(0xA9);
+    data.extend_from_slice(b" /Oso/\r\n0 TRLR\r\n");
+
+    let (fixed, applied) = fix_bytes(&data);
+    assert_eq!(applied, vec!["E101: rejoined 1 CONC lines with split UTF-8"]);
+    let expected = {
+        let mut e = b"0 HEAD\r\n1 GEDC\r\n2 VERS 5.5.1\r\n0 @I1@ INDI\r\n1 NAME Jos".to_vec();
+        e.extend_from_slice(&[0xC3, 0xA9]);
+        e.extend_from_slice(b" /Oso/\r\n0 TRLR\r\n");
+        e
+    };
+    assert_eq!(fixed, expected);
+    assert!(fixed.windows(2).all(|w| w[1] != b'\n' || w[0] == b'\r'), "every LF is preceded by a CR");
+    let diags = lint_bytes(&fixed).diags;
+    assert!(!diags.iter().any(|d| d.code == "W102"), "{:?}", diags.iter().map(|d| d.code).collect::<Vec<_>>());
+    assert!(!diags.iter().any(|d| d.code == "E101"));
+
+    // Repairing twice changes nothing.
+    let (again, applied_again) = fix_bytes(&fixed);
+    assert_eq!(again, fixed);
+    assert!(applied_again.is_empty(), "{:?}", applied_again);
 }
 
 #[test]
