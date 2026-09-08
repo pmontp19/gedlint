@@ -18,7 +18,7 @@ pub(crate) mod upgrade;
 
 use std::collections::HashSet;
 
-use crate::diag::{push_capped, Category, Diag, Report, Severity};
+use crate::diag::{Category, Diag, Report, Severity};
 use crate::parse::{detect_version, parse_line, truncate, Line, BOM_LEN};
 
 use enums::EnumState;
@@ -69,16 +69,13 @@ pub(crate) fn lint_lines(text: &str) -> Report {
             if l.raw.trim().is_empty() {
                 continue;
             }
-            push_capped(
-                &mut diags,
-                vec![Diag::new(
-                    "E001",
-                    Category::Correctness,
-                    Severity::Error,
-                    l.no,
-                    format!("malformed line (non-numeric level): {}", truncate(&l.raw, 60)),
-                )],
-            );
+            diags.push(Diag::new(
+                "E001",
+                Category::Correctness,
+                Severity::Error,
+                l.no,
+                format!("malformed line (non-numeric level): {}", truncate(&l.raw, 60)),
+            ));
             structure.prev_level = None;
             continue;
         };
@@ -197,9 +194,6 @@ pub(crate) fn lint_lines(text: &str) -> Report {
         }
         upgrade::check_rela_sub(&mut diags, l, version);
         individuals::record_sub_date(&mut people, l, &cur_sub, &cur);
-        if l.tag == "DATE" && cur_sub == "BIRT" {
-            // Already handled.
-        }
         upgrade::check_pedi_case(&mut diags, l, version);
         style::check_plac_url(&mut diags, l);
         // DATE with suspicious format (non-ENG months, lowercase "about"...).
@@ -222,7 +216,6 @@ pub(crate) fn lint_lines(text: &str) -> Report {
     individuals::finish_duplicates(&mut diags, &people, &graph);
 
     let individuals = people.indi_birth.len();
-    let _count_dbg = graph.fam_chil.len() + graph.fam_husb.len() + graph.fam_wife.len();
     let mut families_set: HashSet<&String> = HashSet::new();
     for k in graph.fam_chil.keys().chain(graph.fam_husb.keys()).chain(graph.fam_wife.keys()) {
         families_set.insert(k);

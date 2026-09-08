@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::diag::{push_capped, Category, Diag, Severity};
+use crate::diag::{Category, Diag, Severity};
 use crate::parse::{truncate, Line};
 
 /// The NAME run currently open: (xref, line, accumulated value).
@@ -23,16 +23,13 @@ pub(crate) fn flush(
     if let Some((xref, line, val)) = buf.take() {
         names.insert(xref.clone(), val.clone());
         if val.matches('/').count() % 2 != 0 {
-            push_capped(
-                diags,
-                vec![Diag::new(
-                    "W402",
-                    Category::Style,
-                    Severity::Warning,
-                    line,
-                    format!("{}: NAME with unbalanced slashes: {}", xref, truncate(&val, 50)),
-                )],
-            );
+            diags.push(Diag::new(
+                "W402",
+                Category::Style,
+                Severity::Warning,
+                line,
+                format!("{}: NAME with unbalanced slashes: {}", xref, truncate(&val, 50))
+            ));
         }
     }
 }

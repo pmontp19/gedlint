@@ -50,7 +50,7 @@ pub fn lint_str(input: &str) -> Report {
 /// emit nothing and are not counted for the exit code; rules with a level
 /// override emit at that severity.
 pub fn lint_str_with(input: &str, cfg: &Config) -> Report {
-    lint_bytes_split(input.as_bytes(), true, cfg)
+    lint_bytes_split(input.as_bytes(), cfg)
 }
 
 /// Lint raw bytes (detects UTF-8 / BOM / CRLF before decoding).
@@ -61,10 +61,10 @@ pub fn lint_bytes(data: &[u8]) -> Report {
 
 /// Lint raw bytes under a configuration (see `lint_str_with`).
 pub fn lint_bytes_with(data: &[u8], cfg: &Config) -> Report {
-    lint_bytes_split(data, false, cfg)
+    lint_bytes_split(data, cfg)
 }
 
-fn lint_bytes_split(data: &[u8], _already_str: bool, cfg: &Config) -> Report {
+fn lint_bytes_split(data: &[u8], cfg: &Config) -> Report {
     let data = normalize_newlines(data);
     let text = String::from_utf8_lossy(&data).into_owned();
     let (version, charset) = scan_head(&text);
