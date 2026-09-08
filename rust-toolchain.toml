@@ -1,0 +1,7 @@
+# Single source of truth for the toolchain, locally and in CI.
+# Keeps the clippy gate identical everywhere: new clippy releases add lints,
+# so an unpinned "stable" lets local and CI disagree on the same commit (#43).
+[toolchain]
+channel = "stable"
+components = ["clippy", "llvm-tools-preview"]
+targets = ["wasm32-unknown-unknown"]
