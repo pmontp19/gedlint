@@ -316,3 +316,136 @@ fn output_is_byte_identical_across_runs() {
         assert_eq!(runs[1], runs[2], "run 3 differs ({:?})", extra);
     }
 }
+
+// -- gedlint.toml: config, presets and per-rule severity ---------------------
+
+fn write_config(dir: &std::path::Path, content: &str) {
+    write(dir, "gedlint.toml", content.as_bytes());
+}
+
+#[test]
+fn config_off_rule_emits_nothing_and_exit_code_follows() {
+    let d = tmpdir("cfg-off");
+    write_config(&d, "[lints.rules]\n\"W305\" = \"off\"\n");
+    let f = write(&d, "w.ged", WARN_ONLY.as_bytes());
+    let o = Command::new(bin()).arg(&f).arg("--no-color").output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "the silenced warning must not decide the exit code");
+    let s = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(!s.contains("W305"), "{}", s);
+    assert!(s.contains("0 diagnostics"), "{}", s);
+
+    // An error rule off drops the exit code too.
+    let d = tmpdir("cfg-off-err");
+    write_config(&d, "[lints.rules]\n\"E201\" = \"off\"\n");
+    let f = write(&d, "e.ged", BROKEN_REF.as_bytes());
+    let o = Command::new(bin()).arg(&f).arg("--no-color").output().unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    assert!(!String::from_utf8_lossy(&o.stdout).contains("E201"));
+}
+
+#[test]
+fn config_raises_and_lowers_severity_and_exit_code_follows() {
+    // Raise a warning to an error: exit 1 -> 2.
+    let d = tmpdir("cfg-raise");
+    write_config(&d, "[lints.rules]\n\"W305\" = \"error\"\n");
+    let f = write(&d, "w.ged", WARN_ONLY.as_bytes());
+    let o = Command::new(bin()).arg(&f).arg("--no-color").output().unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("ERROR [W305"), "{}", String::from_utf8_lossy(&o.stdout));
+
+    // Lower an error to a warning: exit 2 -> 1.
+    let d = tmpdir("cfg-lower");
+    write_config(&d, "[lints.rules]\n\"E201\" = \"warn\"\n");
+    let f = write(&d, "e.ged", BROKEN_REF.as_bytes());
+    let o = Command::new(bin()).arg(&f).arg("--no-color").output().unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("WARN  [E201"));
+}
+
+#[test]
+fn config_discovered_by_walking_up_from_the_linted_file() {
+    let d = tmpdir("cfg-walk");
+    write_config(&d, "[lints.rules]\n\"W305\" = \"off\"\n");
+    let sub = d.join("records").join("old");
+    fs::create_dir_all(&sub).unwrap();
+    let f = write(&sub, "deep.ged", WARN_ONLY.as_bytes());
+    let o = Command::new(bin()).arg(&f).arg("--no-color").output().unwrap();
+    assert_eq!(o.status.code(), Some(0), "config two levels up must apply");
+    assert!(!String::from_utf8_lossy(&o.stdout).contains("W305"));
+}
+
+#[test]
+fn no_config_ignores_a_discovered_config() {
+    let d = tmpdir("cfg-none");
+    write_config(&d, "[lints.rules]\n\"W305\" = \"off\"\n");
+    let f = write(&d, "w.ged", WARN_ONLY.as_bytes());
+    let o = Command::new(bin()).arg(&f).arg("--no-color").arg("--no-config").output().unwrap();
+    assert_eq!(o.status.code(), Some(1), "without config the warning stands");
+    assert!(String::from_utf8_lossy(&o.stdout).contains("W305"));
+}
+
+#[test]
+fn config_explicit_path_wins_over_discovery() {
+    let d = tmpdir("cfg-expl");
+    // Discovered next to the file: silences W305.
+    write_config(&d, "[lints.rules]\n\"W305\" = \"off\"\n");
+    // Explicit elsewhere: raises W305 instead. It must win.
+    let other = tmpdir("cfg-expl-other");
+    let explicit = write(&other, "strict.toml", "[lints.rules]\n\"W305\" = \"error\"\n".as_bytes());
+    let f = write(&d, "w.ged", WARN_ONLY.as_bytes());
+    let o = Command::new(bin()).arg(&f).arg("--no-color").arg("--config").arg(&explicit).output().unwrap();
+    assert_eq!(o.status.code(), Some(2), "the explicit file wins over the discovered one");
+    assert!(String::from_utf8_lossy(&o.stdout).contains("ERROR [W305"));
+}
+
+#[test]
+fn config_unknown_rule_unknown_preset_and_malformed_each_exit_2() {
+    for (content, fragment) in [
+        ("[lints.rules]\n\"NOPE\" = \"off\"\n", "unknown rule"),
+        ("[lints]\npresets = [\"nope\"]\n", "unknown preset"),
+        ("[lints]\npresets = [\"recommended\n", "config error"),
+    ] {
+        let d = tmpdir("cfg-bad");
+        write_config(&d, content);
+        let f = write(&d, "w.ged", WARN_ONLY.as_bytes());
+        let o = Command::new(bin()).arg(&f).arg("--no-color").output().unwrap();
+        assert_eq!(o.status.code(), Some(2), "{}", content);
+        assert!(String::from_utf8_lossy(&o.stderr).contains(fragment), "{}: {:?}", content, o.stderr);
+    }
+}
+
+#[test]
+fn config_missing_explicit_file_exit_2() {
+    let d = tmpdir("cfg-missing");
+    let f = write(&d, "w.ged", WARN_ONLY.as_bytes());
+    let o = Command::new(bin())
+        .arg(&f)
+        .arg("--config")
+        .arg(d.join("not-there.toml"))
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("cannot read"));
+}
+
+#[test]
+fn config_and_no_config_conflict_exit_2() {
+    let d = tmpdir("cfg-conflict");
+    let f = write(&d, "w.ged", WARN_ONLY.as_bytes());
+    let o = Command::new(bin())
+        .arg(&f)
+        .arg("--no-config")
+        .arg("--config")
+        .arg(d.join("gedlint.toml"))
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("cannot be used together"));
+}
+
+#[test]
+fn config_flag_without_value_exit_2() {
+    let o = Command::new(bin()).arg("--config").output().unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("--config needs a path"));
+}

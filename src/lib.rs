@@ -8,17 +8,21 @@
 //! Layout: `diag` holds the output types, `parse` the line grammar, `rules`
 //! the single streaming pass and the rule groups it drives, `fix` the safe
 //! `--fix` repairs as selectable `Edit`s, `registry` the rule metadata table
-//! every consumer reads. Everything public is re-exported here, so the
-//! crate's public API is exactly what this file names.
+//! every consumer reads, `config` the pure `gedlint.toml` parser (GEDCOM has
+//! no comment syntax, so config is the only suppression mechanism). All
+//! file and OS access lives in `main.rs`; everything public is re-exported
+//! here, so the crate's public API is exactly what this file names.
 
 use std::io::BufRead;
 
+mod config;
 mod diag;
 mod fix;
 mod parse;
 mod registry;
 mod rules;
 
+pub use config::{Config, ConfigError, RuleLevel, parse_config};
 pub use diag::{Category, Diag, DiagGroup, Report, Severity};
 pub use fix::{apply_edits, compute_edits, fix_bytes, fix_bytes_with, normalize_endings, Applicability, Edit, FixSelection};
 pub use parse::Version;
@@ -33,16 +37,30 @@ use rules::lint_lines;
 // ---------------------------------------------------------------------------
 
 /// Lint already-read GEDCOM text. Pure core, WASM-suitable.
+/// Same as `lint_str_with` with the built-in configuration.
 pub fn lint_str(input: &str) -> Report {
-    lint_bytes_split(input.as_bytes(), true)
+    lint_str_with(input, &Config::default())
+}
+
+/// Lint already-read GEDCOM text under a configuration: rules set to "off"
+/// emit nothing and are not counted for the exit code; rules with a level
+/// override emit at that severity.
+pub fn lint_str_with(input: &str, cfg: &Config) -> Report {
+    lint_bytes_split(input.as_bytes(), true, cfg)
 }
 
 /// Lint raw bytes (detects UTF-8 / BOM / CRLF before decoding).
+/// Same as `lint_bytes_with` with the built-in configuration.
 pub fn lint_bytes(data: &[u8]) -> Report {
-    lint_bytes_split(data, false)
+    lint_bytes_with(data, &Config::default())
 }
 
-fn lint_bytes_split(data: &[u8], _already_str: bool) -> Report {
+/// Lint raw bytes under a configuration (see `lint_str_with`).
+pub fn lint_bytes_with(data: &[u8], cfg: &Config) -> Report {
+    lint_bytes_split(data, false, cfg)
+}
+
+fn lint_bytes_split(data: &[u8], _already_str: bool, cfg: &Config) -> Report {
     let data = normalize_newlines(data);
     let text = String::from_utf8_lossy(&data).into_owned();
     let (version, charset) = scan_head(&text);
@@ -52,6 +70,9 @@ fn lint_bytes_split(data: &[u8], _already_str: bool) -> Report {
     // Encoding diags go first (low line numbers), then semantic ones.
     let mut all = diags;
     all.append(&mut r.diags);
+    // Configuration applies to the merged report: an "off" rule never
+    // reaches the sort, the counts or the exit code.
+    apply_config(&mut all, cfg);
     // Issue 30: severity and line alone leave ties to insertion order, so
     // code and message break them; identical (sev, line, code, msg) rows
     // render identically anyway.
@@ -70,10 +91,32 @@ fn lint_bytes_split(data: &[u8], _already_str: bool) -> Report {
     r
 }
 
+/// Re-level and drop diagnostics per the configuration. A rule absent from
+/// the resolved map keeps whatever severity the rule itself emitted.
+fn apply_config(diags: &mut Vec<Diag>, cfg: &Config) {
+    let eff = cfg.effective();
+    diags.retain_mut(|d| match eff.get(d.code) {
+        Some(RuleLevel::Off) => false,
+        Some(RuleLevel::Severity(s)) => {
+            d.severity = *s;
+            true
+        }
+        None => true,
+    });
+}
+
 /// Streaming input: reads line by line without loading everything at once.
 /// Useful for 100MB+ exports. Internally it delegates to `lint_lines` for
-/// simplicity, but the contract is `BufRead`.
-pub fn lint_reader<R: BufRead>(mut reader: R) -> Report {
+/// simplicity, but the contract is `BufRead`. Behaves as if built with
+/// `Config::default()`.
+pub fn lint_reader<R: BufRead>(reader: R) -> Report {
+    lint_reader_with(reader, &Config::default())
+}
+
+/// Streaming input under a configuration (see `lint_str_with`): reads
+/// through `BufRead` without ever holding a second copy of the file, so
+/// 100MB+ exports stay streamable with config applied.
+pub fn lint_reader_with<R: BufRead>(mut reader: R, cfg: &Config) -> Report {
     let mut buf = Vec::new();
     let mut chunk = Vec::new();
     // Read in chunks and append: O(n) memory in bytes but O(1) in objects.
@@ -85,7 +128,7 @@ pub fn lint_reader<R: BufRead>(mut reader: R) -> Report {
             Err(_) => break,
         }
     }
-    lint_bytes(&buf)
+    lint_bytes_with(&buf, cfg)
 }
 
 #[cfg(test)]
