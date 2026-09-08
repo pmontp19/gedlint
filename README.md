@@ -6,6 +6,7 @@ Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 
 ## Install
 
+- Web: <https://pmontp19.github.io/gedlint> (see "Web viewer" below).
 - Prebuilt binaries (linux x86_64/arm64, macOS ARM, Windows x86_64), with a `.sha256` next to each archive: GitHub Releases. Intel Macs: build from source.
 - From source: `cargo install --git github.com/pmontp19/gedlint` or `cargo build --release`.
 
@@ -33,6 +34,10 @@ For adopting gedlint on a legacy tree: `--write-baseline FILE` records every cur
 `--fix` only applies safe repairs (E001 orphan lines get a CONT prefix, E101 split CONC rejoined, trailing whitespace trimmed, classic Mac CR line endings normalized to LF) and always writes a `.bak` copy. Repairs are gated by the configuration exactly as diagnostics are: a rule that is off (or a ruleset not enabled) never edits a line, and `--only` narrows that set, never widens it. `--max N` caps the text output (rule groups in the default view, individual diagnostics under `--verbose`; JSON is always complete); `--severity` sets the minimum level shown.
 
 Each repair is one `Edit` over a line range, carrying an `Applicability` (`Safe` or `MaybeIncorrect`), so a subset can be applied: `--only CODE` (repeatable) restricts `--fix` to those repair codes, and `--unsafe` also applies the `MaybeIncorrect` ones, which a bare `--fix` never does. Line-ending normalization is whole-file preprocessing rather than a rule, so `--only` does not switch it off.
+
+## Web viewer
+
+<https://pmontp19.github.io/gedlint> is the same engine compiled to `wasm32-unknown-unknown` and driven through a minimal C ABI (`src/wasm.rs`, no wasm-bindgen), running in a Web Worker so a large file never freezes the tab. It shows the health summary, a searchable findings explorer with the offending span highlighted and the registry's `title`/`why`/`remedy` on every card, per-finding interactive repair via `compute_edits`/`apply_edits` (choose the repairs, download the fixed file, see the file re-checked), and the opt-in rulesets as toggles. The page ships a Content-Security-Policy with `connect-src 'none'`: the tree is processed in the tab and the page is technically unable to send it anywhere (the `.wasm` is embedded as a same-origin script, not fetched). Static files live in `web/`, no framework and no npm; `scripts/build-web.sh` regenerates the embedded engine from `cargo build --release --target wasm32-unknown-unknown --lib` (the `--lib` matters: the bin target writes the same `.wasm` filename), and `.github/workflows/deploy-pages.yml` builds, optimizes with `wasm-opt -Oz` when available and deploys to Pages.
 
 ## GitHub Action
 

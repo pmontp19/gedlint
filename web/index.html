@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src data:; connect-src 'none'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Check a GEDCOM file for the defects that break imports in Gramps, webtrees, RootsMagic and elsewhere, then apply safe repairs. Runs entirely in your browser: the file never leaves this tab.">
+  <title>gedlint &middot; check a GEDCOM file before you import it</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2016%2016'%3E%3Crect%20width='16'%20height='16'%20rx='3'%20fill='%233b66c4'/%3E%3Cpath%20d='M4%204h2v8H4zM8%204h1.6v3.2L12%204h2.2l-2.9%203.8L14.3%2012H12L9.6%208.7%208.6%209.9V12H8z'%20fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+  <script src="example.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="site-head">
+    <div class="wrap head-row">
+      <span class="brand" aria-label="gedlint">gedlint</span>
+      <nav class="head-nav" aria-label="Project links">
+        <a href="https://github.com/pmontp19/gedlint" rel="noopener">Source</a>
+        <a href="https://github.com/pmontp19/gedlint#readme" rel="noopener">CLI</a>
+        <a href="https://github.com/pmontp19/gedlint#github-action" rel="noopener">GitHub Action</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="intro" aria-labelledby="pagetitle">
+      <h1 id="pagetitle">Check your family tree before you import it.</h1>
+      <p class="lede">Drop a GEDCOM export and see what Gramps, webtrees, RootsMagic or Geneanet
+      will make of it: broken links, cut-off names, mangled notes, places that will never match
+      anything. Then apply the repairs that are provably safe. Everything runs in this tab.</p>
+      <ul class="privacy">
+        <li><strong>Your file never leaves this browser.</strong> It is read, checked and repaired locally; there is no server on the other end.</li>
+        <li><strong>You can verify that in five seconds.</strong> This page ships a Content-Security-Policy that forbids every network connection. Open your devtools Network tab: it stays empty while you work.</li>
+        <li><strong>No account, no cookies, no analytics.</strong></li>
+      </ul>
+    </section>
+
+    <section id="dropzone" class="dropzone" role="button" tabindex="0"
+             aria-label="Drop a GEDCOM file here, or press Enter to choose one">
+      <div class="dz-inner">
+        <svg class="dz-icon" viewBox="0 0 24 24" width="34" height="34" aria-hidden="true">
+          <path d="M12 3 4 11h5v7h6v-7h5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        </svg>
+        <p class="dz-title">Drop your <code>.ged</code> file here</p>
+        <div class="dz-actions">
+          <button id="browse" class="btn btn-primary" type="button">Choose a file</button>
+          <button id="example" class="btn btn-ghost" type="button" disabled>Try an example</button>
+        </div>
+      </div>
+      <input id="file" type="file" accept=".ged,.gedcom" hidden>
+    </section>
+
+    <p id="status" class="status" role="status" aria-live="polite">Loading the checking engine&hellip;</p>
+
+    <section id="settings" class="settings" hidden aria-labelledby="settings-title">
+      <h2 id="settings-title">Optional extra checks</h2>
+      <p class="hint">The default checks are always on. These two rule groups are off by default,
+      exactly like the <code>gedlint.toml</code> presets of the command-line tool; turning one on
+      re-checks the current file.</p>
+      <div class="preset-row">
+        <label class="preset"><input type="checkbox" id="preset-hispanic">
+          <span>Hispanic naming conventions</span></label>
+        <label class="preset"><input type="checkbox" id="preset-hygiene">
+          <span>Name and place hygiene</span></label>
+      </div>
+    </section>
+
+    <section id="results" hidden>
+      <section id="applied-banner" hidden></section>
+      <section id="summary" class="card summary" aria-label="File summary"></section>
+      <section id="explorer" aria-labelledby="explorer-title">
+        <div class="explorer-head">
+          <h2 id="explorer-title">Findings</h2>
+          <div class="filters">
+            <div id="sev-pills" class="seg" role="group" aria-label="Filter by severity"></div>
+            <div id="cat-chips" class="chips" role="group" aria-label="Filter by category"></div>
+            <label class="search"><span class="visually-hidden">Search findings</span>
+              <input id="search" type="search" placeholder="Search message, code, line, @xref@&hellip;"
+                     autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+        </div>
+        <div id="findings" class="findings"></div>
+        <button id="show-more" class="btn btn-ghost wide" type="button" hidden></button>
+      </section>
+      <section id="repairs" class="card repairs" aria-labelledby="repairs-title" hidden>
+        <h2 id="repairs-title">Repairs</h2>
+        <p class="hint">Safe repairs are exact and reversible: rejoining a character an exporter
+        cut in two, restoring a missing <code>CONT</code> prefix. Those marked
+        <em>needs review</em> guess at formatting and are only applied if you tick them.
+        Your original file is never modified; you download a repaired copy.</p>
+        <div id="repair-list" class="repair-list"></div>
+        <div class="repair-foot">
+          <button id="select-safe" class="btn btn-ghost" type="button"></button>
+          <span id="repair-count" class="muted"></span>
+          <button id="apply" class="btn btn-primary" type="button"></button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="site-foot">
+    <div class="wrap foot-grid">
+      <div>
+        <p class="foot-title">Also available</p>
+        <p class="foot-links">
+          <a href="https://github.com/pmontp19/gedlint#readme" rel="noopener">Command-line tool</a>
+          &middot;
+          <a href="https://github.com/pmontp19/gedlint#github-action" rel="noopener">GitHub Action</a>
+          &middot;
+          <a href="https://github.com/pmontp19/gedlint" rel="noopener">Source (MIT)</a>
+        </p>
+      </div>
+      <div>
+        <p class="foot-title">Check every pull request</p>
+        <div class="snippet-row">
+          <pre class="foot-snippet" id="action-snippet">- name: Check GEDCOM files
+  uses: pmontp19/gedlint@v1</pre>
+          <button class="btn btn-ghost btn-small" id="copy-action" type="button">Copy</button>
+        </div>
+      </div>
+    </div>
+    <p class="wrap foot-note">Free software, zero dependencies, no server. The same rule
+    explanations you see here are what the CLI prints, so the two cannot disagree.</p>
+  </footer>
+</body>
+</html>

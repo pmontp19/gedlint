@@ -9,11 +9,11 @@
 //! the single streaming pass and the rule groups it drives, `fix` the safe
 //! `--fix` repairs as selectable `Edit`s, `registry` the rule metadata table
 //! every consumer reads, `config` the pure `gedlint.toml` parser (GEDCOM has
-//! no comment syntax, so config is the only suppression mechanism), and
-//! `baseline` the count-based ratchet file for adopting a legacy tree (RFC
-//! 014 section 5). All file and OS access lives in `main.rs`; everything
-//! public is re-exported here, so the crate's public API is exactly what
-//! this file names.
+//! no comment syntax, so config is the only suppression mechanism), `wasm`
+//! the C ABI the web viewer drives, and `baseline` the count-based ratchet
+//! file for adopting a legacy tree (RFC 014 section 5). All file and OS
+//! access lives in `main.rs`; everything public is re-exported here, so the
+//! crate's public API is exactly what this file names.
 
 use std::io::BufRead;
 
@@ -24,13 +24,14 @@ mod fix;
 mod parse;
 mod registry;
 mod rules;
+pub mod wasm;
 
 pub use baseline::{apply_baseline, baseline_from_report, baseline_to_json, fingerprint, parse_baseline, Baseline, BaselineEntry, BaselineOutcome};
 pub use config::{Config, ConfigError, RuleLevel, parse_config};
 pub use diag::{Category, Diag, DiagGroup, Report, Severity};
 pub use fix::{apply_edits, compute_edits, compute_edits_with, fix_bytes, fix_bytes_with, normalize_endings, Applicability, Edit, FixSelection};
 pub use parse::Version;
-pub use registry::{rule, rule_by_name, rulesets, RuleMeta, RULES};
+pub use registry::{rule, rule_by_name, rules_to_json, rulesets, RuleMeta, RULES};
 
 use parse::{normalize_newlines, scan_head};
 use rules::encoding::encoding_diags;

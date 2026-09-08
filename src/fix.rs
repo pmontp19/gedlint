@@ -28,6 +28,16 @@ pub enum Applicability {
     MaybeIncorrect,
 }
 
+impl Applicability {
+    /// Stable string for JSON consumers (`fixable` in the registry).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Applicability::Safe => "safe",
+            Applicability::MaybeIncorrect => "maybe-incorrect",
+        }
+    }
+}
+
 /// One candidate repair: replace an inclusive, 1-based range of lines with
 /// `replacement`.
 ///

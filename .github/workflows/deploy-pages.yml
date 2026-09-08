@@ -1,0 +1,76 @@
+name: Deploy web viewer
+
+# Builds the wasm engine and ships the static site in web/ to GitHub Pages
+# (issue 15). No npm, no bundler: scripts/build-web.sh embeds the .wasm and
+# the sample tree as base64 scripts so the page can keep its strict CSP
+# (connect-src 'none') without fetching anything.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Build the engine
+        # --lib is load-bearing: the bin target writes the same .wasm filename
+        # and would overwrite the cdylib with the CLI wrapper.
+        run: cargo build --release --target wasm32-unknown-unknown --lib
+      - name: Optimize with wasm-opt if available
+        run: |
+          if ! command -v wasm-opt >/dev/null 2>&1; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq binaryen || true
+          fi
+          if command -v wasm-opt >/dev/null 2>&1; then
+            WASM=target/wasm32-unknown-unknown/release/gedlint.wasm
+            wasm-opt -Oz --strip-debug "$WASM" -o "$WASM.opt" && mv "$WASM.opt" "$WASM"
+            ls -la "$WASM"
+          else
+            echo "wasm-opt not found; shipping the plain release build"
+          fi
+      - name: Embed engine and sample tree
+        run: scripts/build-web.sh
+      - name: Smoke-check the engine exports
+        run: |
+          node -e '
+          const fs = require("fs");
+          const src = fs.readFileSync("web/gedlint-wasm.js", "utf8");
+          const b64 = src.match(/GEDLINT_WASM_B64 = "([^"]+)"/)[1];
+          const bin = Buffer.from(b64, "base64");
+          WebAssembly.compile(bin).then(m => {
+            const names = WebAssembly.Module.exports(m).map(e => e.name);
+            const need = ["gedlint_alloc", "gedlint_dealloc", "gedlint_lint", "gedlint_registry", "gedlint_edits", "gedlint_apply"];
+            for (const n of need) {
+              if (!names.includes(n)) throw new Error("missing export " + n);
+            }
+            console.log("wasm exports ok:", names.filter(n => n.startsWith("gedlint_")).join(", "));
+          });
+          '
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
