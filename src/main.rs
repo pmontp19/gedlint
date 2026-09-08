@@ -3,7 +3,7 @@ use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use gedlint::{Applicability, Category, Config, Diag, DiagGroup, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_reader_with, parse_config};
+use gedlint::{apply_baseline, baseline_from_report, baseline_to_json, parse_baseline, Applicability, Category, Config, Diag, DiagGroup, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_reader_with, parse_config};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The file discovery looks for, walking up from the linted file.
@@ -25,6 +25,8 @@ fn help() -> String {
          --severity N          minimum level: error, warning, info (default: info)\n  \
          --max N               cap rule groups by default, single diagnostics with --verbose (0 = all; JSON always complete)\n  \
          --verbose             list every occurrence instead of one line per rule\n  \
+         --baseline FILE       fail only on findings not already recorded in FILE (the ratchet)\n  \
+         --write-baseline      record every current finding in FILE and exit 0\n  \
          --no-color            no ANSI colors\n  \
         --quiet               summary + exit code only\n  \
         --explain [CODE]      explain a rule (no CODE: every rule by ruleset)\n  \
@@ -36,7 +38,7 @@ fn help() -> String {
         preset or spelling is an error, never a silent no-op.\n\
         \n\
         EXIT: 0 clean, 1 warnings, 2 errors (also: bad usage, unreadable\n  \
-        file, invalid config)\n\
+        file, invalid config; with --baseline: only NEW findings count)\n\
         \n\
         RULES: E001 level, E002 HEAD/TRLR, E003 duplicate xref, E004 xref,\n  \
         E005 CONT/CONC, E007 CONC in 7.0, E008 duplicate singleton,\n  \
@@ -176,6 +178,8 @@ fn main() -> ExitCode {
     let mut verbose = false;
     let mut no_color = false;
     let mut quiet = false;
+    let mut baseline_path: Option<String> = None;
+    let mut write_baseline_path: Option<String> = None;
     let mut path: Option<String> = None;
 
     let mut i = 1;
@@ -262,6 +266,22 @@ fn main() -> ExitCode {
                     }
                 }
             }
+            "--baseline" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--baseline needs a file path");
+                    return ExitCode::from(2);
+                }
+                baseline_path = Some(args[i].clone());
+            }
+            "--write-baseline" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--write-baseline needs a file path");
+                    return ExitCode::from(2);
+                }
+                write_baseline_path = Some(args[i].clone());
+            }
             a if a.starts_with('-') => {
                 eprintln!("unknown option: {} (try --help)", a);
                 return ExitCode::from(2);
@@ -284,6 +304,10 @@ fn main() -> ExitCode {
 
     if !fix && (!fix_only.is_empty() || fix_unsafe) {
         eprintln!("--only and --unsafe only apply with --fix");
+        return ExitCode::from(2);
+    }
+    if baseline_path.is_some() && write_baseline_path.is_some() {
+        eprintln!("--baseline and --write-baseline are mutually exclusive");
         return ExitCode::from(2);
     }
 
@@ -341,11 +365,55 @@ fn main() -> ExitCode {
         }
     };
 
+    // --write-baseline: snapshot the current findings and stop. Exit 0 so a
+    // CI bootstrap (`--write-baseline && --baseline`) succeeds on a messy
+    // tree; the recorded state is what the next run ratchets against.
+    if let Some(wb) = &write_baseline_path {
+        let b = baseline_from_report(&report);
+        if let Err(e) = fs::write(wb, baseline_to_json(&b)) {
+            eprintln!("cannot write {}: {}", wb, e);
+            return ExitCode::from(2);
+        }
+        println!(
+            "baseline: {} entries ({} findings) written to {}",
+            b.entries.len(),
+            report.diags.len(),
+            wb
+        );
+        return ExitCode::from(0);
+    }
+
+    // --baseline: match the run against the recorded counts. Only findings
+    // beyond the counts (new) drive the exit code; findings that vanished
+    // from the run are reported as resolved (the ratchet).
+    let outcome = match &baseline_path {
+        Some(bp) => {
+            let text = match fs::read_to_string(bp) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("cannot read baseline {}: {}", bp, e);
+                    return ExitCode::from(2);
+                }
+            };
+            let b = match parse_baseline(&text) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("{}: {}", bp, e);
+                    return ExitCode::from(2);
+                }
+            };
+            Some(apply_baseline(&report, &b))
+        }
+        None => None,
+    };
+
     if format == "json" {
+        // The JSON contract (scripts/gh-report.js, web viewer) is the full
+        // report, unchanged; the baseline only moves the exit code.
         println!("{}", report.to_json());
     } else if quiet {
         println!(
-            "{}: {} lines, {} INDI, {} FAM, {} errors, {} warnings, {} infos (GEDCOM {})",
+            "{}: {} lines, {} INDI, {} FAM, {} errors, {} warnings, {} infos (GEDCOM {}){}",
             path,
             report.lines,
             report.individuals,
@@ -353,13 +421,34 @@ fn main() -> ExitCode {
             report.errors(),
             report.warnings(),
             report.infos(),
-            report.version.as_str()
+            report.version.as_str(),
+            match &outcome {
+                Some(o) => format!(", {} baselined, {} resolved", o.baselined, o.resolved.len()),
+                None => String::new(),
+            }
         );
     } else {
         let stdout = std::io::stdout();
         let mut h = stdout.lock();
-        let shown_all = report.filtered(min_sev);
+        let shown_all: Vec<&Diag> = match &outcome {
+            Some(o) => o.new_diags.iter().filter(|d| d.severity >= min_sev).collect(),
+            None => report.filtered(min_sev),
+        };
         let total = shown_all.len();
+        // Baseline-aware summary numbers (issue 22): with --baseline the
+        // footer counts only NEW findings, and the suppressed/resolved
+        // counts ride along; without one it is exactly #20's summary.
+        let (new_total, new_e, new_w, new_i, base_extra) = match &outcome {
+            Some(o) => (
+                o.new_diags.len(),
+                o.new_diags.iter().filter(|d| d.severity == Severity::Error).count(),
+                o.new_diags.iter().filter(|d| d.severity == Severity::Warning).count(),
+                o.new_diags.iter().filter(|d| d.severity == Severity::Info).count(),
+                format!(", {} baselined, {} resolved", o.baselined, o.resolved.len()),
+            ),
+            None => (total, report.errors(), report.warnings(), report.infos(), String::new()),
+        };
+        let new_word = if outcome.is_some() { "new " } else { "" };
         if verbose {
             // --verbose lists every occurrence, exactly as the output always
             // looked (issue 20).
@@ -381,13 +470,15 @@ fn main() -> ExitCode {
             }
             let _ = writeln!(
                 h,
-                "\n{}: {} diagnostics{} ({} errors, {} warnings, {} infos), {} lines, {} INDI, {} FAM [GEDCOM {}]",
+                "\n{}: {} {}diagnostics{} ({} errors, {} warnings, {} infos){}, {} lines, {} INDI, {} FAM [GEDCOM {}]",
                 path,
-                total,
+                new_total,
+                new_word,
                 if total > shown.len() { format!(" (showing {})", shown.len()) } else { String::new() },
-                report.errors(),
-                report.warnings(),
-                report.infos(),
+                new_e,
+                new_w,
+                new_i,
+                base_extra,
                 report.lines,
                 report.individuals,
                 report.families,
@@ -420,13 +511,15 @@ fn main() -> ExitCode {
             let capped = max_show > 0 && groups.len() > shown_groups.len();
             let _ = writeln!(
                 h,
-                "\n{}: {} diagnostics{} ({} errors, {} warnings, {} infos), {} lines, {} INDI, {} FAM [GEDCOM {}]",
+                "\n{}: {} {}diagnostics{} ({} errors, {} warnings, {} infos){}, {} lines, {} INDI, {} FAM [GEDCOM {}]",
                 path,
-                total,
+                new_total,
+                new_word,
                 if capped { format!(" (showing {} of {} groups)", shown_groups.len(), groups.len()) } else { String::new() },
-                report.errors(),
-                report.warnings(),
-                report.infos(),
+                new_e,
+                new_w,
+                new_i,
+                base_extra,
                 report.lines,
                 report.individuals,
                 report.families,
@@ -455,7 +548,36 @@ fn main() -> ExitCode {
                 let _ = writeln!(h, "Rules: {}", rules);
             }
         }
+
+        // Baseline appendix (issue 22): findings the baseline recorded but
+        // this run no longer has are the ratchet's progress report;
+        // --write-baseline prunes them from the file.
+        if let Some(o) = &outcome {
+            if !o.resolved.is_empty() {
+                let _ = writeln!(
+                    h,
+                    "\nresolved (recorded in the baseline but absent from this run; --write-baseline prunes them):"
+                );
+                for e in &o.resolved {
+                    let _ = writeln!(h, "  {}x {} {}", e.count, e.code, e.fingerprint);
+                }
+            }
+        }
     }
 
-    ExitCode::from(report.exit_code() as u8)
+    // Baselined findings never affect the exit code: only the surplus. The
+    // fallback is the config-filtered report (#21 has already dropped "off"
+    // rules inside the engine, so they cannot reappear here).
+    let exit = match &outcome {
+        Some(o) => Report {
+            version: report.version,
+            lines: report.lines,
+            individuals: report.individuals,
+            families: report.families,
+            diags: o.new_diags.clone(),
+        }
+        .exit_code(),
+        None => report.exit_code(),
+    };
+    ExitCode::from(exit as u8)
 }

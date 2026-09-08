@@ -261,7 +261,8 @@ impl Report {
     }
 }
 
-fn escape_json(s: &str) -> String {
+/// Shared by `Report::to_json` and the baseline serializer.
+pub(crate) fn escape_json(s: &str) -> String {
     let mut o = String::with_capacity(s.len() + 2);
     for c in s.chars() {
         match c {
