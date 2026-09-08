@@ -95,10 +95,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, llvm-tools-preview
-          targets: wasm32-unknown-unknown
+      # No toolchain step here on purpose: rust-toolchain.toml is the single
+      # source of truth (stable + clippy + llvm-tools-preview + wasm target),
+      # and rustup installs it on first cargo use. A toolchain action would
+      # override the file and let CI drift from local gates (#43).
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
       - name: Test

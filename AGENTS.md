@@ -23,6 +23,8 @@
 - `cargo clippy --all-targets` (must be clean)
 - `cargo llvm-cov --summary-only --all-targets` (floor: 84% regions total; raise it when you add code)
 
+The toolchain is pinned in `rust-toolchain.toml` (channel `stable`, components `clippy` + `llvm-tools-preview`, target `wasm32-unknown-unknown`); rustup fetches it automatically, so the clippy gate gives the same answer locally and in CI. Run `rustup update` after a new stable lands so local catches up.
+
 ## Deferred roadmap (audited, consciously postponed)
 
 - SLGC FAMC requirement and other ordinance details beyond STAT+DATE.
