@@ -1,9 +1,11 @@
 //! Structured fixes (issue 19): `Edit` + `Applicability` + `apply_edits`,
 //! and the byte-for-byte behaviour `fix_bytes` must keep.
 
+use std::collections::BTreeSet;
+
 use gedlint::{
-    apply_edits, compute_edits, fix_bytes, fix_bytes_with, lint_bytes, normalize_endings, Applicability, Edit,
-    FixSelection,
+    apply_edits, compute_edits, compute_edits_with, fix_bytes, fix_bytes_with, lint_bytes,
+    lint_bytes_with, normalize_endings, parse_config, Applicability, Config, Edit, FixSelection,
 };
 
 const HEAD: &[u8] = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n";
@@ -159,7 +161,7 @@ fn only_applies_one_repair_and_reports_one_line() {
     assert_eq!(applied_all.len(), 2, "{:?}", applied_all);
 
     let sel = FixSelection { only: vec!["E001".into()], allow_unsafe: false };
-    let (only_e001, applied) = fix_bytes_with(&data, &sel);
+    let (only_e001, applied) = fix_bytes_with(&data, &sel, &Config::default());
     assert_eq!(applied, vec!["E001: 1 orphan lines prefixed with CONT"]);
     let text = String::from_utf8(only_e001).unwrap();
     assert!(text.contains("3 CONT orphan line"), "{}", text);
@@ -171,7 +173,7 @@ fn only_applies_one_repair_and_reports_one_line() {
 fn an_unknown_only_code_repairs_nothing() {
     let data = [HEAD, b"0 TRLR   \n"].concat();
     let sel = FixSelection { only: vec!["W999".into()], allow_unsafe: false };
-    let (out, applied) = fix_bytes_with(&data, &sel);
+    let (out, applied) = fix_bytes_with(&data, &sel, &Config::default());
     assert_eq!(out, data);
     assert!(applied.is_empty());
 }
@@ -277,7 +279,7 @@ fn normalize_endings_is_not_a_rule() {
     let cr = b"0 HEAD\r1 GEDC\r2 VERS 5.5.1\r0 TRLR\r".to_vec();
     assert!(compute_edits(&cr).iter().all(|e| e.code != "style" || !e.replacement.is_empty()));
     let sel = FixSelection { only: vec!["E001".into()], allow_unsafe: false };
-    let (fixed, applied) = fix_bytes_with(&cr, &sel);
+    let (fixed, applied) = fix_bytes_with(&cr, &sel, &Config::default());
     assert!(!fixed.contains(&b'\r'), "normalization runs even under --only");
     assert_eq!(applied, vec!["style: normalized classic Mac CR line endings to LF"]);
 }
@@ -488,4 +490,137 @@ fn a_file_without_a_trailing_newline_does_not_gain_one() {
     let (fixed, applied) = fix_bytes(&data);
     assert_eq!(applied, vec!["E001: 1 orphan lines prefixed with CONT"]);
     assert!(fixed.ends_with(b"3 CONT orphan no newline"), "{:?}", String::from_utf8_lossy(&fixed));
+}
+
+// ---------------------------------------------------------------------------
+// The config gate (#44): diagnostics and edits must agree
+// ---------------------------------------------------------------------------
+
+/// One file carrying every repairable pattern, core and opt-in alike:
+/// E001 (an orphan line), style (trailing whitespace, twice), E101 (a UTF-8
+/// character split across CONC, in the #36 shape with a padded anchor),
+/// W601 (a comma surname in both the NAME slot and a `2 SURN`), W702 (an
+/// all-caps `2 SURN`) and W703 (doubled commas in a PLAC).
+fn repairable_patterns() -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(HEAD);
+    data.extend_from_slice(b"0 @I1@ INDI\n1 NAME Maria /Montpeo, Osso/\n2 SURN Montpeo, Osso\n");
+    data.extend_from_slice(b"0 @I2@ INDI\n1 NAME Anna /Puig/\n2 SURN PUIG SOLE\n1 BIRT\n2 PLAC Alcover, , Tarragona\n");
+    data.extend_from_slice(b"0 @S1@ SOUR\n1 DATA\n2 TEXT part  \norphan line\n");
+    data.extend_from_slice(b"0 @I3@ INDI\n1 NAME Jos");
+    data.push(0xC3);
+    data.extend_from_slice(b"  \n2 CONC ");
+    data.push(0xA9);
+    data.extend_from_slice(b" /Oso/\n0 TRLR\n");
+    data
+}
+
+/// The test #44 is made of. The bug was a drift between two surfaces:
+/// `apply_config` filtered the diagnostics and nothing filtered the edits,
+/// so a file reported clean was rewritten anyway. What prevents a repeat is
+/// not any single behaviour check but the missing link itself: for every
+/// configuration, no edit may exist whose rule code produces no diagnostic
+/// under that same configuration.
+#[test]
+fn diagnostics_and_edits_agree_under_every_config() {
+    let data = repairable_patterns();
+    let (norm, _) = normalize_endings(&data);
+
+    let configs: Vec<(&str, Config)> = vec![
+        ("the default config", Config::default()),
+        (
+            "every ruleset on",
+            parse_config("[lints]\npresets = [\"recommended\", \"hispanic-naming\", \"hygiene\"]\n").unwrap(),
+        ),
+        (
+            "a preset plus an explicit off",
+            parse_config(
+                "[lints]\npresets = [\"recommended\", \"hispanic-naming\", \"hygiene\"]\n\n[lints.rules]\n\"W601\" = \"off\"\n",
+            )
+            .unwrap(),
+        ),
+        ("total silence", parse_config("[lints]\npresets = []\n").unwrap()),
+    ];
+
+    for (name, cfg) in &configs {
+        let report = lint_bytes_with(&norm, cfg);
+        let edit_codes: BTreeSet<&str> = compute_edits_with(&norm, cfg).iter().map(|e| e.code).collect();
+        for code in &edit_codes {
+            // "style" is the one repair with no diagnostic by design: the
+            // linter has no code for trailing whitespace, and CR
+            // normalization is preprocessing rather than a rule. Everything
+            // else must be a rule the same configuration reports, or the
+            // two surfaces have drifted apart again.
+            if *code == "style" {
+                continue;
+            }
+            assert!(
+                report.diags.iter().any(|d| d.code == *code),
+                "{name}: a {code} edit exists while the same config reports no {code} diagnostic"
+            );
+        }
+    }
+
+    // Teeth, so the loop above cannot pass vacuously on a fixture that
+    // stopped triggering anything: every preset state produces the exact
+    // edit set it should.
+    let codes = |cfg: &Config| -> BTreeSet<&'static str> {
+        compute_edits_with(&norm, cfg).iter().map(|e| e.code).collect()
+    };
+    assert_eq!(
+        codes(&configs[1].1),
+        ["E001", "E101", "W601", "W702", "W703", "style"].into_iter().collect(),
+        "every ruleset on must exercise every repair"
+    );
+    // An explicit "off" silences the edit even with the preset enabled.
+    assert!(!codes(&configs[2].1).contains("W601"), "the override must beat the preset");
+    assert!(codes(&configs[2].1).contains("W702") && codes(&configs[2].1).contains("W703"));
+    // The built-in config repairs exactly the core.
+    assert_eq!(codes(&configs[0].1), ["E001", "E101", "style"].into_iter().collect());
+    // And silence leaves only the unruled style repair.
+    assert_eq!(codes(&configs[3].1), ["style"].into_iter().collect());
+}
+
+#[test]
+fn the_default_config_leaves_opt_in_patterns_untouched() {
+    // #44 acceptance: a bare --fix repairs the core defects and reports
+    // nothing about the W6xx/W7xx patterns, so it must not touch them.
+    let data = repairable_patterns();
+    let (fixed, applied) = fix_bytes(&data);
+    let text = String::from_utf8_lossy(&fixed);
+    assert!(text.contains("/Montpeo, Osso/"), "W601 not enabled: no comma removed");
+    assert!(text.contains("2 SURN PUIG SOLE"), "W702 not enabled: no case change");
+    assert!(text.contains("PLAC Alcover, , Tarragona"), "W703 not enabled: no comma removed");
+    assert!(applied.iter().any(|a| a.starts_with("E001")), "the core repairs still run: {:?}", applied);
+    assert!(!applied.iter().any(|a| a.starts_with("W6") || a.starts_with("W7")), "{:?}", applied);
+}
+
+#[test]
+fn an_enabled_preset_repairs_its_ruleset_and_only_its_ruleset() {
+    // presets = ["hispanic-naming"] without "recommended": the W601 repair
+    // applies, and the core rules being off gates their repairs off too,
+    // exactly as their diagnostics are silenced.
+    let data = repairable_patterns();
+    let cfg = parse_config("[lints]\npresets = [\"hispanic-naming\"]\n").unwrap();
+    let (fixed, applied) = fix_bytes_with(&data, &FixSelection::default(), &cfg);
+    assert_eq!(
+        applied,
+        vec!["style: trimmed trailing whitespace on 2 lines", "W601: removed comma from 2 surnames"]
+    );
+    let text = String::from_utf8_lossy(&fixed);
+    assert!(text.contains("/Montpeo Osso/") && text.contains("2 SURN Montpeo Osso"), "{}", text);
+    assert!(text.contains("orphan line\n"), "E001 is off under this config, so no CONT prefix");
+    assert!(fixed.windows(4).any(|w| w == b"CONC"), "E101 is off under this config, so no rejoin");
+    assert!(text.contains("PLAC Alcover, , Tarragona"), "hygiene is off under this config");
+}
+
+#[test]
+fn only_narrows_the_gate_but_never_overrides_it() {
+    // --only selects among the edits the configuration produced; it cannot
+    // grant an edit the gate refused (#44 acceptance).
+    let data = repairable_patterns();
+    let sel = FixSelection { only: vec!["W601".into()], allow_unsafe: false };
+    let (out, applied) = fix_bytes_with(&data, &sel, &Config::default());
+    assert!(applied.is_empty(), "{:?}", applied);
+    assert_eq!(out, data, "the file must come back byte-identical");
 }

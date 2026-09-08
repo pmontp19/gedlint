@@ -114,3 +114,59 @@ fn help_lists_the_new_flags() {
         assert!(!l[24..].starts_with(' '), "description does not start in column 24: {:?}", l);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The config gate, end to end (#44): --fix must pass the resolved config
+// ---------------------------------------------------------------------------
+
+/// W601 and W703 patterns with no core defect: under the built-in rules
+/// this file is reported clean, so --fix has nothing to say about it.
+const OPT_IN_ONLY: &[u8] =
+    b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Cognom1, Cognom2/\n1 BIRT\n2 PLAC Reus,, Spain\n0 TRLR\n";
+
+#[test]
+fn fix_without_a_preset_leaves_opt_in_patterns_alone() {
+    // The bug itself: 0 diagnostics, then a rewrite. Now: no repair, no
+    // report line, no .bak.
+    let d = tmpdir("gate-default");
+    let f = write(&d, "o.ged", OPT_IN_ONLY);
+    let o = Command::new(bin()).arg(&f).arg("--fix").arg("--no-config").arg("--no-color").output().unwrap();
+    let out = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(!out.contains("fix:"), "nothing was repaired: {}", out);
+    assert_eq!(fs::read(&f).unwrap(), OPT_IN_ONLY, "the file must come back untouched");
+    assert!(!d.join("o.ged.bak").exists(), "no rewrite means no backup either");
+}
+
+#[test]
+fn fix_applies_opt_in_repairs_only_under_their_preset() {
+    let d = tmpdir("gate-preset");
+    let f = write(&d, "o.ged", OPT_IN_ONLY);
+    write(&d, "gedlint.toml", b"[lints]\npresets = [\"recommended\", \"hispanic-naming\", \"hygiene\"]\n");
+    let o = Command::new(bin()).arg(&f).arg("--fix").arg("--no-color").output().unwrap();
+    let out = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(out.contains("W601") && out.contains("W703"), "{}", out);
+    let fixed = String::from_utf8(fs::read(&f).unwrap()).unwrap();
+    assert!(fixed.contains("/Cognom1 Cognom2/"), "{}", fixed);
+    assert!(fixed.contains("PLAC Reus, Spain"), "{}", fixed);
+    assert_eq!(fs::read(d.join("o.ged.bak")).unwrap(), OPT_IN_ONLY, ".bak keeps the original");
+}
+
+#[test]
+fn only_cannot_override_the_config_gate() {
+    // --only narrows what the config allowed; it must not widen it.
+    let d = tmpdir("gate-only");
+    let f = write(&d, "o.ged", OPT_IN_ONLY);
+    let o = Command::new(bin())
+        .arg(&f)
+        .arg("--fix")
+        .arg("--only")
+        .arg("W601")
+        .arg("--no-config")
+        .arg("--no-color")
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(!out.contains("fix:"), "{}", out);
+    assert_eq!(fs::read(&f).unwrap(), OPT_IN_ONLY);
+    assert!(!d.join("o.ged.bak").exists());
+}

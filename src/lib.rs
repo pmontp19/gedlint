@@ -28,7 +28,7 @@ mod rules;
 pub use baseline::{apply_baseline, baseline_from_report, baseline_to_json, fingerprint, parse_baseline, Baseline, BaselineEntry, BaselineOutcome};
 pub use config::{Config, ConfigError, RuleLevel, parse_config};
 pub use diag::{Category, Diag, DiagGroup, Report, Severity};
-pub use fix::{apply_edits, compute_edits, fix_bytes, fix_bytes_with, normalize_endings, Applicability, Edit, FixSelection};
+pub use fix::{apply_edits, compute_edits, compute_edits_with, fix_bytes, fix_bytes_with, normalize_endings, Applicability, Edit, FixSelection};
 pub use parse::Version;
 pub use registry::{rule, rule_by_name, rulesets, RuleMeta, RULES};
 

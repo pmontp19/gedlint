@@ -1,12 +1,23 @@
 //! One rule per test with minimal fixtures (acceptance criterion 5).
 //! Each test builds the smallest GEDCOM that triggers a single rule.
 
-use gedlint::{Diag, FixSelection, Severity, Version, compute_edits, fix_bytes, fix_bytes_with, lint_bytes, lint_str};
+use gedlint::{Config, Diag, FixSelection, Severity, Version, compute_edits, compute_edits_with, fix_bytes, fix_bytes_with, lint_bytes, lint_str, parse_config};
 
 
 fn codes_with(input: &str, preset: &str) -> Vec<String> {
     let cfg = gedlint::parse_config(&format!("[lints]\npresets = [\"{}\"]\n", preset)).unwrap();
     gedlint::lint_str_with(input, &cfg).diags.iter().map(|d| d.code.to_string()).collect()
+}
+
+/// Recommended plus the named opt-in rulesets: the config a test needs to
+/// drive a repair that belongs to one of them. `--fix` repairs are gated by
+/// the configuration (#44), so a test about a W6xx/W7xx repair must enable
+/// its ruleset or the gate (correctly) refuses the edit.
+fn fix_cfg(presets: &[&str]) -> Config {
+    let mut all = vec!["recommended"];
+    all.extend_from_slice(presets);
+    let list = all.iter().map(|p| format!("\"{p}\"")).collect::<Vec<_>>().join(", ");
+    parse_config(&format!("[lints]\npresets = [{list}]\n")).unwrap()
 }
 
 fn has_with(input: &str, code: &str, preset: &str) -> bool {
@@ -1383,41 +1394,45 @@ fn w601_name_and_surn_defect_is_one_diagnostic() {
 
 #[test]
 fn w601_repair_ignores_three_tokens() {
+    let cfg = fix_cfg(&["hispanic-naming"]);
     let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Cognom1, Cognom2, Cognom3/\n0 TRLR\n".to_vec();
-    let (_fixed, applied) = fix_bytes(&data);
-    assert!(!applied.iter().any(|a| a.contains("W601")));
+    let (_fixed, applied) = fix_bytes_with(&data, &FixSelection::default(), &cfg);
+    assert!(!applied.iter().any(|a| a.contains("W601")), "{:?}", applied);
     
     // Repair works for exactly two tokens
     let data2 = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Cognom1, Cognom2/\n0 TRLR\n".to_vec();
-    let (fixed2, applied2) = fix_bytes(&data2);
+    let (fixed2, applied2) = fix_bytes_with(&data2, &FixSelection::default(), &cfg);
     assert!(applied2.iter().any(|a| a.contains("W601")));
     assert!(String::from_utf8_lossy(&fixed2).contains("/Cognom1 Cognom2/"));
 }
 
 #[test]
 fn w601_repair_covers_surn_same_conservative_shape() {
+    let cfg = fix_cfg(&["hispanic-naming"]);
     // Two tokens in 2 SURN: safe repair.
     let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME Maria /Montpeo Osso/\n2 SURN Montpeo, Osso\n0 TRLR\n".to_vec();
-    let (fixed, applied) = fix_bytes(&data);
+    let (fixed, applied) = fix_bytes_with(&data, &FixSelection::default(), &cfg);
     assert!(applied.iter().any(|a| a.contains("W601")));
     assert!(String::from_utf8_lossy(&fixed).contains("2 SURN Montpeo Osso"));
 
     // Three tokens in 2 SURN: reported by the rule, never repaired.
     let data3 = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n2 SURN Un, Dos, Tres\n0 TRLR\n".to_vec();
-    let (_f3, applied3) = fix_bytes(&data3);
+    let (_f3, applied3) = fix_bytes_with(&data3, &FixSelection::default(), &cfg);
     assert!(!applied3.iter().any(|a| a.contains("W601")));
 
     // A NOTE value that contains the tag text is not mistaken for the line.
     let note = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 NOTE his SURN was Un, Dos\n0 TRLR\n".to_vec();
-    let (f2, applied2) = fix_bytes(&note);
+    let (f2, applied2) = fix_bytes_with(&note, &FixSelection::default(), &cfg);
     assert!(!applied2.iter().any(|a| a.contains("W601")));
     assert!(String::from_utf8_lossy(&f2).contains("NOTE his SURN was Un, Dos"));
 
     // A SURN under some other level-1 tag (here _MARNM) is out of scope:
-    // the diagnostic does not fire there, so neither may the repair.
+    // the diagnostic does not fire there, so neither may the repair. Both
+    // rulesets on and --unsafe, so the only thing that can stop the repair
+    // is the scope guard itself.
     let stray = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Prat/\n1 _MARNM Un, Dos\n2 SURN Un, Dos\n0 TRLR\n".to_vec();
     let sel = FixSelection { allow_unsafe: true, ..Default::default() };
-    let (f3, applied3) = fix_bytes_with(&stray, &sel);
+    let (f3, applied3) = fix_bytes_with(&stray, &sel, &fix_cfg(&["hispanic-naming", "hygiene"]));
     assert!(!applied3.iter().any(|a| a.contains("W601") || a.contains("W702")));
     assert!(String::from_utf8_lossy(&f3).contains("2 SURN Un, Dos"));
 }
@@ -1427,9 +1442,10 @@ fn w602_no_married_name() {
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n2 _MARNM C\n");
     assert!(has_with(&g, "W602", "hispanic-naming"));
     
-    // W602 produces no edit
+    // W602 produces no edit, even with the ruleset enabled: deleting the
+    // tag would destroy data, so there is nothing to select.
     let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n2 _MARNM C\n0 TRLR\n".to_vec();
-    let edits = compute_edits(&data);
+    let edits = compute_edits_with(&data, &fix_cfg(&["hispanic-naming"]));
     assert!(!edits.iter().any(|e| e.code == "W602"));
 }
 
@@ -1507,15 +1523,18 @@ fn w702_fires_on_surn_subtag_alone() {
 
 #[test]
 fn w702_surn_repair_is_maybe_incorrect_only() {
-    // A bare --fix (Safe only) must not touch the SURN value.
+    let cfg = fix_cfg(&["hygiene"]);
+    // With the ruleset enabled, a bare --fix (Safe only) must still not
+    // touch the SURN value: this is the applicability gate, not the config
+    // one, doing the refusing.
     let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME Anna /Puig/\n2 SURN PUIG SOLE\n0 TRLR\n".to_vec();
-    let (f1, applied) = fix_bytes(&data);
+    let (f1, applied) = fix_bytes_with(&data, &FixSelection::default(), &cfg);
     assert!(!applied.iter().any(|a| a.contains("W702")));
     assert!(String::from_utf8_lossy(&f1).contains("2 SURN PUIG SOLE"));
 
-    // --unsafe reaches it.
+    // --unsafe reaches it under the same config.
     let sel = FixSelection { allow_unsafe: true, ..Default::default() };
-    let (fixed, applied2) = fix_bytes_with(&data, &sel);
+    let (fixed, applied2) = fix_bytes_with(&data, &sel, &cfg);
     assert!(applied2.iter().any(|a| a.contains("W702")));
     assert!(String::from_utf8_lossy(&fixed).contains("2 SURN Puig Sole"));
 }
@@ -1532,9 +1551,9 @@ fn w703_malformed_place() {
     assert!(has(&url, "W401"));
     assert!(!has_with(&url, "W703", "hygiene"));
     
-    // Doubled commas repair is Safe
+    // Doubled commas repair is Safe, and applies once hygiene is enabled
     let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 BIRT\n2 PLAC Alcover, , Tarragona\n0 TRLR\n".to_vec();
-    let (fixed, applied) = fix_bytes(&data);
+    let (fixed, applied) = fix_bytes_with(&data, &FixSelection::default(), &fix_cfg(&["hygiene"]));
     assert!(applied.iter().any(|a| a.contains("W703")));
     assert!(String::from_utf8_lossy(&fixed).contains("PLAC Alcover, Tarragona"));
 }

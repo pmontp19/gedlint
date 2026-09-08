@@ -315,12 +315,20 @@ fn fixable_matches_the_repairs_fix_really_carries() {
     src.push(0xA9);
     src.extend_from_slice(b"\norphan line\n0 @I1@ INDI\n1 NAME Joan /CRUZ, LOPEZ/\n0 @I2@ INDI\n1 NAME A, /DE LA O/\n1 BIRT\n2 PLAC Reus,, Spain\n0 TRLR\n");
 
+    // Repairs are config-gated (#44), so this table check runs with every
+    // ruleset enabled: the default config would (correctly) propose none of
+    // the opt-in ruleset repairs.
+    let all_on = gedlint::parse_config(
+        "[lints]\npresets = [\"recommended\", \"hispanic-naming\", \"hygiene\"]\n",
+    )
+    .unwrap();
+
     // What the engine proposes, with the applicability it proposes it at.
     // `compute_edits` also emits the "style" pseudo-code for trailing
     // whitespace, which is whole-file cosmetics with no rule behind it.
     let (normalized, _) = gedlint::normalize_endings(&src);
     let mut proposed: BTreeMap<&'static str, Applicability> = BTreeMap::new();
-    for e in gedlint::compute_edits(&normalized) {
+    for e in gedlint::compute_edits_with(&normalized, &all_on) {
         if rule(e.code).is_none() {
             continue;
         }
@@ -332,8 +340,9 @@ fn fixable_matches_the_repairs_fix_really_carries() {
         RULES.iter().filter_map(|r| r.fixable.map(|a| (r.code, a))).collect();
     assert_eq!(proposed, marked, "RuleMeta.fixable must match the edits compute_edits carries");
 
-    // And end to end: a bare --fix applies the Safe ones and says so.
-    let (_, applied) = gedlint::fix_bytes(&src);
+    // And end to end: a bare --fix under the same config applies the Safe
+    // ones and says so.
+    let (_, applied) = gedlint::fix_bytes_with(&src, &gedlint::FixSelection::default(), &all_on);
     let reported: BTreeSet<&str> = applied
         .iter()
         .filter_map(|note| note.split_once(':'))

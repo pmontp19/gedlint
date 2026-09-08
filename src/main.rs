@@ -326,12 +326,14 @@ fn main() -> ExitCode {
         }
     };
 
-    // --fix before linting: read bytes, repair, write .bak.
+    // --fix before linting: read bytes, repair, write .bak. The resolved
+    // config travels into the repair (#44): a ruleset the user did not
+    // enable must not rewrite the file, exactly as it reports nothing.
     if fix {
         let sel = FixSelection { only: fix_only, allow_unsafe: fix_unsafe };
         match fs::read(&path) {
             Ok(data) => {
-                let (fixed, applied) = fix_bytes_with(&data, &sel);
+                let (fixed, applied) = fix_bytes_with(&data, &sel, &cfg);
                 if fixed != data {
                     let bak = format!("{}.bak", path);
                     if let Err(e) = fs::write(&bak, &data) {
