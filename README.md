@@ -16,15 +16,17 @@ Working MVP: `cargo test` (97 tests: 2 unit + 79 rule + 10 CLI + 6 golden), `car
 ## Usage
 
 ```
-gedlint [--fix [--only CODE] [--unsafe]] [--format text|json] [--severity error|warning|info] [--max N] [--no-color] [--quiet] <file.ged>
+gedlint [--fix [--only CODE] [--unsafe]] [--format text|json] [--severity error|warning|info] [--max N] [--verbose] [--no-color] [--quiet] <file.ged>
 gedlint --explain [CODE]
 ```
 
 Exit codes: 0 clean, 1 warnings, 2 errors.
 
+The default text output groups diagnostics by rule code (worst severity and most occurrences first, one line per code, `N occurrences (--verbose to list all)`) and ends with a `Categories:`/`Rules:` footer; `--verbose` lists every occurrence in the classic per-line format. The same grouping lives in the engine (`Report::grouped()`) and is shared with the GitHub Action's job summary and the web viewer, so the three cannot drift.
+
 `--explain W202` prints what the rule is about, what breaks in other genealogy programs when a file violates it and what to do instead; `--explain` alone lists every rule grouped by ruleset. A rule is addressable by code (`W202`) or by `<ruleset>/<name>` (`core/asymmetric-famc-chil`), the same two spellings the configuration will accept. Unknown rule: exit 2.
 
-`--fix` only applies safe repairs (E001 orphan lines get a CONT prefix, E101 split CONC rejoined, trailing whitespace trimmed, classic Mac CR line endings normalized to LF) and always writes a `.bak` copy. `--max N` caps text output (JSON is always complete); `--severity` sets the minimum level shown.
+`--fix` only applies safe repairs (E001 orphan lines get a CONT prefix, E101 split CONC rejoined, trailing whitespace trimmed, classic Mac CR line endings normalized to LF) and always writes a `.bak` copy. `--max N` caps the text output (rule groups in the default view, individual diagnostics under `--verbose`; JSON is always complete); `--severity` sets the minimum level shown.
 
 Each repair is one `Edit` over a line range, carrying an `Applicability` (`Safe` or `MaybeIncorrect`), so a subset can be applied: `--only CODE` (repeatable) restricts `--fix` to those repair codes, and `--unsafe` also applies the `MaybeIncorrect` ones, which a bare `--fix` never does. Line-ending normalization is whole-file preprocessing rather than a rule, so `--only` does not switch it off.
 

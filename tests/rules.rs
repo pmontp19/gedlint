@@ -62,6 +62,25 @@ fn w202_chil_not_declaring_famc() {
 }
 
 #[test]
+fn w202_reports_the_famc_line() {
+    // Issue 30: whole-file graph findings used to report at line 0.
+    // HEAD551 is 4 lines, so the FAMC sits on line 7.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n0 @F1@ FAM\n1 HUSB @I2@\n0 @I2@ INDI\n1 NAME C /D/\n");
+    let d = only(&g, "W202");
+    assert_eq!(d.line, 7, "W202 points at the FAMC line: {:?}", d);
+    assert!(d.msg.contains("declares FAMC"), "{}", d.msg);
+}
+
+#[test]
+fn w202_reports_the_chil_line() {
+    // HEAD551 is 4 lines, so the CHIL sits on line 8.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n0 @F1@ FAM\n1 CHIL @I1@\n");
+    let d = only(&g, "W202");
+    assert_eq!(d.line, 8, "W202 points at the CHIL line: {:?}", d);
+    assert!(d.msg.contains("lists CHIL"), "{}", d.msg);
+}
+
+#[test]
 fn w301_death_before_birth() {
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 12 SEP 1909\n1 DEAT\n2 DATE 3 JAN 1900\n");
     assert!(has(&g, "W301"));
@@ -1123,4 +1142,174 @@ fn in_ruleset_moves_a_diag_out_of_core() {
     let d = only(&g, "E201").in_ruleset("hygiene");
     assert_eq!(d.ruleset, "hygiene");
     assert_eq!(d.code, "E201", "only the ruleset changes");
+}
+
+// ---------------------------------------------------------------------------
+// Determinism and real lines for the graph rules (issue 30).
+// ---------------------------------------------------------------------------
+
+/// Fixture that triggers W202 (both directions, twice each), W302 (two
+/// pairs), W303 (young father, old mother) and W304. Several occurrences
+/// per rule are what makes HashMap iteration order observable.
+fn graph_rules_fixture() -> String {
+    wrap551(
+        // Two W302 pairs.
+        "0 @I1@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1861\n\
+         0 @I2@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1862\n\
+         0 @I3@ INDI\n1 NAME Anna /Puig/\n1 BIRT\n2 DATE 1900\n\
+         0 @I4@ INDI\n1 NAME Anna /Puig/\n1 BIRT\n2 DATE 1901\n\
+         \
+         0 @I5@ INDI\n1 NAME Father /Vell/\n1 BIRT\n2 DATE 1990\n\
+         0 @I6@ INDI\n1 NAME Mother /Vell/\n1 BIRT\n2 DATE 1930\n\
+         0 @I7@ INDI\n1 NAME Child /Vell/\n1 BIRT\n2 DATE 1995\n1 FAMC @F3@\n\
+         0 @F3@ FAM\n1 HUSB @I5@\n1 WIFE @I6@\n1 CHIL @I7@\n1 MARR\n2 DATE 1999\n\
+         \
+         0 @I8@ INDI\n1 NAME One /A/\n1 FAMC @F1@\n\
+         0 @I9@ INDI\n1 NAME Two /A/\n1 FAMC @F2@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n\
+         0 @F2@ FAM\n1 HUSB @I2@\n\
+         \
+         0 @F4@ FAM\n1 CHIL @I10@\n\
+         0 @F5@ FAM\n1 CHIL @I11@\n\
+         0 @I10@ INDI\n1 NAME Ten /B/\n\
+         0 @I11@ INDI\n1 NAME Eleven /B/\n",
+    )
+}
+
+#[test]
+fn graph_rules_fire_all_four() {
+    let r = lint_str(&graph_rules_fixture());
+    for code in ["W202", "W302", "W303", "W304"] {
+        assert!(r.diags.iter().any(|d| d.code == code), "{} missing: {:?}", code, r.diags);
+    }
+}
+
+#[test]
+fn graph_rules_report_real_lines_not_zero() {
+    // Issue 30: every graph-rule diagnostic must point at a meaningful line.
+    let r = lint_str(&graph_rules_fixture());
+    for code in ["W202", "W302", "W303", "W304"] {
+        assert!(
+            r.diags.iter().filter(|d| d.code == code).all(|d| d.line > 0),
+            "{} still reports at line 0: {:?}",
+            code,
+            r.diags.iter().filter(|d| d.code == code).collect::<Vec<_>>()
+        );
+    }
+    // Spot checks on the fixture's known lines (HEAD551 is 4 lines):
+    // @I2@'s record opens on line 9 (W302 reports the second record)...
+    let w302 = only(
+        &wrap551("0 @I1@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1861\n0 @I2@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1862\n"),
+        "W302",
+    );
+    assert_eq!(w302.line, 9, "W302 points at the second duplicate's record line");
+    assert_eq!(w302.msg, "possible duplicate: @I1@ (b. 1861) vs @I2@ (b. 1862)", "pair order is deterministic");
+}
+
+#[test]
+fn w303_w304_point_at_the_child_record() {
+    // Same shape as the w303/w304 fixtures above: @I3@ (the child) opens on
+    // line 13 after the 4-line header.
+    let base = |marr: &str| {
+        wrap551(&format!(
+            "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+             0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+             0 @I3@ INDI\n1 NAME E /F/\n1 BIRT\n2 DATE 1910\n1 FAMC @F1@\n\
+             0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n{}",
+            marr
+        ))
+    };
+    let g303 = base("");
+    let r303 = lint_str(&g303);
+    for d in r303.diags.iter().filter(|d| d.code == "W303") {
+        assert_eq!(d.line, 13, "W303 points at the child's record line: {:?}", d);
+    }
+    let g304 = base("1 MARR\n2 DATE 1920\n");
+    let d304 = only(&g304, "W304");
+    assert_eq!(d304.line, 13, "W304 points at the child's record line: {:?}", d304);
+}
+
+#[test]
+fn graph_rules_order_is_identical_across_threads() {
+    // The real assertion behind "run it twice": RandomState is re-seeded per
+    // thread just like per process, so identical output across 8 independent
+    // threads means the order no longer depends on HashMap iteration.
+    let g = std::sync::Arc::new(graph_rules_fixture());
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let g = g.clone();
+            std::thread::spawn(move || {
+                let r = lint_str(&g);
+                r.diags
+                    .iter()
+                    .map(|d| format!("{} {} {} {}", d.severity.tag().trim(), d.code, d.line, d.msg))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+        })
+        .collect();
+    let outs: Vec<String> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    for o in &outs {
+        assert!(*o == outs[0], "graph-rule output differs between threads");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Grouped output (issue 20 / RFC 014 section 7).
+// ---------------------------------------------------------------------------
+
+use gedlint::Report;
+
+#[test]
+fn grouped_collapses_by_code_severity_then_count() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n1 _UPD X\n1 _UPD Y\n");
+    let r = lint_str(&g);
+    let groups = r.grouped();
+    let u502 = groups.iter().find(|g| g.code == "U502").expect("U502 group");
+    assert_eq!((u502.count, u502.severity, u502.line), (2, Severity::Info, 8), "first line of the run");
+    assert_eq!(u502.example, "vendor tag _UPD: kept as an undocumented extension in 7.0 (add a SCHMA TAG definition)");
+    // Severity descending: the W305 group sorts before the U502 group.
+    let w305 = groups.iter().find(|g| g.code == "W305").expect("W305 group");
+    assert_eq!((w305.count, w305.severity), (1, Severity::Warning));
+    assert!(groups.iter().position(|g| g.code == "W305").unwrap() < groups.iter().position(|g| g.code == "U502").unwrap());
+}
+
+#[test]
+fn grouped_takes_the_worst_severity_of_a_code() {
+    // W306 both warns (bad RESN value) and informs (OTHER without PHRASE).
+    let g = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN BOGUS\n1 ASSO @I2@\n2 ROLE OTHER\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n",
+        HEAD70
+    );
+    let r = lint_str(&g);
+    let w306 = r.grouped().into_iter().find(|g| g.code == "W306").expect("W306 group");
+    assert_eq!((w306.count, w306.severity), (2, Severity::Warning), "worst severity wins");
+}
+
+#[test]
+fn group_diags_over_a_filtered_slice() {
+    // The CLI groups the severity-filtered subset, not the whole report.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n1 _UPD X\n");
+    let r = lint_str(&g);
+    let warnings: Vec<&Diag> = r.filtered(Severity::Warning);
+    let groups = Report::group_diags(&warnings);
+    assert_eq!(groups.len(), 1, "only W305 survives the filter: {:?}", groups);
+    assert_eq!(groups[0].code, "W305");
+    assert_eq!(r.grouped().len(), 2, "unfiltered keeps both");
+}
+
+#[test]
+fn json_carries_the_engine_groups() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n1 _UPD X\n1 _UPD Y\n");
+    let j = lint_str(&g).to_json();
+    assert!(
+        j.contains("\"groups\":[{\"code\":\"W305\",\"category\":\"suspicious\",\"severity\":\"WARN\",\"count\":1,"),
+        "{}",
+        j
+    );
+    assert!(
+        j.contains("\"code\":\"U502\",\"category\":\"upgrade\",\"severity\":\"INFO\",\"count\":2,\"line\":8,\"example\":\"vendor tag _UPD"),
+        "{}",
+        j
+    );
 }

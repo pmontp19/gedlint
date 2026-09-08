@@ -12,8 +12,10 @@ use crate::rules::individuals::People;
 pub(crate) struct Graph {
     // xref -> (kind, line)
     pub(crate) records: HashMap<String, (String, usize)>,
-    pub(crate) indi_famc: HashMap<String, Vec<String>>,
-    pub(crate) fam_chil: HashMap<String, Vec<String>>,
+    // xref -> [(fam xref, line of the 1 FAMC)]
+    pub(crate) indi_famc: HashMap<String, Vec<(String, usize)>>,
+    // fam xref -> [(child xref, line of the 1 CHIL)]
+    pub(crate) fam_chil: HashMap<String, Vec<(String, usize)>>,
     pub(crate) fam_husb: HashMap<String, (String, usize)>,
     pub(crate) fam_wife: HashMap<String, (String, usize)>,
     // (line, from, tag, target)
@@ -72,7 +74,9 @@ pub(crate) fn indi_fam_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, xre
         st.indi_famc.entry(xref.to_string()).or_default();
         st.pending.push((l.no, xref.to_string(), l.tag.clone(), inner_ptr(&l.value).to_string()));
         if l.tag == "FAMC" {
-            st.indi_famc.entry(xref.to_string()).or_default().push(inner_ptr(&l.value).to_string());
+            // The line is kept with the link so W202 can point at the FAMC
+            // itself (issue 30) instead of at line 0.
+            st.indi_famc.entry(xref.to_string()).or_default().push((inner_ptr(&l.value).to_string(), l.no));
         }
     } else if !l.value.is_empty() {
         push_capped(
@@ -96,7 +100,9 @@ pub(crate) fn fam_member_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, x
         st.pending.push((l.no, xref.to_string(), l.tag.clone(), t.clone()));
         match l.tag.as_str() {
             "CHIL" => {
-                st.fam_chil.entry(xref.to_string()).or_default().push(t);
+                // The line is kept with the link so W202 can point at the
+                // CHIL itself (issue 30) instead of at line 0.
+                st.fam_chil.entry(xref.to_string()).or_default().push((t, l.no));
             }
             // E008: FAM.HUSB / FAM.WIFE are {0:1}.
             "HUSB" | "WIFE" => {
@@ -167,12 +173,14 @@ pub(crate) fn finish_refs(diags: &mut Vec<Diag>, st: &Graph) {
 
 /// End of run: W202 FAMC/CHIL asymmetry.
 pub(crate) fn finish_symmetry(diags: &mut Vec<Diag>, st: &Graph) {
-    // W202: FAMC not listed as CHIL (and vice versa).
-
-    // W202: FAMC no llistat com a CHIL (i viceversa).
+    // W202: FAMC not listed as CHIL (and vice versa). Each half reports at
+    // the line of the link that exists (issue 30): the FAMC for a child the
+    // family does not list, the CHIL for a child that declares no FAMC.
+    // A real line also makes the output deterministic, which the old line-0
+    // sort ties never were.
     for (xref, fams) in &st.indi_famc {
-        for f in fams {
-            let listed = st.fam_chil.get(f).map(|c| c.contains(xref)).unwrap_or(false);
+        for (f, fam_line) in fams {
+            let listed = st.fam_chil.get(f).map(|c| c.iter().any(|(c_x, _)| c_x == xref)).unwrap_or(false);
             let fam_exists = st.records.get(f).map(|r| r.0 == "FAM").unwrap_or(false);
             if fam_exists && !listed {
                 push_capped(
@@ -181,7 +189,7 @@ pub(crate) fn finish_symmetry(diags: &mut Vec<Diag>, st: &Graph) {
                         "W202",
                         Category::Suspicious,
                         Severity::Warning,
-                        0,
+                        *fam_line,
                         format!("{}: declares FAMC {} but the FAM does not list them as CHIL", xref, f),
                     )],
                 );
@@ -189,8 +197,8 @@ pub(crate) fn finish_symmetry(diags: &mut Vec<Diag>, st: &Graph) {
         }
     }
     for (fam, chils) in &st.fam_chil {
-        for c in chils {
-            let declares = st.indi_famc.get(c).map(|v| v.contains(fam)).unwrap_or(false);
+        for (c, chil_line) in chils {
+            let declares = st.indi_famc.get(c).map(|v| v.iter().any(|(f, _)| f == fam)).unwrap_or(false);
             if !declares && st.records.contains_key(c) {
                 push_capped(
                     diags,
@@ -198,7 +206,7 @@ pub(crate) fn finish_symmetry(diags: &mut Vec<Diag>, st: &Graph) {
                         "W202",
                         Category::Suspicious,
                         Severity::Warning,
-                        0,
+                        *chil_line,
                         format!("{}: lists CHIL {} but the INDI declares no FAMC", fam, c),
                     )],
                 );

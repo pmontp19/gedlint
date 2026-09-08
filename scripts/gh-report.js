@@ -155,23 +155,79 @@ function emitLog(entries, format) {
   }
 }
 
-function groupByCode(items) {
+// The per-rule grouping lives in the engine (Report::grouped(), issue 20)
+// and reaches this script through the "groups" key of the report JSON, so
+// the CLI, this summary and the web viewer share one implementation. The
+// recompute below only serves report files from release pins older than
+// the grouping engine, whose JSON predates the key.
+function groupsOf(entry) {
+  const report = entry.report;
+  if (Array.isArray(report.groups)) {
+    return report.groups.map((g) => ({
+      code: g.code,
+      severity: SEVERITIES[g.severity] || SEVERITIES.INFO,
+      category: g.category,
+      count: g.count,
+      line: g.line,
+      message: g.example,
+    }));
+  }
+  const diags = (report.diagnostics || []).slice().sort(
+    (a, b) => severityOf(a).rank - severityOf(b).rank || a.line - b.line
+  );
   const groups = new Map();
-  for (const { entry, diagnostic } of items) {
-    let group = groups.get(diagnostic.code);
-    if (!group) {
-      group = {
+  for (const diagnostic of diags) {
+    const group = groups.get(diagnostic.code);
+    if (group) {
+      group.count += 1;
+    } else {
+      groups.set(diagnostic.code, {
         code: diagnostic.code,
         severity: severityOf(diagnostic),
         category: diagnostic.category,
-        count: 0,
-        example: '`' + entry.display + ':' + diagnostic.line + '` ' + diagnostic.message,
-      };
-      groups.set(diagnostic.code, group);
+        count: 1,
+        line: diagnostic.line,
+        message: diagnostic.message,
+      });
     }
-    group.count += 1;
   }
-  return [...groups.values()].sort(
+  return [...groups.values()];
+}
+
+// Folds the per-file groups into one row per rule code, worst severity
+// first, then most occurrences, then code. The example is the first
+// occurrence in the same order the annotations walk (severity, file, line),
+// so a table merged from per-file engine groups is byte-for-byte the table
+// the old recomputed-over-every-diagnostic code produced.
+function mergeGroups(entries) {
+  const byCode = new Map();
+  for (const entry of entries) {
+    for (const group of groupsOf(entry)) {
+      const merged = byCode.get(group.code);
+      if (!merged) {
+        byCode.set(group.code, { ...group, display: entry.display });
+        continue;
+      }
+      merged.count += group.count;
+      const closer =
+        group.severity.rank < merged.severity.rank ||
+        (group.severity.rank === merged.severity.rank &&
+          (entry.display.localeCompare(merged.display) < 0 ||
+            (entry.display === merged.display && group.line < merged.line)));
+      if (closer) {
+        merged.severity = group.severity;
+        merged.category = group.category;
+        merged.line = group.line;
+        merged.message = group.message;
+        merged.display = entry.display;
+      }
+    }
+  }
+  const rows = [...byCode.values()];
+  for (const row of rows) {
+    row.example = '`' + row.display + ':' + row.line + '` ' + row.message;
+  }
+  return rows.sort(
     (a, b) => a.severity.rank - b.severity.rank || b.count - a.count || a.code.localeCompare(b.code)
   );
 }
@@ -195,7 +251,7 @@ function buildSummary(entries, items, totals, annotated) {
     lines.push('### By rule', '');
     lines.push('| Rule | Severity | Category | Count | Example |');
     lines.push('| --- | --- | --- | --- | --- |');
-    for (const group of groupByCode(items)) {
+    for (const group of mergeGroups(entries)) {
       lines.push(
         '| `' +
           group.code +
