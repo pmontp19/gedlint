@@ -240,7 +240,7 @@ fn lookup_by_code_and_by_ruleset_name() {
 #[test]
 fn rulesets_lists_every_ruleset_once() {
     let sets = rulesets();
-    assert_eq!(sets, vec!["core"], "everything shipped today is core (RFC 014 section 0.4)");
+    assert_eq!(sets, vec!["core", "hispanic-naming", "hygiene"], "all expected rulesets are listed (RFC 014 section 0.4)");
     for r in RULES {
         assert!(sets.contains(&r.ruleset));
     }
@@ -309,11 +309,11 @@ fn fixable_matches_the_repairs_fix_really_carries() {
     // split across CONC lines (E101). Kept dynamic on purpose: a rule that
     // gains a repair the fixture does not trigger fails here, which is the
     // prompt to extend the fixture rather than to hardcode a list.
-    let mut src: Vec<u8> = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT caf".to_vec();
+        let mut src: Vec<u8> = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT caf".to_vec();
     src.push(0xC3);
     src.extend_from_slice(b"\n2 CONC ");
     src.push(0xA9);
-    src.extend_from_slice(b"\norphan line\n0 TRLR\n");
+    src.extend_from_slice(b"\norphan line\n0 @I1@ INDI\n1 NAME Joan /CRUZ, LOPEZ/\n0 @I2@ INDI\n1 NAME A, /DE LA O/\n1 BIRT\n2 PLAC Reus,, Spain\n0 TRLR\n");
 
     // What the engine proposes, with the applicability it proposes it at.
     // `compute_edits` also emits the "style" pseudo-code for trailing

@@ -110,6 +110,9 @@ pub fn compute_edits(data: &[u8]) -> Vec<Edit> {
     orphan_edits(&lines, &mut out);
     whitespace_edits(&lines, &mut out);
     conc_edits(&lines, &mut out);
+    w601_edits(&lines, &mut out);
+    w702_edits(&lines, &mut out);
+    w703_edits(&lines, &mut out);
     out
 }
 
@@ -222,7 +225,7 @@ pub fn fix_bytes_with(data: &[u8], sel: &FixSelection) -> (Vec<u8>, Vec<String>)
 /// blank line into a levelless one, and a second `E001` pass would prefix
 /// it with `CONT`, silently inventing a `CONT` record. The next `--fix`
 /// picks up whatever this one exposed.
-const REPAIR_ORDER: [&str; 3] = ["E001", "style", "E101"];
+const REPAIR_ORDER: [&str; 6] = ["E001", "style", "E101", "W601", "W702", "W703"];
 
 /// One pass for one code, over whatever the previous pass left behind.
 fn run_stage(cur: &mut Vec<u8>, edits: &mut Vec<Edit>, applied: &mut Vec<String>, sel: &FixSelection, code: &str) {
@@ -255,6 +258,9 @@ fn report(code: &str, n: usize) -> String {
     match code {
         "E001" => format!("E001: {} orphan lines prefixed with CONT", n),
         "E101" => format!("E101: rejoined {} CONC lines with split UTF-8", n),
+        "W601" => format!("W601: removed comma from {} surnames", n),
+        "W702" => format!("W702: converted {} surnames to title case", n),
+        "W703" => format!("W703: removed doubled commas from {} place names", n),
         "style" => format!("style: trimmed trailing whitespace on {} lines", n),
         c => format!("{}: {} repairs applied", c, n),
     }
@@ -437,6 +443,183 @@ fn rtrim_ws(b: &[u8]) -> &[u8] {
     &b[..end]
 }
 
+// `"<level> <TAG> <value>"` -> `(level, TAG, value)`; None when the prefix
+// before the tag is not a bare level number, so a NOTE value that happens
+// to contain the tag text can never be mistaken for the line itself.
+fn split_tag(line: &str) -> Option<(u32, &str, &str)> {
+    let tag_at = line.find(|c: char| !c.is_ascii_digit())?;
+    if tag_at == 0 {
+        return None;
+    }
+    let level: u32 = line[..tag_at].parse().ok()?;
+    let rest = line[tag_at..].strip_prefix(' ')?;
+    let (tag, value) = match rest.find(' ') {
+        Some(sp) => (&rest[..sp], &rest[sp + 1..]),
+        None => (rest, ""),
+    };
+    Some((level, tag, value))
+}
+
+// Whether the SURN line at `i` really hangs under a NAME line: the
+// diagnostic only fires there (the linter walks the same parent relation),
+// so a repair must not reach a stray SURN under some other level-1 tag.
+fn parent_is_name(lines: &[&[u8]], i: usize) -> bool {
+    for j in (0..i).rev() {
+        if let Some((level, tag, _)) = split_tag(&String::from_utf8_lossy(lines[j])) {
+            if level < 2 {
+                return tag == "NAME";
+            }
+        }
+    }
+    false
+}
+
+// W601
+fn w601_edits(lines: &[&[u8]], out: &mut Vec<Edit>) {
+    for (i, l) in lines.iter().enumerate() {
+        let s = String::from_utf8_lossy(l);
+        let Some((_, tag, value)) = split_tag(&s) else {
+            continue;
+        };
+        match tag {
+            // The surname slot of "1 NAME": the same shape check the
+            // diagnostic uses, rewritten in place between the slashes.
+            "NAME" => {
+                if let Some(start) = s.find('/') {
+                    if let Some(end) = s[start + 1..].find('/') {
+                        let surname = &s[start + 1..start + 1 + end];
+                        if let Some((a, b)) = crate::rules::hispanic_naming::comma_split(surname) {
+                            let mut nl = s.to_string();
+                            let new_surname = format!("{} {}", a, b);
+                            nl.replace_range(start + 1..start + 1 + end, &new_surname);
+                            out.push(Edit {
+                                code: "W601",
+                                lines: (i + 1, i + 1),
+                                replacement: vec![nl.into_bytes()],
+                                applicability: Applicability::Safe,
+                                note: "remove comma from surname".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            // "2 SURN": the whole value is the surname, same conservative
+            // shape, same note in the registry. Only under a NAME, where
+            // the diagnostic lives.
+            "SURN" if parent_is_name(lines, i) => {
+                // Cut any CR terminator off first (CRLF file): the
+                // rewrite must never touch line endings.
+                let body = value.strip_suffix('\r').unwrap_or(value);
+                if let Some((a, b)) = crate::rules::hispanic_naming::comma_split(body) {
+                    let val_off = s.len() - value.len();
+                    let body_end = val_off + body.len();
+                    let mut nl = s.to_string();
+                    nl.replace_range(val_off..body_end, &format!("{} {}", a, b));
+                    out.push(Edit {
+                        code: "W601",
+                        lines: (i + 1, i + 1),
+                        replacement: vec![nl.into_bytes()],
+                        applicability: Applicability::Safe,
+                        note: "remove comma from surname".to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// W702
+fn w702_edits(lines: &[&[u8]], out: &mut Vec<Edit>) {
+    for (i, l) in lines.iter().enumerate() {
+        let s = String::from_utf8_lossy(l);
+        let Some((_, tag, value)) = split_tag(&s) else {
+            continue;
+        };
+        match tag {
+            // The surname slot of "1 NAME".
+            "NAME" => {
+                if let Some(start) = s.find('/') {
+                    if let Some(end) = s[start + 1..].find('/') {
+                        let surname = &s[start + 1..start + 1 + end];
+                        if crate::rules::hygiene::is_all_caps(surname) {
+                            let mut nl = s.to_string();
+                            nl.replace_range(start + 1..start + 1 + end, &title_case(surname));
+                            out.push(Edit {
+                                code: "W702",
+                                lines: (i + 1, i + 1),
+                                replacement: vec![nl.into_bytes()],
+                                applicability: Applicability::MaybeIncorrect,
+                                note: "convert all-caps surname to title case".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            // "2 SURN": the whole value is the surname. Only under a NAME.
+            "SURN" if parent_is_name(lines, i) => {
+                let body = value.strip_suffix('\r').unwrap_or(value);
+                if crate::rules::hygiene::is_all_caps(body) {
+                    let val_off = s.len() - value.len();
+                    let body_end = val_off + body.len();
+                    let mut nl = s.to_string();
+                    nl.replace_range(val_off..body_end, &title_case(body));
+                    out.push(Edit {
+                        code: "W702",
+                        lines: (i + 1, i + 1),
+                        replacement: vec![nl.into_bytes()],
+                        applicability: Applicability::MaybeIncorrect,
+                        note: "convert all-caps surname to title case".to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// Title case for the W702 repair: each whitespace-separated token keeps its
+// first letter and lowercases the rest. Lossy on purpose (MCDONALD, DE LA
+// O), which is exactly why the repair is MaybeIncorrect.
+fn title_case(surname: &str) -> String {
+    let mut out = String::new();
+    for token in surname.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        let mut chars = token.chars();
+        if let Some(first) = chars.next() {
+            for u in first.to_uppercase() { out.push(u); }
+            for c in chars {
+                for l in c.to_lowercase() { out.push(l); }
+            }
+        }
+    }
+    out
+}
+
+// W703
+fn w703_edits(lines: &[&[u8]], out: &mut Vec<Edit>) {
+    for (i, l) in lines.iter().enumerate() {
+        let s = String::from_utf8_lossy(l);
+        if s.contains(" PLAC ") && (s.contains(",,") || s.contains(", ,")) {
+            let mut nl = s.to_string();
+            while nl.contains(",,") || nl.contains(", ,") {
+                                nl = nl.replace(",,", ",");
+                nl = nl.replace(", , ", ", ");
+                nl = nl.replace(", ,", ",");
+            }
+            out.push(Edit {
+                code: "W703",
+                lines: (i + 1, i + 1),
+                replacement: vec![nl.into_bytes()],
+                applicability: Applicability::Safe,
+                note: "remove doubled commas from place".to_string(),
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,7 +631,7 @@ mod tests {
             assert!(report(code, 7).starts_with(&format!("{}: ", code)));
         }
         // A code nobody wrote a line for still gets reported.
-        assert_eq!(report("W601", 2), "W601: 2 repairs applied");
+        assert_eq!(report("Z999", 2), "Z999: 2 repairs applied");
     }
 
     #[test]
@@ -466,3 +649,4 @@ mod tests {
         assert_eq!(weight(std::slice::from_ref(&in_place)), 1);
     }
 }
+

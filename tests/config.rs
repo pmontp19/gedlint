@@ -199,7 +199,7 @@ fn an_equals_sign_inside_a_quoted_key_still_reports_unknown_rule() {
 
 #[test]
 fn unknown_rule_key_is_a_hard_error() {
-    for key in ["NOPE", "nope/no-such-rule", "hygiene/polluted-name", "core/no-such-rule", "w305", "W305X"] {
+    for key in ["NOPE", "nope/no-such-rule", "hygiene/bogus-name", "core/no-such-rule", "w305", "W305X"] {
         let e = parse_config(&format!("[lints.rules]\n\"{}\" = \"off\"\n", key)).expect_err(key);
         assert!(e.msg.contains("unknown rule"), "{}: {}", key, e.msg);
         assert_eq!(e.line, 2, "{}", key);
