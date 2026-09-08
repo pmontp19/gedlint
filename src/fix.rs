@@ -238,7 +238,11 @@ pub fn fix_bytes_with(data: &[u8], sel: &FixSelection, cfg: &Config) -> (Vec<u8>
     debug_assert!(
         edits.iter().all(|e| REPAIR_ORDER.contains(&e.code)),
         "a repair code is missing from REPAIR_ORDER, so --fix would skip it: {:?}",
-        edits.iter().map(|e| e.code).filter(|c| !REPAIR_ORDER.contains(c)).collect::<Vec<_>>()
+        edits
+            .iter()
+            .map(|e| e.code)
+            .filter(|c| !REPAIR_ORDER.contains(c))
+            .collect::<Vec<_>>()
     );
 
     if lone_cr {
@@ -297,7 +301,16 @@ fn run_stage(
 /// a rejoin removes one line per `CONC` it swallowed, everything else is
 /// one line rewritten in place.
 fn weight(edits: &[Edit]) -> usize {
-    edits.iter().map(|e| if e.code == "E101" { e.lines.1 - e.lines.0 } else { 1 }).sum()
+    edits
+        .iter()
+        .map(|e| {
+            if e.code == "E101" {
+                e.lines.1 - e.lines.0
+            } else {
+                1
+            }
+        })
+        .sum()
 }
 
 /// The `--fix` report line for one code. The wording is CLI output. A code
@@ -447,7 +460,10 @@ fn leading_level(line: &[u8]) -> Option<usize> {
             break;
         }
     }
-    if digits > 0 && n <= MAX_LEVEL as usize && (line.get(digits) == Some(&b' ') || line.len() == digits) {
+    if digits > 0
+        && n <= MAX_LEVEL as usize
+        && (line.get(digits) == Some(&b' ') || line.len() == digits)
+    {
         Some(n)
     } else {
         None
@@ -455,7 +471,11 @@ fn leading_level(line: &[u8]) -> Option<usize> {
 }
 
 fn strip_cr(line: &[u8]) -> &[u8] {
-    if line.last() == Some(&b'\r') { &line[..line.len() - 1] } else { line }
+    if line.last() == Some(&b'\r') {
+        &line[..line.len() - 1]
+    } else {
+        line
+    }
 }
 
 /// Payload start of a `CONC` line whose payload begins with a UTF-8
@@ -463,7 +483,10 @@ fn strip_cr(line: &[u8]) -> &[u8] {
 fn split_conc_pos(line: &[u8]) -> Option<usize> {
     let s = strip_cr(line);
     let pos = conc_pos(s)?;
-    if s.get(pos).map(|b| (0x80..=0xBF).contains(b)).unwrap_or(false) {
+    if s.get(pos)
+        .map(|b| (0x80..=0xBF).contains(b))
+        .unwrap_or(false)
+    {
         Some(pos)
     } else {
         None
@@ -637,9 +660,13 @@ fn title_case(surname: &str) -> String {
         }
         let mut chars = token.chars();
         if let Some(first) = chars.next() {
-            for u in first.to_uppercase() { out.push(u); }
+            for u in first.to_uppercase() {
+                out.push(u);
+            }
             for c in chars {
-                for l in c.to_lowercase() { out.push(l); }
+                for l in c.to_lowercase() {
+                    out.push(l);
+                }
             }
         }
     }
@@ -653,7 +680,7 @@ fn w703_edits(lines: &[&[u8]], out: &mut Vec<Edit>) {
         if s.contains(" PLAC ") && (s.contains(",,") || s.contains(", ,")) {
             let mut nl = s.to_string();
             while nl.contains(",,") || nl.contains(", ,") {
-                                nl = nl.replace(",,", ",");
+                nl = nl.replace(",,", ",");
                 nl = nl.replace(", , ", ", ");
                 nl = nl.replace(", ,", ",");
             }
@@ -675,7 +702,11 @@ mod tests {
     #[test]
     fn every_repair_code_has_a_pass_and_a_report_line() {
         for code in REPAIR_ORDER {
-            assert!(!report(code, 1).ends_with("repairs applied"), "{} needs its own report line", code);
+            assert!(
+                !report(code, 1).ends_with("repairs applied"),
+                "{} needs its own report line",
+                code
+            );
             assert!(report(code, 7).starts_with(&format!("{}: ", code)));
         }
         // A code nobody wrote a line for still gets reported.
@@ -693,8 +724,11 @@ mod tests {
         };
         // Three CONC lines swallowed, so three repairs, not one edit.
         assert_eq!(weight(std::slice::from_ref(&rejoin)), 3);
-        let in_place = Edit { code: "E001", lines: (4, 4), ..rejoin };
+        let in_place = Edit {
+            code: "E001",
+            lines: (4, 4),
+            ..rejoin
+        };
         assert_eq!(weight(std::slice::from_ref(&in_place)), 1);
     }
 }
-

@@ -32,7 +32,10 @@ fn engine_codes() -> BTreeSet<String> {
             out.insert(c);
         }
     }
-    assert!(!out.is_empty(), "no rule codes found under src/: the scanner is broken, not the registry");
+    assert!(
+        !out.is_empty(),
+        "no rule codes found under src/: the scanner is broken, not the registry"
+    );
     out
 }
 
@@ -48,7 +51,10 @@ fn diag_call_args() -> Vec<(String, String)> {
             while let Some(p) = text[from..].find(ctor) {
                 let at = from + p + ctor.len();
                 // Enough to see a code literal; the call is often multi-line.
-                out.push((file.clone(), text[at..].trim_start().chars().take(24).collect()));
+                out.push((
+                    file.clone(),
+                    text[at..].trim_start().chars().take(24).collect(),
+                ));
                 from = at;
             }
         }
@@ -71,7 +77,12 @@ fn code_literal(arg: &str) -> Option<String> {
 /// only renders it; neither can emit a diagnostic.
 fn engine_files() -> Vec<PathBuf> {
     let mut out = rs_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"));
-    out.retain(|f| !matches!(f.file_name().unwrap().to_string_lossy().as_ref(), "registry.rs" | "main.rs"));
+    out.retain(|f| {
+        !matches!(
+            f.file_name().unwrap().to_string_lossy().as_ref(),
+            "registry.rs" | "main.rs"
+        )
+    });
     out.sort();
     out
 }
@@ -105,7 +116,11 @@ fn strip_comments(text: &str) -> String {
             out.push(b'"');
             i += 1;
             while i < b.len() && b[i] != b'"' {
-                let n = if b[i] == b'\\' && i + 1 < b.len() { 2 } else { 1 };
+                let n = if b[i] == b'\\' && i + 1 < b.len() {
+                    2
+                } else {
+                    1
+                };
                 out.extend_from_slice(&b[i..i + n]);
                 i += n;
             }
@@ -148,7 +163,11 @@ fn char_literal_len(b: &[u8], i: usize) -> usize {
         while j < b.len() && b[j] != b'\'' {
             j += 1;
         }
-        if j < b.len() { j - i + 1 } else { 1 }
+        if j < b.len() {
+            j - i + 1
+        } else {
+            1
+        }
     } else if b.get(i + 2) == Some(&b'\'') {
         3
     } else {
@@ -161,7 +180,11 @@ fn every_diagnostic_carries_a_literal_code() {
     // The completeness check below reads codes out of the sources, so a code
     // assembled at runtime would ship a rule that no static check can see.
     let sites = diag_call_args();
-    assert!(sites.len() >= 40, "only {} diagnostic constructor calls found: the scanner is broken", sites.len());
+    assert!(
+        sites.len() >= 40,
+        "only {} diagnostic constructor calls found: the scanner is broken",
+        sites.len()
+    );
     for (file, arg) in &sites {
         assert!(
             code_literal(arg).is_some(),
@@ -179,8 +202,16 @@ fn registry_and_engine_agree_on_the_set_of_codes() {
     let registry: BTreeSet<String> = RULES.iter().map(|r| r.code.to_string()).collect();
     let undocumented: Vec<&String> = engine.difference(&registry).collect();
     let orphans: Vec<&String> = registry.difference(&engine).collect();
-    assert!(undocumented.is_empty(), "codes the engine emits with no RULES entry: {:?}", undocumented);
-    assert!(orphans.is_empty(), "RULES entries the engine never emits: {:?}", orphans);
+    assert!(
+        undocumented.is_empty(),
+        "codes the engine emits with no RULES entry: {:?}",
+        undocumented
+    );
+    assert!(
+        orphans.is_empty(),
+        "RULES entries the engine never emits: {:?}",
+        orphans
+    );
 }
 
 #[test]
@@ -189,10 +220,16 @@ fn every_core_rule_has_a_fixture() {
     // file, not that the fixture still triggers it. It is the only thing
     // standing between a rule whose emission path goes dead and a green run,
     // because the code literal stays in the sources either way.
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("rules.rs");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("rules.rs");
     let fixtures = fs::read_to_string(path).unwrap();
     for r in RULES.iter().filter(|r| r.ruleset == "core") {
-        assert!(fixtures.contains(r.code), "{} has no fixture in tests/rules.rs", r.code);
+        assert!(
+            fixtures.contains(r.code),
+            "{} has no fixture in tests/rules.rs",
+            r.code
+        );
     }
 }
 
@@ -202,17 +239,31 @@ fn codes_are_unique_and_sorted() {
     let mut sorted = codes.clone();
     sorted.sort_unstable();
     sorted.dedup();
-    assert_eq!(codes, sorted, "RULES must be sorted by code, with no duplicates");
+    assert_eq!(
+        codes, sorted,
+        "RULES must be sorted by code, with no duplicates"
+    );
 }
 
 #[test]
 fn names_are_unique_kebab_case_inside_their_ruleset() {
     let mut seen: BTreeSet<(&str, &str)> = BTreeSet::new();
     for r in RULES {
-        assert!(seen.insert((r.ruleset, r.name)), "duplicate name {}/{}", r.ruleset, r.name);
-        assert!(!r.name.is_empty() && !r.name.starts_with('-') && !r.name.ends_with('-'), "bad name: {}", r.name);
         assert!(
-            r.name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+            seen.insert((r.ruleset, r.name)),
+            "duplicate name {}/{}",
+            r.ruleset,
+            r.name
+        );
+        assert!(
+            !r.name.is_empty() && !r.name.starts_with('-') && !r.name.ends_with('-'),
+            "bad name: {}",
+            r.name
+        );
+        assert!(
+            r.name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
             "name must be kebab-case: {}",
             r.name
         );
@@ -240,7 +291,11 @@ fn lookup_by_code_and_by_ruleset_name() {
 #[test]
 fn rulesets_lists_every_ruleset_once() {
     let sets = rulesets();
-    assert_eq!(sets, vec!["core", "hispanic-naming", "hygiene"], "all expected rulesets are listed (RFC 014 section 0.4)");
+    assert_eq!(
+        sets,
+        vec!["core", "hispanic-naming", "hygiene"],
+        "all expected rulesets are listed (RFC 014 section 0.4)"
+    );
     for r in RULES {
         assert!(sets.contains(&r.ruleset));
     }
@@ -262,15 +317,32 @@ fn only_core_is_enabled_by_default() {
 fn every_rule_carries_usable_prose() {
     for r in RULES {
         assert!(r.title.len() > 15, "{}: title too short", r.code);
-        assert!(!r.title.ends_with('.'), "{}: the title is a heading, not a sentence", r.code);
+        assert!(
+            !r.title.ends_with('.'),
+            "{}: the title is a heading, not a sentence",
+            r.code
+        );
         // Long enough to name what breaks and what to do: a stub fails here.
-        assert!(r.why.len() > 120, "{}: why must say what breaks in consumer software", r.code);
-        assert!(r.remedy.len() > 80, "{}: remedy must say what to do instead", r.code);
+        assert!(
+            r.why.len() > 120,
+            "{}: why must say what breaks in consumer software",
+            r.code
+        );
+        assert!(
+            r.remedy.len() > 80,
+            "{}: remedy must say what to do instead",
+            r.code
+        );
         assert!(r.why.ends_with('.'), "{}: why must be prose", r.code);
         assert!(r.remedy.ends_with('.'), "{}: remedy must be prose", r.code);
         // Written for a genealogist: the jargon of the tool stays out of it.
         for (field, text) in [("why", r.why), ("remedy", r.remedy)] {
-            assert!(!text.contains("linter"), "{}: {} should not mention the linter", r.code, field);
+            assert!(
+                !text.contains("linter"),
+                "{}: {} should not mention the linter",
+                r.code,
+                field
+            );
         }
     }
 }
@@ -286,20 +358,39 @@ fn category_matches_what_the_engine_emits() {
         format!("{head}0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n1 PLAC http://x\n0 TRLR\n"),
         format!("{head}0 @I1@ INDI\n1 NAME A /B\n1 BIRT\n2 DATE about 1900\n0 TRLR\n"),
         format!("{head}0 @I1@ INDI\n1 NAME A /B/\n1 _UPD X\n1 ASSO @I1@\n2 RELA cosi\n0 TRLR\n"),
-        format!("{head}0 @F1@ FAM\n1 CHIL @I1@\n0 @I1@ INDI\n1 NAME A /B/\n1 NOTE x<br>y\n0 TRLR\n"),
+        format!(
+            "{head}0 @F1@ FAM\n1 CHIL @I1@\n0 @I1@ INDI\n1 NAME A /B/\n1 NOTE x<br>y\n0 TRLR\n"
+        ),
     ];
     let mut checked = 0;
     for g in &corpus {
         for d in gedlint::lint_str(g).diags {
             let meta = rule(d.code).unwrap_or_else(|| panic!("{} is not in the registry", d.code));
-            assert_eq!(meta.category, d.category, "{}: category drifted from the registry", d.code);
+            assert_eq!(
+                meta.category, d.category,
+                "{}: category drifted from the registry",
+                d.code
+            );
             checked += 1;
         }
     }
-    assert!(checked >= 10, "the corpus must exercise several rules, got {}", checked);
+    assert!(
+        checked >= 10,
+        "the corpus must exercise several rules, got {}",
+        checked
+    );
     // Sanity: the four categories are all represented in the table.
-    for c in [Category::Correctness, Category::Suspicious, Category::Style, Category::Upgrade] {
-        assert!(RULES.iter().any(|r| r.category == c), "no rule in category {}", c.as_str());
+    for c in [
+        Category::Correctness,
+        Category::Suspicious,
+        Category::Style,
+        Category::Upgrade,
+    ] {
+        assert!(
+            RULES.iter().any(|r| r.category == c),
+            "no rule in category {}",
+            c.as_str()
+        );
     }
 }
 
@@ -309,7 +400,8 @@ fn fixable_matches_the_repairs_fix_really_carries() {
     // split across CONC lines (E101). Kept dynamic on purpose: a rule that
     // gains a repair the fixture does not trigger fails here, which is the
     // prompt to extend the fixture rather than to hardcode a list.
-        let mut src: Vec<u8> = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT caf".to_vec();
+    let mut src: Vec<u8> =
+        b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT caf".to_vec();
     src.push(0xC3);
     src.extend_from_slice(b"\n2 CONC ");
     src.push(0xA9);
@@ -333,12 +425,21 @@ fn fixable_matches_the_repairs_fix_really_carries() {
             continue;
         }
         if let Some(prev) = proposed.insert(e.code, e.applicability) {
-            assert_eq!(prev, e.applicability, "{}: two applicabilities, RuleMeta.fixable records one", e.code);
+            assert_eq!(
+                prev, e.applicability,
+                "{}: two applicabilities, RuleMeta.fixable records one",
+                e.code
+            );
         }
     }
-    let marked: BTreeMap<&'static str, Applicability> =
-        RULES.iter().filter_map(|r| r.fixable.map(|a| (r.code, a))).collect();
-    assert_eq!(proposed, marked, "RuleMeta.fixable must match the edits compute_edits carries");
+    let marked: BTreeMap<&'static str, Applicability> = RULES
+        .iter()
+        .filter_map(|r| r.fixable.map(|a| (r.code, a)))
+        .collect();
+    assert_eq!(
+        proposed, marked,
+        "RuleMeta.fixable must match the edits compute_edits carries"
+    );
 
     // And end to end: a bare --fix under the same config applies the Safe
     // ones and says so.
@@ -349,7 +450,14 @@ fn fixable_matches_the_repairs_fix_really_carries() {
         .map(|(code, _)| code)
         .filter(|code| rule(code).is_some())
         .collect();
-    let safe: BTreeSet<&str> =
-        RULES.iter().filter(|r| r.fixable == Some(Applicability::Safe)).map(|r| r.code).collect();
-    assert_eq!(reported, safe, "a bare --fix applies exactly the Safe repairs: {:?}", applied);
+    let safe: BTreeSet<&str> = RULES
+        .iter()
+        .filter(|r| r.fixable == Some(Applicability::Safe))
+        .map(|r| r.code)
+        .collect();
+    assert_eq!(
+        reported, safe,
+        "a bare --fix applies exactly the Safe repairs: {:?}",
+        applied
+    );
 }

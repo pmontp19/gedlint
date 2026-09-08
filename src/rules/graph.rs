@@ -38,7 +38,7 @@ pub(crate) fn open_record(
                 Category::Correctness,
                 Severity::Error,
                 l.no,
-                format!("duplicate xref {} (first at line {})", l.xref, first_line)
+                format!("duplicate xref {} (first at line {})", l.xref, first_line),
             ));
         } else {
             st.records.insert(l.xref.clone(), (l.tag.clone(), l.no));
@@ -64,11 +64,19 @@ pub(crate) fn open_record(
 pub(crate) fn indi_fam_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, xref: &str) {
     if is_pointer(&l.value) {
         st.indi_famc.entry(xref.to_string()).or_default();
-        st.pending.push((l.no, xref.to_string(), l.tag.clone(), inner_ptr(&l.value).to_string()));
+        st.pending.push((
+            l.no,
+            xref.to_string(),
+            l.tag.clone(),
+            inner_ptr(&l.value).to_string(),
+        ));
         if l.tag == "FAMC" {
             // The line is kept with the link so W202 can point at the FAMC
             // itself (issue 30) instead of at line 0.
-            st.indi_famc.entry(xref.to_string()).or_default().push((inner_ptr(&l.value).to_string(), l.no));
+            st.indi_famc
+                .entry(xref.to_string())
+                .or_default()
+                .push((inner_ptr(&l.value).to_string(), l.no));
         }
     } else if !l.value.is_empty() {
         diags.push(Diag::new(
@@ -76,7 +84,12 @@ pub(crate) fn indi_fam_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, xre
             Category::Correctness,
             Severity::Error,
             l.no,
-            format!("{}: {} with a non-pointer value: {}", xref, l.tag, truncate(&l.value, 40))
+            format!(
+                "{}: {} with a non-pointer value: {}",
+                xref,
+                l.tag,
+                truncate(&l.value, 40)
+            ),
         ));
     }
 }
@@ -86,23 +99,31 @@ pub(crate) fn indi_fam_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, xre
 pub(crate) fn fam_member_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, xref: &str) {
     if is_pointer(&l.value) {
         let t = inner_ptr(&l.value).to_string();
-        st.pending.push((l.no, xref.to_string(), l.tag.clone(), t.clone()));
+        st.pending
+            .push((l.no, xref.to_string(), l.tag.clone(), t.clone()));
         match l.tag.as_str() {
             "CHIL" => {
                 // The line is kept with the link so W202 can point at the
                 // CHIL itself (issue 30) instead of at line 0.
-                st.fam_chil.entry(xref.to_string()).or_default().push((t, l.no));
+                st.fam_chil
+                    .entry(xref.to_string())
+                    .or_default()
+                    .push((t, l.no));
             }
             // E008: FAM.HUSB / FAM.WIFE are {0:1}.
             "HUSB" | "WIFE" => {
-                let slot = if l.tag == "HUSB" { &mut st.fam_husb } else { &mut st.fam_wife };
+                let slot = if l.tag == "HUSB" {
+                    &mut st.fam_husb
+                } else {
+                    &mut st.fam_wife
+                };
                 if let Some((_, first)) = slot.get(xref) {
                     diags.push(Diag::new(
                         "E008",
                         Category::Correctness,
                         Severity::Error,
                         l.no,
-                        format!("duplicate {} in {} (first at line {})", l.tag, xref, first)
+                        format!("duplicate {} in {} (first at line {})", l.tag, xref, first),
                     ));
                 } else {
                     slot.insert(xref.to_string(), (t, l.no));
@@ -117,16 +138,27 @@ pub(crate) fn fam_member_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, x
 pub(crate) fn generic_pointer(st: &mut Graph, l: &Line, xref: &str) {
     // Note: ADOP takes no pointer in 5.5.1 (event with a
     // subordinate FAMC), so it is not tracked here.
-    if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "SUBM" | "REPO") {
-        st.pending.push((l.no, xref.to_string(), l.tag.clone(), inner_ptr(&l.value).to_string()));
+    if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "SUBM" | "REPO")
+    {
+        st.pending.push((
+            l.no,
+            xref.to_string(),
+            l.tag.clone(),
+            inner_ptr(&l.value).to_string(),
+        ));
     }
 }
 
 /// Pointers below level 1 (event SOUR/OBJE/NOTE...) resolve for E201 too.
 pub(crate) fn sub_pointer(st: &mut Graph, l: &Line, cur: &Option<(String, String)>) {
-    if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "REPO" | "SUBM") {
-        let from = cur.clone().map(|c| c.0).unwrap_or_else(|| format!("line {}", l.no));
-        st.pending.push((l.no, from, l.tag.clone(), inner_ptr(&l.value).to_string()));
+    if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "REPO" | "SUBM")
+    {
+        let from = cur
+            .clone()
+            .map(|c| c.0)
+            .unwrap_or_else(|| format!("line {}", l.no));
+        st.pending
+            .push((l.no, from, l.tag.clone(), inner_ptr(&l.value).to_string()));
     }
 }
 
@@ -148,7 +180,10 @@ pub(crate) fn finish_refs(diags: &mut Vec<Diag>, st: &Graph) {
                 Category::Correctness,
                 Severity::Error,
                 *line,
-                format!("{}: {} {} points to a nonexistent {}", from, tag, target, kind)
+                format!(
+                    "{}: {} {} points to a nonexistent {}",
+                    from, tag, target, kind
+                ),
             ));
         }
     }
@@ -163,7 +198,11 @@ pub(crate) fn finish_symmetry(diags: &mut Vec<Diag>, st: &Graph) {
     // sort ties never were.
     for (xref, fams) in &st.indi_famc {
         for (f, fam_line) in fams {
-            let listed = st.fam_chil.get(f).map(|c| c.iter().any(|(c_x, _)| c_x == xref)).unwrap_or(false);
+            let listed = st
+                .fam_chil
+                .get(f)
+                .map(|c| c.iter().any(|(c_x, _)| c_x == xref))
+                .unwrap_or(false);
             let fam_exists = st.records.get(f).map(|r| r.0 == "FAM").unwrap_or(false);
             if fam_exists && !listed {
                 diags.push(Diag::new(
@@ -171,21 +210,28 @@ pub(crate) fn finish_symmetry(diags: &mut Vec<Diag>, st: &Graph) {
                     Category::Suspicious,
                     Severity::Warning,
                     *fam_line,
-                    format!("{}: declares FAMC {} but the FAM does not list them as CHIL", xref, f)
+                    format!(
+                        "{}: declares FAMC {} but the FAM does not list them as CHIL",
+                        xref, f
+                    ),
                 ));
             }
         }
     }
     for (fam, chils) in &st.fam_chil {
         for (c, chil_line) in chils {
-            let declares = st.indi_famc.get(c).map(|v| v.iter().any(|(f, _)| f == fam)).unwrap_or(false);
+            let declares = st
+                .indi_famc
+                .get(c)
+                .map(|v| v.iter().any(|(f, _)| f == fam))
+                .unwrap_or(false);
             if !declares && st.records.contains_key(c) {
                 diags.push(Diag::new(
                     "W202",
                     Category::Suspicious,
                     Severity::Warning,
                     *chil_line,
-                    format!("{}: lists CHIL {} but the INDI declares no FAMC", fam, c)
+                    format!("{}: lists CHIL {} but the INDI declares no FAMC", fam, c),
                 ));
             }
         }

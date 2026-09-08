@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::diag::Severity;
-use crate::registry::{RULES, rule, rule_by_name, rulesets};
+use crate::registry::{rule, rule_by_name, rulesets, RULES};
 
 /// What configuration asks of one rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +45,10 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { presets: vec!["recommended".to_string()], overrides: Vec::new() }
+        Config {
+            presets: vec!["recommended".to_string()],
+            overrides: Vec::new(),
+        }
     }
 }
 
@@ -59,13 +62,15 @@ impl Config {
     pub fn effective(&self) -> BTreeMap<&'static str, RuleLevel> {
         // Start from silence: a rule no preset covers is off until an
         // explicit entry turns it on.
-        let mut map: BTreeMap<&'static str, RuleLevel> = RULES.iter().map(|r| (r.code, RuleLevel::Off)).collect();
+        let mut map: BTreeMap<&'static str, RuleLevel> =
+            RULES.iter().map(|r| (r.code, RuleLevel::Off)).collect();
         // Presets decide which rules are on at all. Additive and in order:
         // "recommended" enables every core rule, a preset named after an
         // opt-in ruleset enables that ruleset's rules.
         for preset in &self.presets {
             for r in RULES {
-                let on = (preset == "recommended" && r.ruleset == "core") || preset.as_str() == r.ruleset;
+                let on = (preset == "recommended" && r.ruleset == "core")
+                    || preset.as_str() == r.ruleset;
                 if on {
                     map.remove(r.code);
                 }
@@ -107,7 +112,10 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 fn err(line: usize, msg: impl Into<String>) -> ConfigError {
-    ConfigError { line, msg: msg.into() }
+    ConfigError {
+        line,
+        msg: msg.into(),
+    }
 }
 
 /// The preset names a config file may legally use: `recommended` plus one
@@ -181,7 +189,10 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
         }
 
         let Some(section) = section else {
-            return Err(err(no, "key before any [section]: start the file with [lints]"));
+            return Err(err(
+                no,
+                "key before any [section]: start the file with [lints]",
+            ));
         };
         // The separator is the first '=' outside a quoted key, so a key
         // like "my=rule" splits at the right place and reports as an
@@ -195,7 +206,10 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
         match section {
             Section::Lints => {
                 if key != "presets" {
-                    return Err(err(no, format!("unknown key \"{key}\" in [lints]: only \"presets\" is allowed")));
+                    return Err(err(
+                        no,
+                        format!("unknown key \"{key}\" in [lints]: only \"presets\" is allowed"),
+                    ));
                 }
                 if presets.is_some() {
                     return Err(err(no, "presets is set twice"));
@@ -203,11 +217,17 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
                 let list = parse_string_array(value, no)?;
                 let mut resolved: Vec<String> = Vec::new();
                 for p in &list {
-                    let known = p == "recommended" || rulesets().iter().any(|rs| *rs != "core" && *rs == p.as_str());
+                    let known = p == "recommended"
+                        || rulesets()
+                            .iter()
+                            .any(|rs| *rs != "core" && *rs == p.as_str());
                     if !known {
                         return Err(err(
                             no,
-                            format!("unknown preset \"{p}\": valid presets are {}", preset_names().join(", ")),
+                            format!(
+                                "unknown preset \"{p}\": valid presets are {}",
+                                preset_names().join(", ")
+                            ),
                         ));
                     }
                     if resolved.iter().any(|r| r == p) {
@@ -252,7 +272,10 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
         }
     }
 
-    Ok(Config { presets: presets.unwrap_or_else(|| vec!["recommended".to_string()]), overrides })
+    Ok(Config {
+        presets: presets.unwrap_or_else(|| vec!["recommended".to_string()]),
+        overrides,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -301,17 +324,26 @@ fn parse_key(s: &str, no: usize) -> Result<String, ConfigError> {
             return Err(err(no, "unexpected text after the key"));
         }
         Ok(rest[..end].to_string())
-    } else if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    } else if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         Ok(s.to_string())
     } else {
-        Err(err(no, "key must be a double-quoted string or bare letters, digits, '-' or '_'"))
+        Err(err(
+            no,
+            "key must be a double-quoted string or bare letters, digits, '-' or '_'",
+        ))
     }
 }
 
 /// One double-quoted string, with nothing allowed after it.
 fn parse_quoted(s: &str, no: usize) -> Result<&str, ConfigError> {
     let Some(rest) = s.strip_prefix('"') else {
-        return Err(err(no, "value must be a double-quoted string, e.g. \"off\""));
+        return Err(err(
+            no,
+            "value must be a double-quoted string, e.g. \"off\"",
+        ));
     };
     let Some(end) = rest.find('"') else {
         return Err(err(no, "value string must close with '\"'"));
@@ -326,7 +358,10 @@ fn parse_quoted(s: &str, no: usize) -> Result<&str, ConfigError> {
 /// trailing comma are all fine.
 fn parse_string_array(s: &str, no: usize) -> Result<Vec<String>, ConfigError> {
     let Some(inner) = s.strip_prefix('[') else {
-        return Err(err(no, "presets must be an array of strings, e.g. [\"recommended\"]"));
+        return Err(err(
+            no,
+            "presets must be an array of strings, e.g. [\"recommended\"]",
+        ));
     };
     let Some(inner) = inner.strip_suffix(']') else {
         return Err(err(no, "array must open and close on the same line"));

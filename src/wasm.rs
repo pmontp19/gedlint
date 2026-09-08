@@ -112,7 +112,12 @@ fn ret(bytes: Vec<u8>) -> *mut u8 {
 /// `data..data+data_len` and `cfg..cfg+cfg_len` must be valid for reads for
 /// the duration of the call (the JS host blocks on it synchronously).
 #[no_mangle]
-pub unsafe extern "C" fn gedlint_lint(data: *const u8, data_len: usize, cfg: *const u8, cfg_len: usize) -> *mut u8 {
+pub unsafe extern "C" fn gedlint_lint(
+    data: *const u8,
+    data_len: usize,
+    cfg: *const u8,
+    cfg_len: usize,
+) -> *mut u8 {
     let data = unsafe { input(data, data_len) };
     let cfg = unsafe { input(cfg, cfg_len) };
     ret(lint_entry(data, cfg).into_bytes())
@@ -137,7 +142,12 @@ pub extern "C" fn gedlint_registry() -> *mut u8 {
 /// `data..data+data_len` and `cfg..cfg+cfg_len` must be valid for reads for
 /// the duration of the call (the JS host blocks on it synchronously).
 #[no_mangle]
-pub unsafe extern "C" fn gedlint_edits(data: *const u8, data_len: usize, cfg: *const u8, cfg_len: usize) -> *mut u8 {
+pub unsafe extern "C" fn gedlint_edits(
+    data: *const u8,
+    data_len: usize,
+    cfg: *const u8,
+    cfg_len: usize,
+) -> *mut u8 {
     let data = unsafe { input(data, data_len) };
     let cfg = unsafe { input(cfg, cfg_len) };
     ret(edits_entry(data, cfg).into_bytes())
@@ -153,7 +163,14 @@ pub unsafe extern "C" fn gedlint_edits(data: *const u8, data_len: usize, cfg: *c
 /// `data..data+data_len`, `mask..mask+mask_len` and `cfg..cfg+cfg_len` must
 /// be valid for reads for the duration of the call.
 #[no_mangle]
-pub unsafe extern "C" fn gedlint_apply(data: *const u8, data_len: usize, mask: *const u8, mask_len: usize, cfg: *const u8, cfg_len: usize) -> *mut u8 {
+pub unsafe extern "C" fn gedlint_apply(
+    data: *const u8,
+    data_len: usize,
+    mask: *const u8,
+    mask_len: usize,
+    cfg: *const u8,
+    cfg_len: usize,
+) -> *mut u8 {
     let data = unsafe { input(data, data_len) };
     let mask = unsafe { input(mask, mask_len) };
     let cfg = unsafe { input(cfg, cfg_len) };
@@ -239,9 +256,16 @@ fn apply_entry(data: &[u8], mask: &[u8], cfg: &[u8]) -> Vec<u8> {
     let (norm, lone_cr) = normalize_endings(data);
     let edits = compute_edits_with(&norm, &c);
     if mask.len() != edits.len() {
-        return apply_error("the selection does not match the current repair list; compute repairs again and retry");
+        return apply_error(
+            "the selection does not match the current repair list; compute repairs again and retry",
+        );
     }
-    let chosen: Vec<Edit> = edits.iter().zip(mask.iter()).filter(|(_, &m)| m != 0).map(|(e, _)| e.clone()).collect();
+    let chosen: Vec<Edit> = edits
+        .iter()
+        .zip(mask.iter())
+        .filter(|(_, &m)| m != 0)
+        .map(|(e, _)| e.clone())
+        .collect();
     let (file, dropped) = apply_edits(&norm, &chosen);
 
     let mut json = String::with_capacity(64 + (chosen.len() + dropped.len()) * 64);
@@ -280,7 +304,6 @@ fn write_edit_list(out: &mut String, edits: &[Edit]) {
         out.push_str("\"}");
     }
 }
-
 
 /// First replacement line, lossily decoded and truncated, so the UI can
 /// preview the result without holding raw bytes. Empty for deletions.
@@ -326,11 +349,19 @@ mod tests {
         };
         assert_eq!(replacement_preview(&quoted), "say \\\"hi\\\"");
         let long: Vec<u8> = vec![b'x'; 300];
-        let e2 = Edit { replacement: vec![long], lines: (2, 2), ..e };
+        let e2 = Edit {
+            replacement: vec![long],
+            lines: (2, 2),
+            ..e
+        };
         let p = replacement_preview(&e2);
         assert!(p.ends_with("...") && p.len() < 110, "{}", p);
         // A deletion has nothing to preview.
-        let e3 = Edit { replacement: vec![], lines: (2, 2), ..e2 };
+        let e3 = Edit {
+            replacement: vec![],
+            lines: (2, 2),
+            ..e2
+        };
         assert_eq!(replacement_preview(&e3), "");
     }
 
@@ -341,7 +372,11 @@ mod tests {
         let n = u64::from_le_bytes(out[..8].try_into().unwrap()) as usize;
         let json = String::from_utf8(out[8..].to_vec()).unwrap();
         assert!(json.contains("\"error\""), "{}", json);
-        assert_eq!(total, 8 + n, "json length header must describe the rest of the payload");
+        assert_eq!(
+            total,
+            8 + n,
+            "json length header must describe the rest of the payload"
+        );
         // A broken config is an error payload too, not a default-config run.
         let bad = apply_entry(b"0 HEAD\n", b"", b"[lints]\npresets = [\"nope\"]\n");
         let json = String::from_utf8(bad[8..].to_vec()).unwrap();

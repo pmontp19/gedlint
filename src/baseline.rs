@@ -83,11 +83,17 @@ pub fn fingerprint(msg: &str) -> String {
 pub fn baseline_from_report(report: &Report) -> Baseline {
     let mut counts: HashMap<(String, String), u32> = HashMap::new();
     for d in &report.diags {
-        *counts.entry((d.code.to_string(), fingerprint(&d.msg))).or_insert(0) += 1;
+        *counts
+            .entry((d.code.to_string(), fingerprint(&d.msg)))
+            .or_insert(0) += 1;
     }
     let mut entries: Vec<BaselineEntry> = counts
         .into_iter()
-        .map(|((code, fingerprint), count)| BaselineEntry { code, fingerprint, count })
+        .map(|((code, fingerprint), count)| BaselineEntry {
+            code,
+            fingerprint,
+            count,
+        })
         .collect();
     entries.sort_by(|a, b| a.code.cmp(&b.code).then(a.fingerprint.cmp(&b.fingerprint)));
     Baseline { entries }
@@ -156,7 +162,11 @@ pub fn baseline_to_json(b: &Baseline) -> String {
 /// `"gedlint-baseline": 1` and an `"entries"` array of
 /// `{code, fingerprint, count}` objects. Anything else is a clear error.
 pub fn parse_baseline(text: &str) -> Result<Baseline, String> {
-    let mut p = Parser { s: text, b: text.as_bytes(), i: 0 };
+    let mut p = Parser {
+        s: text,
+        b: text.as_bytes(),
+        i: 0,
+    };
     p.ws();
     p.expect(b'{')?;
     let mut got_version = false;
@@ -177,7 +187,10 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, String> {
                     }
                     let v = p.uint()?;
                     if v != FORMAT_VERSION {
-                        return Err(p.err(&format!("unsupported baseline version {} (this build reads {})", v, FORMAT_VERSION)));
+                        return Err(p.err(&format!(
+                            "unsupported baseline version {} (this build reads {})",
+                            v, FORMAT_VERSION
+                        )));
                     }
                     got_version = true;
                 }
@@ -253,7 +266,9 @@ impl<'a> Parser<'a> {
         if start == self.i {
             return Err(self.err("expected a number"));
         }
-        self.s[start..self.i].parse::<u32>().map_err(|_| self.err("number out of range"))
+        self.s[start..self.i]
+            .parse::<u32>()
+            .map_err(|_| self.err("number out of range"))
     }
 
     /// A JSON string literal with the escapes the serializer emits (plus the
@@ -309,7 +324,8 @@ impl<'a> Parser<'a> {
             return Err("baseline file: lone low surrogate in \\u escape".to_string());
         }
         if !(0xD800..0xDC00).contains(&hi) {
-            return char::from_u32(hi as u32).ok_or_else(|| "baseline file: invalid \\u escape".to_string());
+            return char::from_u32(hi as u32)
+                .ok_or_else(|| "baseline file: invalid \\u escape".to_string());
         }
         if ch.next() != Some('\\') || ch.next() != Some('u') {
             return Err("baseline file: missing low surrogate".to_string());
@@ -325,7 +341,10 @@ impl<'a> Parser<'a> {
     fn hex4(&self, ch: &mut impl Iterator<Item = char>) -> Result<u16, String> {
         let mut v: u16 = 0;
         for _ in 0..4 {
-            let d = ch.next().and_then(|c| c.to_digit(16)).ok_or_else(|| "baseline file: invalid \\u escape".to_string())?;
+            let d = ch
+                .next()
+                .and_then(|c| c.to_digit(16))
+                .ok_or_else(|| "baseline file: invalid \\u escape".to_string())?;
             v = v * 16 + d as u16;
         }
         Ok(v)
@@ -372,7 +391,11 @@ impl<'a> Parser<'a> {
                             count = self.uint()?;
                             have.2 = true;
                         }
-                        k => return Err(self.err(&format!("unexpected key \"{}\" in baseline entry", k))),
+                        k => {
+                            return Err(
+                                self.err(&format!("unexpected key \"{}\" in baseline entry", k))
+                            )
+                        }
                     }
                     self.ws();
                     if self.eat(b',') {
@@ -402,10 +425,17 @@ impl<'a> Parser<'a> {
             }
             // Merge repeated keys by summing: a hand-edited file with two
             // identical entries behaves like one with the added count.
-            if let Some(e) = entries.iter_mut().find(|e| e.code == code && e.fingerprint == fp) {
+            if let Some(e) = entries
+                .iter_mut()
+                .find(|e| e.code == code && e.fingerprint == fp)
+            {
                 e.count += count;
             } else {
-                entries.push(BaselineEntry { code, fingerprint: fp, count });
+                entries.push(BaselineEntry {
+                    code,
+                    fingerprint: fp,
+                    count,
+                });
             }
             self.ws();
             if self.eat(b',') {
@@ -429,7 +459,10 @@ mod tests {
         assert_eq!(fingerprint("Duplicate XREF @F1@"), "duplicate xref @f#@");
         assert_eq!(fingerprint("  a   b\t\tc\n"), "a b c");
         // Line references collapse away: shifting lines cannot change it.
-        assert_eq!(fingerprint("first at line 42"), fingerprint("first at line 108"));
+        assert_eq!(
+            fingerprint("first at line 42"),
+            fingerprint("first at line 108")
+        );
         assert_eq!(fingerprint("5.5.1"), "#.#.#");
         assert_eq!(fingerprint(""), "");
         // Non-ASCII survives (Catalan fixtures are real data).
@@ -447,14 +480,24 @@ mod tests {
     fn json_round_trip() {
         let b = Baseline {
             entries: vec![
-                BaselineEntry { code: "E201".into(), fingerprint: "famc @f#@ points nowhere".into(), count: 2 },
-                BaselineEntry { code: "W302".into(), fingerprint: "possible duplicate: \"joan\" (b. #) vs \"joan\" (b. #)".into(), count: 1 },
+                BaselineEntry {
+                    code: "E201".into(),
+                    fingerprint: "famc @f#@ points nowhere".into(),
+                    count: 2,
+                },
+                BaselineEntry {
+                    code: "W302".into(),
+                    fingerprint: "possible duplicate: \"joan\" (b. #) vs \"joan\" (b. #)".into(),
+                    count: 1,
+                },
             ],
         };
         let parsed = parse_baseline(&baseline_to_json(&b)).unwrap();
         assert_eq!(parsed, b);
         // Equal content serializes byte-identically.
-        let again = Baseline { entries: b.entries.clone() };
+        let again = Baseline {
+            entries: b.entries.clone(),
+        };
         assert_eq!(baseline_to_json(&again), baseline_to_json(&b));
     }
 
@@ -472,7 +515,10 @@ mod tests {
         let b = parse_baseline(text).unwrap();
         assert_eq!(b.entries.len(), 1);
         assert_eq!(b.entries[0].code, "W402");
-        assert_eq!(b.entries[0].fingerprint, "quote \" back\\slash tab \t \u{e8}");
+        assert_eq!(
+            b.entries[0].fingerprint,
+            "quote \" back\\slash tab \t \u{e8}"
+        );
         assert_eq!(b.entries[0].count, 3);
     }
 
@@ -494,7 +540,12 @@ mod tests {
     #[test]
     fn json_reader_rejects_garbage() {
         let good = |entries: &str| format!("{{\"gedlint-baseline\":1,\"entries\":[{}]}}", entries);
-        let entry = |body: &str| format!("{{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":1,{}}}", body);
+        let entry = |body: &str| {
+            format!(
+                "{{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":1,{}}}",
+                body
+            )
+        };
         let cases: Vec<(String, &str)> = vec![
             ("not json".into(), "expected '{'"),
             ("".into(), "expected '{'"),
@@ -525,7 +576,13 @@ mod tests {
         for (text, needle) in cases {
             let err = parse_baseline(&text).unwrap_err();
             assert!(err.contains("baseline file:"), "{} -> {}", text, err);
-            assert!(err.contains(needle), "{} -> {} (want {})", text, err, needle);
+            assert!(
+                err.contains(needle),
+                "{} -> {} (want {})",
+                text,
+                err,
+                needle
+            );
         }
     }
 

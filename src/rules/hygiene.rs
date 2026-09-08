@@ -6,24 +6,36 @@ use crate::rules::names::surname_slot;
 /// the value of a `2 SURN` subtag. Returns whether it fired.
 pub(crate) fn check_polluted_name(diags: &mut Vec<Diag>, line: usize, val: &str) -> bool {
     let mut polluted = false;
-    if val.contains('*') || val.chars().any(|c| c.is_ascii_digit()) || val.contains('º') || val.contains('ª') {
+    if val.contains('*')
+        || val.chars().any(|c| c.is_ascii_digit())
+        || val.contains('º')
+        || val.contains('ª')
+    {
         polluted = true;
     } else if val.contains('(') {
         let lower = val.to_lowercase();
         // Conservative: a parenthetical can be a legitimate Catalan house name
-        if !lower.contains("(cal ") && !lower.contains("(can ") && !lower.contains("(mas ") && !lower.contains("(casa ") && !lower.contains("(de ") {
+        if !lower.contains("(cal ")
+            && !lower.contains("(can ")
+            && !lower.contains("(mas ")
+            && !lower.contains("(casa ")
+            && !lower.contains("(de ")
+        {
             polluted = true;
         }
     }
 
     if polluted {
-        diags.push(Diag::new(
-            "W701",
-            Category::Style,
-            Severity::Info,
-            line,
-            format!("polluted name field: {}", truncate(val, 60)),
-        ).in_ruleset("hygiene"));
+        diags.push(
+            Diag::new(
+                "W701",
+                Category::Style,
+                Severity::Info,
+                line,
+                format!("polluted name field: {}", truncate(val, 60)),
+            )
+            .in_ruleset("hygiene"),
+        );
         return true;
     }
     false
@@ -53,26 +65,31 @@ pub(crate) fn check_all_caps_value(diags: &mut Vec<Diag>, line: usize, surname: 
     if !is_all_caps(surname) {
         return false;
     }
-    diags.push(Diag::new(
-        "W702",
-        Category::Style,
-        Severity::Info,
-        line,
-        format!("all-caps surname: {}", truncate(surname, 60)),
-    ).in_ruleset("hygiene"));
+    diags.push(
+        Diag::new(
+            "W702",
+            Category::Style,
+            Severity::Info,
+            line,
+            format!("all-caps surname: {}", truncate(surname, 60)),
+        )
+        .in_ruleset("hygiene"),
+    );
     true
 }
 
 /// W703: malformed-place
 pub(crate) fn check_malformed_place(diags: &mut Vec<Diag>, l: &Line) {
-    if l.tag == "PLAC"
-        && (l.value.contains(",,") || l.value.contains(", ,")) {
-            diags.push(Diag::new(
+    if l.tag == "PLAC" && (l.value.contains(",,") || l.value.contains(", ,")) {
+        diags.push(
+            Diag::new(
                 "W703",
                 Category::Style,
                 Severity::Info,
                 l.no,
                 format!("doubled commas in place: {}", truncate(&l.value, 60)),
-            ).in_ruleset("hygiene"));
-        }
+            )
+            .in_ruleset("hygiene"),
+        );
+    }
 }

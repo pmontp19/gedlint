@@ -10,7 +10,10 @@ use crate::parse::Version;
 /// (spec 1.1) and only warned about otherwise.
 pub(crate) fn encoding_diags(data: &[u8], version: Version, charset: Option<&str>) -> Vec<Diag> {
     let mut out = Vec::new();
-    let non_utf8 = matches!(charset, Some("ANSEL") | Some("ASCII") | Some("IBMPC") | Some("MACINTOSH"));
+    let non_utf8 = matches!(
+        charset,
+        Some("ANSEL") | Some("ASCII") | Some("IBMPC") | Some("MACINTOSH")
+    );
     if data.starts_with(&[0xEF, 0xBB, 0xBF]) && version != Version::V70 {
         out.push(Diag::new(
             "W102",
@@ -56,15 +59,26 @@ pub(crate) fn encoding_diags(data: &[u8], version: Version, charset: Option<&str
     let mut first_span = (0u32, 0u32);
     if !non_utf8 {
         for (i, line) in data.split(|&b| b == b'\n').enumerate() {
-            let l = if line.last() == Some(&b'\r') { &line[..line.len() - 1] } else { line };
+            let l = if line.last() == Some(&b'\r') {
+                &line[..line.len() - 1]
+            } else {
+                line
+            };
             // Skip the "N CONC ..." header: the useful content starts after it.
             let at = conc_payload_start(l);
             let payload = &l[at..];
-            if payload.first().map(|b| (0x80..=0xBF).contains(b)).unwrap_or(false) {
+            if payload
+                .first()
+                .map(|b| (0x80..=0xBF).contains(b))
+                .unwrap_or(false)
+            {
                 bad += 1;
                 if first == 0 {
                     first = i + 1;
-                    let run = payload.iter().take_while(|&&b| (0x80..=0xBF).contains(&b)).count();
+                    let run = payload
+                        .iter()
+                        .take_while(|&&b| (0x80..=0xBF).contains(&b))
+                        .count();
                     first_span = (at as u32, run as u32);
                 }
             }

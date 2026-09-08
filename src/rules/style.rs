@@ -12,7 +12,7 @@ pub(crate) fn check_control_chars(diags: &mut Vec<Diag>, l: &Line) {
             Category::Style,
             Severity::Warning,
             l.no,
-            "control character inside line".into()
+            "control character inside line".into(),
         ));
     }
 }
@@ -46,20 +46,28 @@ pub(crate) fn check_plac_url_record(diags: &mut Vec<Diag>, l: &Line) {
             l.no,
             col,
             len,
-            format!("PLAC with URL (MyHeritage quirk): move it to NOTE: {}", truncate(&l.value, 60))
+            format!(
+                "PLAC with URL (MyHeritage quirk): move it to NOTE: {}",
+                truncate(&l.value, 60)
+            ),
         ));
     }
 }
 
 /// W403: HTML notes inside NOTE.
 pub(crate) fn check_note_html(diags: &mut Vec<Diag>, l: &Line) {
-    if l.tag == "NOTE" && (l.value.contains("<br") || l.value.contains("<notexml") || l.value.contains("&nbsp")) {
+    if l.tag == "NOTE"
+        && (l.value.contains("<br") || l.value.contains("<notexml") || l.value.contains("&nbsp"))
+    {
         diags.push(Diag::new(
             "W403",
             Category::Style,
             Severity::Warning,
             l.no,
-            format!("NOTE with HTML (exporter quirk): {}", truncate(&l.value, 60))
+            format!(
+                "NOTE with HTML (exporter quirk): {}",
+                truncate(&l.value, 60)
+            ),
         ));
     }
 }
@@ -75,7 +83,10 @@ pub(crate) fn check_plac_url(diags: &mut Vec<Diag>, l: &Line) {
             l.no,
             col,
             len,
-            format!("PLAC with URL (MyHeritage quirk): {}", truncate(&l.value, 60))
+            format!(
+                "PLAC with URL (MyHeritage quirk): {}",
+                truncate(&l.value, 60)
+            ),
         ));
     }
 }

@@ -1,12 +1,18 @@
 //! One rule per test with minimal fixtures (acceptance criterion 5).
 //! Each test builds the smallest GEDCOM that triggers a single rule.
 
-use gedlint::{Config, Diag, FixSelection, Severity, Version, compute_edits, compute_edits_with, fix_bytes, fix_bytes_with, lint_bytes, lint_str, parse_config};
-
+use gedlint::{
+    compute_edits, compute_edits_with, fix_bytes, fix_bytes_with, lint_bytes, lint_str,
+    parse_config, Config, Diag, FixSelection, Severity, Version,
+};
 
 fn codes_with(input: &str, preset: &str) -> Vec<String> {
     let cfg = gedlint::parse_config(&format!("[lints]\npresets = [\"{}\"]\n", preset)).unwrap();
-    gedlint::lint_str_with(input, &cfg).diags.iter().map(|d| d.code.to_string()).collect()
+    gedlint::lint_str_with(input, &cfg)
+        .diags
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect()
 }
 
 /// Recommended plus the named opt-in rulesets: the config a test needs to
@@ -16,7 +22,11 @@ fn codes_with(input: &str, preset: &str) -> Vec<String> {
 fn fix_cfg(presets: &[&str]) -> Config {
     let mut all = vec!["recommended"];
     all.extend_from_slice(presets);
-    let list = all.iter().map(|p| format!("\"{p}\"")).collect::<Vec<_>>().join(", ");
+    let list = all
+        .iter()
+        .map(|p| format!("\"{p}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     parse_config(&format!("[lints]\npresets = [{list}]\n")).unwrap()
 }
 
@@ -25,7 +35,11 @@ fn has_with(input: &str, code: &str, preset: &str) -> bool {
 }
 
 fn codes(input: &str) -> Vec<String> {
-    lint_str(input).diags.iter().map(|d| d.code.to_string()).collect()
+    lint_str(input)
+        .diags
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect()
 }
 
 fn has(input: &str, code: &str) -> bool {
@@ -103,14 +117,18 @@ fn w202_reports_the_chil_line() {
 
 #[test]
 fn w301_death_before_birth() {
-    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 12 SEP 1909\n1 DEAT\n2 DATE 3 JAN 1900\n");
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 12 SEP 1909\n1 DEAT\n2 DATE 3 JAN 1900\n",
+    );
     assert!(has(&g, "W301"));
 }
 
 #[test]
 fn w301_longevity_112() {
     // The 112-year entry from the real corpus: must trigger W301.
-    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1 JAN 1800\n1 DEAT\n2 DATE 1 JAN 1912\n");
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1 JAN 1800\n1 DEAT\n2 DATE 1 JAN 1912\n",
+    );
     assert!(has(&g, "W301"));
 }
 
@@ -197,7 +215,11 @@ fn e101_conc_split_fix() {
     data.push(0xA9);
     data.extend_from_slice(" /Oso/\n0 TRLR\n".as_bytes());
     let r = lint_bytes(&data);
-    assert!(r.diags.iter().any(|d| d.code == "E101"), "expected E101, got: {:?}", r.diags);
+    assert!(
+        r.diags.iter().any(|d| d.code == "E101"),
+        "expected E101, got: {:?}",
+        r.diags
+    );
     let (fixed, applied) = fix_bytes(&data);
     assert!(!applied.is_empty());
     let r2 = lint_bytes(&fixed);
@@ -227,7 +249,11 @@ fn e001_orphan_cont_fix() {
     let (fixed, applied) = fix_bytes(&data);
     assert!(applied.iter().any(|a| a.contains("CONT")));
     let r2 = lint_bytes(&fixed);
-    assert!(!r2.diags.iter().any(|d| d.code == "E001" && d.line == 7), "orphan line 7 repaired: {:?}", r2.diags);
+    assert!(
+        !r2.diags.iter().any(|d| d.code == "E001" && d.line == 7),
+        "orphan line 7 repaired: {:?}",
+        r2.diags
+    );
     let text = String::from_utf8(fixed).unwrap();
     assert!(text.contains("3 CONT continuacio sense prefix"));
 }
@@ -241,7 +267,11 @@ fn no_global_cap_hides_errors() {
     }
     g.push_str("0 @F9@ FAM\n1 CHIL @I999@\n0 TRLR\n");
     let r = lint_str(&g);
-    assert!(r.diags.iter().any(|d| d.code == "E201"), "E201 must not stay hidden: {:?}", r.diags.len());
+    assert!(
+        r.diags.iter().any(|d| d.code == "E201"),
+        "E201 must not stay hidden: {:?}",
+        r.diags.len()
+    );
     assert!(r.infos() >= 300);
 }
 
@@ -383,13 +413,17 @@ fn u502_vendor_tag() {
     // MyHeritage _UPD is a vendor tag: upgrade info, never an error.
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 _UPD 20240101\n");
     let r = lint_str(&g);
-    assert!(r.diags.iter().any(|d| d.code == "U502" && d.severity == Severity::Info));
+    assert!(r
+        .diags
+        .iter()
+        .any(|d| d.code == "U502" && d.severity == Severity::Info));
 }
 
 #[test]
 fn u501_lowercase_pedi() {
     // 5.5.1 lowercase PEDI values must be uppercase in 7.0.
-    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI birth\n0 @F1@ FAM\n1 CHIL @I1@\n");
+    let g =
+        wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI birth\n0 @F1@ FAM\n1 CHIL @I1@\n");
     assert!(has(&g, "U501"));
 }
 
@@ -398,11 +432,15 @@ fn u501_rela_reads_identically_at_both_levels() {
     // Issue 29: the sublevel variant of U501 used to emit its message in
     // Catalan while the level-1 variant was English. Both must read alike.
     let l1 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 RELA ret\n");
-    let sub = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 RELA ret\n0 @I2@ INDI\n1 NAME C /D/\n");
+    let sub =
+        wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 RELA ret\n0 @I2@ INDI\n1 NAME C /D/\n");
     let d1 = only(&l1, "U501");
     let dsub = only(&sub, "U501");
     assert!(d1.msg.contains("RELA removed in 7.0"), "{}", d1.msg);
-    assert_eq!(d1.msg, dsub.msg, "both U501 RELA variants must emit the same wording");
+    assert_eq!(
+        d1.msg, dsub.msg,
+        "both U501 RELA variants must emit the same wording"
+    );
 }
 
 #[test]
@@ -495,12 +533,20 @@ fn e001_year_leading_orphan_is_repaired() {
     // 1936 ("level jump"), so --fix left it behind. Levels stop at 99.
     let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT Primera part\n1936 va ser un any dur\n0 TRLR\n".to_vec();
     let r = lint_bytes(&data);
-    assert!(r.diags.iter().any(|d| d.code == "E001" && d.line == 7), "{:?}", r.diags);
+    assert!(
+        r.diags.iter().any(|d| d.code == "E001" && d.line == 7),
+        "{:?}",
+        r.diags
+    );
     let (fixed, applied) = fix_bytes(&data);
     assert!(applied.iter().any(|a| a.contains("CONT")));
     let text = String::from_utf8(fixed).unwrap();
     assert!(text.contains("3 CONT 1936 va ser un any dur"), "{}", text);
-    assert!(lint_str(&text).diags.is_empty(), "{:?}", lint_str(&text).diags);
+    assert!(
+        lint_str(&text).diags.is_empty(),
+        "{:?}",
+        lint_str(&text).diags
+    );
 }
 
 #[test]
@@ -510,16 +556,28 @@ fn e001_orphan_run_stays_flat() {
     // CONT instead of off TEXT, silently losing them for a strict reader.
     let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT Primera part\n1936 un any dur\n1937 un altre\n1938 un altre mes\n0 TRLR\n".to_vec();
     let (fixed, applied) = fix_bytes(&data);
-    assert!(applied.iter().any(|a| a.contains("3 orphan lines")), "{:?}", applied);
+    assert!(
+        applied.iter().any(|a| a.contains("3 orphan lines")),
+        "{:?}",
+        applied
+    );
     let text = String::from_utf8(fixed).unwrap();
     assert!(text.contains("3 CONT 1936 un any dur"), "{}", text);
     assert!(text.contains("3 CONT 1937 un altre"), "{}", text);
     assert!(text.contains("3 CONT 1938 un altre mes"), "{}", text);
-    assert!(lint_str(&text).diags.is_empty(), "{:?}", lint_str(&text).diags);
+    assert!(
+        lint_str(&text).diags.is_empty(),
+        "{:?}",
+        lint_str(&text).diags
+    );
     // The anchor resets on the next line that really has a level.
     let mixed = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT a\norfe u\norfe dos\n1 NOTE x\ndespres\n0 TRLR\n".to_vec();
     let t2 = String::from_utf8(fix_bytes(&mixed).0).unwrap();
-    assert!(t2.contains("3 CONT orfe u") && t2.contains("3 CONT orfe dos"), "{}", t2);
+    assert!(
+        t2.contains("3 CONT orfe u") && t2.contains("3 CONT orfe dos"),
+        "{}",
+        t2
+    );
     assert!(t2.contains("2 CONT despres"), "{}", t2);
 }
 
@@ -527,10 +585,15 @@ fn e001_orphan_run_stays_flat() {
 fn fix_leaves_whitespace_only_lines_alone() {
     // lint ignores a whitespace-only line, so --fix must not turn it into an
     // empty CONT; the trailing-whitespace pass trims it instead.
-    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT part\n   \n0 TRLR\n".to_vec();
+    let data =
+        b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @S1@ SOUR\n1 DATA\n2 TEXT part\n   \n0 TRLR\n".to_vec();
     let (fixed, applied) = fix_bytes(&data);
     let text = String::from_utf8(fixed).unwrap();
-    assert!(!applied.iter().any(|a| a.contains("orphan")), "{:?}", applied);
+    assert!(
+        !applied.iter().any(|a| a.contains("orphan")),
+        "{:?}",
+        applied
+    );
     assert!(!text.contains("CONT"), "{}", text);
     assert!(text.contains("2 TEXT part\n\n0 TRLR"), "{}", text);
 }
@@ -550,11 +613,19 @@ fn w306_enum_values() {
     assert!(has(&g, "W306"));
     let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE FRIEND\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n", HEAD70);
     assert!(!has(&ok, "W306"));
-    let q = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 SOUR @S1@\n3 QUAY 9\n0 @S1@ SOUR\n1 TITL T\n");
+    let q = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 SOUR @S1@\n3 QUAY 9\n0 @S1@ SOUR\n1 TITL T\n",
+    );
     assert!(has(&q, "W306"));
-    let r = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN locked\n0 TRLR\n", HEAD70);
+    let r = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN locked\n0 TRLR\n",
+        HEAD70
+    );
     assert!(has(&r, "W306"));
-    let r2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN LOCKED\n0 TRLR\n", HEAD70);
+    let r2 = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN LOCKED\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&r2, "W306"));
 }
 
@@ -563,7 +634,10 @@ fn w306_other_wants_phrase() {
     // ROLE OTHER without a sibling PHRASE: info; with PHRASE: silent.
     let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n", HEAD70);
     let r = lint_str(&g);
-    assert!(r.diags.iter().any(|d| d.code == "W306" && d.severity == Severity::Info));
+    assert!(r
+        .diags
+        .iter()
+        .any(|d| d.code == "W306" && d.severity == Severity::Info));
     let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n2 PHRASE Teacher\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n", HEAD70);
     assert!(!lint_str(&ok).diags.iter().any(|d| d.code == "W306"));
 }
@@ -580,26 +654,41 @@ fn w302_3digit_years() {
 #[test]
 fn e101_ansel_exempt_conc_split() {
     // Declared ANSEL: a high byte starting a CONC payload is legal, no E101.
-    let mut data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR ANSEL\n0 @I1@ INDI\n1 NOTE ab\n2 CONC ".to_vec();
+    let mut data =
+        b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR ANSEL\n0 @I1@ INDI\n1 NOTE ab\n2 CONC ".to_vec();
     data.push(0x83);
     data.extend_from_slice(b"\n0 TRLR\n");
     let r = lint_bytes(&data);
-    assert!(!r.diags.iter().any(|d| d.code == "E101"), "ANSEL: {:?}", r.diags);
+    assert!(
+        !r.diags.iter().any(|d| d.code == "E101"),
+        "ANSEL: {:?}",
+        r.diags
+    );
 }
 
 #[test]
 fn w306_pedi_per_version() {
     // PEDI case follows the version: uppercase in 7.0, lowercase in 5.5.1.
     let fam70 = "0 @F1@ FAM\n1 CHIL @I1@\n";
-    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI ADOPTED\n{}0 TRLR\n", HEAD70, fam70);
+    let g = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI ADOPTED\n{}0 TRLR\n",
+        HEAD70, fam70
+    );
     assert!(!has(&g, "W306"));
-    let g2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI adopted\n{}0 TRLR\n", HEAD70, fam70);
+    let g2 = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI adopted\n{}0 TRLR\n",
+        HEAD70, fam70
+    );
     assert!(has(&g2, "W306"));
-    let g3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI adopted\n0 @F1@ FAM\n1 CHIL @I1@\n");
+    let g3 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI adopted\n0 @F1@ FAM\n1 CHIL @I1@\n",
+    );
     assert!(!has(&g3, "W306"));
     // Issue 9 (finding 4): 5.5.1 enum checks are case-insensitive; commercial
     // exporters capitalize ("ADOPTED"). 7.0 stays strict (registry case).
-    let g4 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI ADOPTED\n0 @F1@ FAM\n1 CHIL @I1@\n");
+    let g4 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI ADOPTED\n0 @F1@ FAM\n1 CHIL @I1@\n",
+    );
     assert!(!has(&g4, "W306"), "{:?}", codes(&g4));
 }
 
@@ -611,29 +700,47 @@ fn w306_551_enum_case_insensitive() {
     let t2 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n2 TYPE MARRIED\n");
     assert!(!has(&t2, "W306"));
     // 7.0 registry spellings are uppercase: "Birth" is still flagged there.
-    let t3 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n2 TYPE Birth\n0 TRLR\n", HEAD70);
+    let t3 = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n2 TYPE Birth\n0 TRLR\n",
+        HEAD70
+    );
     assert!(has(&t3, "W306"));
     // MEDI under 5.5.1 accepts capitalized spellings.
     let m = wrap551("0 @O1@ OBJE\n1 FILE\n2 FORM jpeg\n3 MEDI Photo\n");
     assert!(!has(&m, "W306"));
     // 5.5.1 has no ASSO.ROLE; source-citation ROLE has its own small set.
-    let r5 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE HUSB\n0 @I2@ INDI\n1 NAME C /D/\n");
+    let r5 =
+        wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE HUSB\n0 @I2@ INDI\n1 NAME C /D/\n");
     assert!(!has(&r5, "W306"));
-    let r5b = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE CLERGY\n0 @I2@ INDI\n1 NAME C /D/\n");
+    let r5b = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE CLERGY\n0 @I2@ INDI\n1 NAME C /D/\n",
+    );
     assert!(has(&r5b, "W306"));
 }
 
 #[test]
 fn w306_resn_list_70() {
     // Issue 9 (maximal70.ged): 7.0 RESN is type-List#Enum (comma-separated).
-    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, LOCKED\n0 TRLR\n", HEAD70);
+    let ok = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, LOCKED\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&ok, "W306"), "{:?}", codes(&ok));
-    let ok2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, LOCKED, PRIVACY\n0 TRLR\n", HEAD70);
+    let ok2 = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, LOCKED, PRIVACY\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&ok2, "W306"));
-    let bad = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, BOGUS\n0 TRLR\n", HEAD70);
+    let bad = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL, BOGUS\n0 TRLR\n",
+        HEAD70
+    );
     assert!(has(&bad, "W306"));
     // Trailing/empty tokens are tolerated (exporter quirk).
-    let tail = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL,\n0 TRLR\n", HEAD70);
+    let tail = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 RESN CONFIDENTIAL,\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&tail, "W306"));
     // 5.5.1 RESN is a single enum (no lists); case-insensitive.
     let ok3 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 RESN Locked\n");
@@ -646,11 +753,20 @@ fn w306_resn_list_70() {
 fn w306_data_even_list_70() {
     // Issue 9 (maximal70.ged line 676): DATA.EVEN is a List#Enum of
     // event/attribute tags: "BIRT, DEAT" and "MARR" are valid.
-    let ok = format!("{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN BIRT, DEAT\n0 TRLR\n", HEAD70);
+    let ok = format!(
+        "{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN BIRT, DEAT\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&ok, "W306"), "{:?}", codes(&ok));
-    let ok2 = format!("{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN MARR\n0 TRLR\n", HEAD70);
+    let ok2 = format!(
+        "{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN MARR\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&ok2, "W306"));
-    let bad = format!("{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN BIRT, BOGUS\n0 TRLR\n", HEAD70);
+    let bad = format!(
+        "{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN BIRT, BOGUS\n0 TRLR\n",
+        HEAD70
+    );
     assert!(has(&bad, "W306"));
 }
 
@@ -714,7 +830,12 @@ fn cr_line_endings_parse() {
     assert_eq!(r.version, Version::V551);
     assert_eq!(r.lines, 7);
     for code in ["E002", "E101", "E009", "W102", "E001"] {
-        assert!(!r.diags.iter().any(|d| d.code == code), "{}: {:?}", code, r.diags);
+        assert!(
+            !r.diags.iter().any(|d| d.code == code),
+            "{}: {:?}",
+            code,
+            r.diags
+        );
     }
     // CRLF still counts as one terminator.
     let crlf = "0 HEAD\r\n1 GEDC\r\n2 VERS 7.0\r\n0 TRLR\r\n";
@@ -731,7 +852,11 @@ fn w306_other_phrase_child_ok() {
         "{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n3 PHRASE Teacher\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n",
         HEAD70
     );
-    assert!(!lint_str(&g).diags.iter().any(|d| d.code == "W306"), "{:?}", codes(&g));
+    assert!(
+        !lint_str(&g).diags.iter().any(|d| d.code == "W306"),
+        "{:?}",
+        codes(&g)
+    );
     // Sibling PHRASE keeps working.
     let ok = format!(
         "{}0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n2 PHRASE Teacher\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n",
@@ -746,7 +871,10 @@ fn w306_other_phrase_child_ok() {
 #[test]
 fn w306_medi_ignored_in_70() {
     // MEDI is a 5.5.1 tag: never validated under 7.0.
-    let g = format!("{}0 @O1@ OBJE\n1 FILE\n2 FORM image/jpeg\n3 MEDI PHOTO\n0 TRLR\n", HEAD70);
+    let g = format!(
+        "{}0 @O1@ OBJE\n1 FILE\n2 FORM image/jpeg\n3 MEDI PHOTO\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&g, "W306"));
 }
 
@@ -810,8 +938,14 @@ fn w402_conc_under_substructure_not_absorbed() {
 #[test]
 fn e002_head_first_trlr_last() {
     // TRLR must end the file; HEAD must open it.
-    assert!(has("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n0 @I1@ INDI\n1 NAME A /B/\n", "E002"));
-    assert!(has("0 @I1@ INDI\n1 NAME A /B/\n0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n", "E002"));
+    assert!(has(
+        "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n0 @I1@ INDI\n1 NAME A /B/\n",
+        "E002"
+    ));
+    assert!(has(
+        "0 @I1@ INDI\n1 NAME A /B/\n0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n",
+        "E002"
+    ));
     assert!(!has("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 TRLR\n", "E002"));
 }
 
@@ -845,11 +979,20 @@ fn e008_event_detail_singleton() {
 #[test]
 fn w306_lds_stat() {
     // LDS ordinance STAT is enumerated (accepts PRE and PRE_1970).
-    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT BOGUS\n0 TRLR\n", HEAD70);
+    let g = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT BOGUS\n0 TRLR\n",
+        HEAD70
+    );
     assert!(has(&g, "W306"));
-    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT COMPLETED\n0 TRLR\n", HEAD70);
+    let ok = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT COMPLETED\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&ok, "W306"));
-    let ok2 = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT PRE_1970\n0 TRLR\n", HEAD70);
+    let ok2 = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT PRE_1970\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&ok2, "W306"));
 }
 
@@ -867,9 +1010,15 @@ fn w307_conflicting_duplicate_events() {
 #[test]
 fn e009_even_fact_type_70_only() {
     // EVEN/FACT need TYPE in 7.0; 5.5.1 leaves it optional.
-    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 EVEN\n2 DATE 1900\n0 TRLR\n", HEAD70);
+    let g = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 EVEN\n2 DATE 1900\n0 TRLR\n",
+        HEAD70
+    );
     assert!(has(&g, "E009"));
-    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 EVEN\n2 TYPE Military service\n2 DATE 1900\n0 TRLR\n", HEAD70);
+    let ok = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 EVEN\n2 TYPE Military service\n2 DATE 1900\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&ok, "E009"));
     let g551 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 EVEN\n2 DATE 1900\n");
     assert!(!has(&g551, "E009"));
@@ -878,16 +1027,25 @@ fn e009_even_fact_type_70_only() {
 #[test]
 fn e009_lds_stat_date_70_only() {
     // LDS STAT needs a DATE under 7.0.
-    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT COMPLETED\n0 TRLR\n", HEAD70);
+    let g = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT COMPLETED\n0 TRLR\n",
+        HEAD70
+    );
     assert!(has(&g, "E009"));
-    let ok = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT COMPLETED\n3 DATE 1900\n0 TRLR\n", HEAD70);
+    let ok = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 BAPL\n2 STAT COMPLETED\n3 DATE 1900\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&ok, "E009"));
 }
 
 #[test]
 fn w306_data_even_and_form() {
     // DATA.EVEN payload and FILE.FORM media type under 7.0.
-    let g = format!("{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN BIRTHS\n0 TRLR\n", HEAD70);
+    let g = format!(
+        "{}0 @S1@ SOUR\n1 TITL T\n1 DATA\n2 EVEN BIRTHS\n0 TRLR\n",
+        HEAD70
+    );
     assert!(has(&g, "W306"));
     let f = format!("{}0 @O1@ OBJE\n1 FILE\n2 FORM textplain\n0 TRLR\n", HEAD70);
     assert!(has(&f, "W306"));
@@ -898,7 +1056,10 @@ fn w306_data_even_and_form() {
 #[test]
 fn void_pointer_is_valid() {
     // @VOID@ is the 7.0 null pointer (voidptr.ged): never E201.
-    let g = format!("{}0 @I1@ INDI\n1 NAME A /B/\n1 SOUR @VOID@\n0 TRLR\n", HEAD70);
+    let g = format!(
+        "{}0 @I1@ INDI\n1 NAME A /B/\n1 SOUR @VOID@\n0 TRLR\n",
+        HEAD70
+    );
     assert!(!has(&g, "E201"));
 }
 
@@ -932,7 +1093,11 @@ fn ansel_skips_utf8_checks() {
     // Declared ANSEL: high bytes are legal, E101 must stay silent.
     let mut data = b"0 HEAD\n1 CHAR ANSEL\n0 @I1@ INDI\n1 NAME Jos\xe9 /Oso/\n0 TRLR\n".to_vec();
     let r = lint_bytes(&data);
-    assert!(!r.diags.iter().any(|d| d.code == "E101"), "ANSEL: {:?}", r.diags);
+    assert!(
+        !r.diags.iter().any(|d| d.code == "E101"),
+        "ANSEL: {:?}",
+        r.diags
+    );
     let _ = &mut data;
 }
 
@@ -963,7 +1128,11 @@ fn gedcom70_minimal_clean() {
     let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n1 SOUR gedlint\n0 TRLR\n";
     let r = lint_str(g);
     assert_eq!(r.version, Version::V70);
-    assert!(!r.diags.iter().any(|d| d.severity == Severity::Error), "errors: {:?}", r.diags);
+    assert!(
+        !r.diags.iter().any(|d| d.severity == Severity::Error),
+        "errors: {:?}",
+        r.diags
+    );
 }
 
 #[test]
@@ -1005,7 +1174,9 @@ fn span_of<'a>(src: &'a str, d: &Diag) -> &'a str {
 fn only(src: &str, code: &str) -> Diag {
     let r = lint_str(src);
     let mut hits = r.diags.into_iter().filter(|d| d.code == code);
-    let d = hits.next().unwrap_or_else(|| panic!("no {} in {:?}", code, lint_str(src).diags));
+    let d = hits
+        .next()
+        .unwrap_or_else(|| panic!("no {} in {:?}", code, lint_str(src).diags));
     assert!(hits.next().is_none(), "expected a single {}", code);
     d
 }
@@ -1015,7 +1186,11 @@ fn spanless_diags_default_to_core_and_no_span() {
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F9@\n");
     let d = only(&g, "E201");
     assert_eq!(d.ruleset, "core");
-    assert_eq!((d.col, d.len), (0, 0), "len 0 means: highlight the whole line");
+    assert_eq!(
+        (d.col, d.len),
+        (0, 0),
+        "len 0 means: highlight the whole line"
+    );
 }
 
 #[test]
@@ -1035,7 +1210,11 @@ fn w401_span_is_byte_based_not_char_based() {
     let d = only(&g, "W401");
     let raw = g.lines().nth(d.line - 1).unwrap();
     assert_eq!((d.col, d.len), (14, 21));
-    assert_eq!(raw.chars().take_while(|c| *c != 'h').count(), 13, "the char offset differs");
+    assert_eq!(
+        raw.chars().take_while(|c| *c != 'h').count(),
+        13,
+        "the char offset differs"
+    );
     assert_eq!(span_of(&g, &d), "https://example.com/x");
 }
 
@@ -1081,7 +1260,9 @@ fn e101_whole_file_diag_has_no_span() {
     // Invalid UTF-8 that is not a CONC split: reported against the file
     // (line 0), where a per-line span would be meaningless.
     let mut data = Vec::new();
-    data.extend_from_slice("0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME A".as_bytes());
+    data.extend_from_slice(
+        "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME A".as_bytes(),
+    );
     data.push(0xFF);
     data.extend_from_slice("\n0 TRLR\n".as_bytes());
     let r = lint_bytes(&data);
@@ -1105,7 +1286,10 @@ fn json_carries_the_additive_span_keys() {
 /// The bytes a consumer really has: the on-disk line, sliced at the span.
 /// Nothing is stripped first, so a BOM counts as 3 bytes of line 1.
 fn on_disk_span<'a>(data: &'a [u8], d: &Diag) -> &'a [u8] {
-    let line = data.split(|&b| b == b'\n').nth(d.line - 1).expect("diagnostic line exists");
+    let line = data
+        .split(|&b| b == b'\n')
+        .nth(d.line - 1)
+        .expect("diagnostic line exists");
     &line[d.col as usize..(d.col + d.len) as usize]
 }
 
@@ -1128,7 +1312,10 @@ fn w401_span_is_relative_to_the_on_disk_line_with_a_bom() {
     let r = lint_bytes(&data);
     let d = r.diags.iter().find(|d| d.code == "W401").expect("W401");
     assert_eq!((d.line, d.col), (1, 10));
-    assert_eq!(std::str::from_utf8(on_disk_span(&data, d)).unwrap(), "http://example.com");
+    assert_eq!(
+        std::str::from_utf8(on_disk_span(&data, d)).unwrap(),
+        "http://example.com"
+    );
 }
 
 #[test]
@@ -1144,8 +1331,15 @@ fn spans_share_one_byte_base_across_rule_families() {
     let r = lint_bytes(&data);
     let e004 = r.diags.iter().find(|d| d.code == "E004").expect("E004");
     let e101 = r.diags.iter().find(|d| d.code == "E101").expect("E101");
-    assert_eq!(std::str::from_utf8(on_disk_span(&data, e004)).unwrap(), "@I1");
-    assert_eq!((e101.line, e101.col, e101.len), (3, 7, 1), "line 3 has no BOM, so no base");
+    assert_eq!(
+        std::str::from_utf8(on_disk_span(&data, e004)).unwrap(),
+        "@I1"
+    );
+    assert_eq!(
+        (e101.line, e101.col, e101.len),
+        (3, 7, 1),
+        "line 3 has no BOM, so no base"
+    );
     assert_eq!(on_disk_span(&data, e101), &[0xA9]);
 }
 
@@ -1153,7 +1347,8 @@ fn spans_share_one_byte_base_across_rule_families() {
 fn w401_span_skips_a_decoy_http_substring() {
     // "chttpx" contains "http" but does not start a token: the span belongs to
     // the real URL 12 bytes further along.
-    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC Lòria chttpx http://example.com/x\n");
+    let g =
+        wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 PLAC Lòria chttpx http://example.com/x\n");
     let d = only(&g, "W401");
     assert_eq!(span_of(&g, &d), "http://example.com/x");
 }
@@ -1180,12 +1375,23 @@ fn diag_line_and_edit_lines_use_the_same_numbering() {
     data.extend_from_slice("\n2 CONC ".as_bytes());
     data.push(0xA9);
     data.extend_from_slice(" /Oso/\n0 TRLR\n".as_bytes());
-    let d = lint_bytes(&data).diags.into_iter().find(|d| d.code == "E101").expect("E101");
-    let e = compute_edits(&data).into_iter().find(|e| e.code == "E101").expect("E101 edit");
+    let d = lint_bytes(&data)
+        .diags
+        .into_iter()
+        .find(|d| d.code == "E101")
+        .expect("E101");
+    let e = compute_edits(&data)
+        .into_iter()
+        .find(|e| e.code == "E101")
+        .expect("E101 edit");
     // The diagnostic points at the CONC line; the repair replaces the pair.
     assert_eq!(d.line, 6);
     assert_eq!(e.lines, (5, 6));
-    assert!(e.lines.0 <= d.line && d.line <= e.lines.1, "diag line inside the edit range: {:?}", e.lines);
+    assert!(
+        e.lines.0 <= d.line && d.line <= e.lines.1,
+        "diag line inside the edit range: {:?}",
+        e.lines
+    );
 }
 
 #[test]
@@ -1232,7 +1438,12 @@ fn graph_rules_fixture() -> String {
 fn graph_rules_fire_all_four() {
     let r = lint_str(&graph_rules_fixture());
     for code in ["W202", "W302", "W303", "W304"] {
-        assert!(r.diags.iter().any(|d| d.code == code), "{} missing: {:?}", code, r.diags);
+        assert!(
+            r.diags.iter().any(|d| d.code == code),
+            "{} missing: {:?}",
+            code,
+            r.diags
+        );
     }
 }
 
@@ -1242,10 +1453,16 @@ fn graph_rules_report_real_lines_not_zero() {
     let r = lint_str(&graph_rules_fixture());
     for code in ["W202", "W302", "W303", "W304"] {
         assert!(
-            r.diags.iter().filter(|d| d.code == code).all(|d| d.line > 0),
+            r.diags
+                .iter()
+                .filter(|d| d.code == code)
+                .all(|d| d.line > 0),
             "{} still reports at line 0: {:?}",
             code,
-            r.diags.iter().filter(|d| d.code == code).collect::<Vec<_>>()
+            r.diags
+                .iter()
+                .filter(|d| d.code == code)
+                .collect::<Vec<_>>()
         );
     }
     // Spot checks on the fixture's known lines (HEAD551 is 4 lines):
@@ -1254,8 +1471,14 @@ fn graph_rules_report_real_lines_not_zero() {
         &wrap551("0 @I1@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1861\n0 @I2@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1862\n"),
         "W302",
     );
-    assert_eq!(w302.line, 9, "W302 points at the second duplicate's record line");
-    assert_eq!(w302.msg, "possible duplicate: @I1@ (b. 1861) vs @I2@ (b. 1862)", "pair order is deterministic");
+    assert_eq!(
+        w302.line, 9,
+        "W302 points at the second duplicate's record line"
+    );
+    assert_eq!(
+        w302.msg, "possible duplicate: @I1@ (b. 1861) vs @I2@ (b. 1862)",
+        "pair order is deterministic"
+    );
 }
 
 #[test]
@@ -1274,11 +1497,19 @@ fn w303_w304_point_at_the_child_record() {
     let g303 = base("");
     let r303 = lint_str(&g303);
     for d in r303.diags.iter().filter(|d| d.code == "W303") {
-        assert_eq!(d.line, 13, "W303 points at the child's record line: {:?}", d);
+        assert_eq!(
+            d.line, 13,
+            "W303 points at the child's record line: {:?}",
+            d
+        );
     }
     let g304 = base("1 MARR\n2 DATE 1920\n");
     let d304 = only(&g304, "W304");
-    assert_eq!(d304.line, 13, "W304 points at the child's record line: {:?}", d304);
+    assert_eq!(
+        d304.line, 13,
+        "W304 points at the child's record line: {:?}",
+        d304
+    );
 }
 
 #[test]
@@ -1294,7 +1525,15 @@ fn graph_rules_order_is_identical_across_threads() {
                 let r = lint_str(&g);
                 r.diags
                     .iter()
-                    .map(|d| format!("{} {} {} {}", d.severity.tag().trim(), d.code, d.line, d.msg))
+                    .map(|d| {
+                        format!(
+                            "{} {} {} {}",
+                            d.severity.tag().trim(),
+                            d.code,
+                            d.line,
+                            d.msg
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             })
@@ -1317,13 +1556,29 @@ fn grouped_collapses_by_code_severity_then_count() {
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n1 _UPD X\n1 _UPD Y\n");
     let r = lint_str(&g);
     let groups = r.grouped();
-    let u502 = groups.iter().find(|g| g.code == "U502").expect("U502 group");
-    assert_eq!((u502.count, u502.severity, u502.line), (2, Severity::Info, 8), "first line of the run");
-    assert_eq!(u502.example, "vendor tag _UPD: kept as an undocumented extension in 7.0 (add a SCHMA TAG definition)");
+    let u502 = groups
+        .iter()
+        .find(|g| g.code == "U502")
+        .expect("U502 group");
+    assert_eq!(
+        (u502.count, u502.severity, u502.line),
+        (2, Severity::Info, 8),
+        "first line of the run"
+    );
+    assert_eq!(
+        u502.example,
+        "vendor tag _UPD: kept as an undocumented extension in 7.0 (add a SCHMA TAG definition)"
+    );
     // Severity descending: the W305 group sorts before the U502 group.
-    let w305 = groups.iter().find(|g| g.code == "W305").expect("W305 group");
+    let w305 = groups
+        .iter()
+        .find(|g| g.code == "W305")
+        .expect("W305 group");
     assert_eq!((w305.count, w305.severity), (1, Severity::Warning));
-    assert!(groups.iter().position(|g| g.code == "W305").unwrap() < groups.iter().position(|g| g.code == "U502").unwrap());
+    assert!(
+        groups.iter().position(|g| g.code == "W305").unwrap()
+            < groups.iter().position(|g| g.code == "U502").unwrap()
+    );
 }
 
 #[test]
@@ -1334,8 +1589,16 @@ fn grouped_takes_the_worst_severity_of_a_code() {
         HEAD70
     );
     let r = lint_str(&g);
-    let w306 = r.grouped().into_iter().find(|g| g.code == "W306").expect("W306 group");
-    assert_eq!((w306.count, w306.severity), (2, Severity::Warning), "worst severity wins");
+    let w306 = r
+        .grouped()
+        .into_iter()
+        .find(|g| g.code == "W306")
+        .expect("W306 group");
+    assert_eq!(
+        (w306.count, w306.severity),
+        (2, Severity::Warning),
+        "worst severity wins"
+    );
 }
 
 #[test]
@@ -1345,7 +1608,12 @@ fn group_diags_over_a_filtered_slice() {
     let r = lint_str(&g);
     let warnings: Vec<&Diag> = r.filtered(Severity::Warning);
     let groups = Report::group_diags(&warnings);
-    assert_eq!(groups.len(), 1, "only W305 survives the filter: {:?}", groups);
+    assert_eq!(
+        groups.len(),
+        1,
+        "only W305 survives the filter: {:?}",
+        groups
+    );
     assert_eq!(groups[0].code, "W305");
     assert_eq!(r.grouped().len(), 2, "unfiltered keeps both");
 }
@@ -1388,8 +1656,16 @@ fn w601_fires_on_surn_subtag_alone() {
 fn w601_name_and_surn_defect_is_one_diagnostic() {
     // Same defect in both places: one defect, one diagnostic (why says so).
     let g = wrap551("0 @I1@ INDI\n1 NAME Maria /Montpeo, Osso/\n2 SURN Montpeo, Osso\n");
-    let n = codes_with(&g, "hispanic-naming").iter().filter(|c| c.as_str() == "W601").count();
-    assert_eq!(n, 1, "exactly one W601 per record: {:?}", codes_with(&g, "hispanic-naming"));
+    let n = codes_with(&g, "hispanic-naming")
+        .iter()
+        .filter(|c| c.as_str() == "W601")
+        .count();
+    assert_eq!(
+        n,
+        1,
+        "exactly one W601 per record: {:?}",
+        codes_with(&g, "hispanic-naming")
+    );
 }
 
 #[test]
@@ -1398,9 +1674,10 @@ fn w601_repair_ignores_three_tokens() {
     let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Cognom1, Cognom2, Cognom3/\n0 TRLR\n".to_vec();
     let (_fixed, applied) = fix_bytes_with(&data, &FixSelection::default(), &cfg);
     assert!(!applied.iter().any(|a| a.contains("W601")), "{:?}", applied);
-    
+
     // Repair works for exactly two tokens
-    let data2 = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Cognom1, Cognom2/\n0 TRLR\n".to_vec();
+    let data2 = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Cognom1, Cognom2/\n0 TRLR\n"
+        .to_vec();
     let (fixed2, applied2) = fix_bytes_with(&data2, &FixSelection::default(), &cfg);
     assert!(applied2.iter().any(|a| a.contains("W601")));
     assert!(String::from_utf8_lossy(&fixed2).contains("/Cognom1 Cognom2/"));
@@ -1416,7 +1693,9 @@ fn w601_repair_covers_surn_same_conservative_shape() {
     assert!(String::from_utf8_lossy(&fixed).contains("2 SURN Montpeo Osso"));
 
     // Three tokens in 2 SURN: reported by the rule, never repaired.
-    let data3 = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n2 SURN Un, Dos, Tres\n0 TRLR\n".to_vec();
+    let data3 =
+        b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n2 SURN Un, Dos, Tres\n0 TRLR\n"
+            .to_vec();
     let (_f3, applied3) = fix_bytes_with(&data3, &FixSelection::default(), &cfg);
     assert!(!applied3.iter().any(|a| a.contains("W601")));
 
@@ -1431,9 +1710,14 @@ fn w601_repair_covers_surn_same_conservative_shape() {
     // rulesets on and --unsafe, so the only thing that can stop the repair
     // is the scope guard itself.
     let stray = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /Prat/\n1 _MARNM Un, Dos\n2 SURN Un, Dos\n0 TRLR\n".to_vec();
-    let sel = FixSelection { allow_unsafe: true, ..Default::default() };
+    let sel = FixSelection {
+        allow_unsafe: true,
+        ..Default::default()
+    };
     let (f3, applied3) = fix_bytes_with(&stray, &sel, &fix_cfg(&["hispanic-naming", "hygiene"]));
-    assert!(!applied3.iter().any(|a| a.contains("W601") || a.contains("W702")));
+    assert!(!applied3
+        .iter()
+        .any(|a| a.contains("W601") || a.contains("W702")));
     assert!(String::from_utf8_lossy(&f3).contains("2 SURN Un, Dos"));
 }
 
@@ -1441,10 +1725,11 @@ fn w601_repair_covers_surn_same_conservative_shape() {
 fn w602_no_married_name() {
     let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n2 _MARNM C\n");
     assert!(has_with(&g, "W602", "hispanic-naming"));
-    
+
     // W602 produces no edit, even with the ruleset enabled: deleting the
     // tag would destroy data, so there is nothing to select.
-    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n2 _MARNM C\n0 TRLR\n".to_vec();
+    let data =
+        b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n2 _MARNM C\n0 TRLR\n".to_vec();
     let edits = compute_edits_with(&data, &fix_cfg(&["hispanic-naming"]));
     assert!(!edits.iter().any(|e| e.code == "W602"));
 }
@@ -1465,7 +1750,10 @@ fn w603_fires_on_givn_subtag_alone() {
 
     // Same abbreviation in NAME and GIVN: one diagnostic.
     let both = wrap551("0 @I1@ INDI\n1 NAME Fco. /Perez/\n2 GIVN Fco.\n");
-    let n = codes_with(&both, "hispanic-naming").iter().filter(|c| c.as_str() == "W603").count();
+    let n = codes_with(&both, "hispanic-naming")
+        .iter()
+        .filter(|c| c.as_str() == "W603")
+        .count();
     assert_eq!(n, 1);
 }
 
@@ -1475,7 +1763,7 @@ fn w701_polluted_name() {
     assert!(has_with(&g, "W701", "hygiene"));
     let g2 = wrap551("0 @I1@ INDI\n1 NAME Joan /Perez (twin)/\n");
     assert!(has_with(&g2, "W701", "hygiene"));
-    
+
     // legitimate names it must not flag, including Catalan house name
     let ok = wrap551("0 @I1@ INDI\n1 NAME Joan /Perez (cal Ferrer)/\n");
     assert!(!has_with(&ok, "W701", "hygiene"));
@@ -1495,7 +1783,10 @@ fn w701_fires_on_surn_subtag_alone() {
 
     // Same pollution in NAME and SURN: one diagnostic.
     let both = wrap551("0 @I1@ INDI\n1 NAME Pere /Valles (moliner)/\n2 SURN Valles (moliner)\n");
-    let n = codes_with(&both, "hygiene").iter().filter(|c| c.as_str() == "W701").count();
+    let n = codes_with(&both, "hygiene")
+        .iter()
+        .filter(|c| c.as_str() == "W701")
+        .count();
     assert_eq!(n, 1);
 }
 
@@ -1517,7 +1808,10 @@ fn w702_fires_on_surn_subtag_alone() {
 
     // All-caps in both NAME slot and SURN: one diagnostic.
     let both = wrap551("0 @I1@ INDI\n1 NAME Anna /PUIG SOLE/\n2 SURN PUIG SOLE\n");
-    let n = codes_with(&both, "hygiene").iter().filter(|c| c.as_str() == "W702").count();
+    let n = codes_with(&both, "hygiene")
+        .iter()
+        .filter(|c| c.as_str() == "W702")
+        .count();
     assert_eq!(n, 1);
 }
 
@@ -1533,7 +1827,10 @@ fn w702_surn_repair_is_maybe_incorrect_only() {
     assert!(String::from_utf8_lossy(&f1).contains("2 SURN PUIG SOLE"));
 
     // --unsafe reaches it under the same config.
-    let sel = FixSelection { allow_unsafe: true, ..Default::default() };
+    let sel = FixSelection {
+        allow_unsafe: true,
+        ..Default::default()
+    };
     let (fixed, applied2) = fix_bytes_with(&data, &sel, &cfg);
     assert!(applied2.iter().any(|a| a.contains("W702")));
     assert!(String::from_utf8_lossy(&fixed).contains("2 SURN Puig Sole"));
@@ -1545,20 +1842,20 @@ fn w703_malformed_place() {
     assert!(has_with(&g, "W703", "hygiene"));
     let g2 = wrap551("0 @I1@ INDI\n1 BIRT\n2 PLAC Alcover,,Tarragona\n");
     assert!(has_with(&g2, "W703", "hygiene"));
-    
+
     // No W703 double-reporting on URL (W401 already reports it)
     let url = wrap551("0 @I1@ INDI\n1 BIRT\n2 PLAC Reus https://example.com/x\n");
     assert!(has(&url, "W401"));
     assert!(!has_with(&url, "W703", "hygiene"));
-    
+
     // Doubled commas repair is Safe, and applies once hygiene is enabled
-    let data = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 BIRT\n2 PLAC Alcover, , Tarragona\n0 TRLR\n".to_vec();
+    let data =
+        b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 BIRT\n2 PLAC Alcover, , Tarragona\n0 TRLR\n"
+            .to_vec();
     let (fixed, applied) = fix_bytes_with(&data, &FixSelection::default(), &fix_cfg(&["hygiene"]));
     assert!(applied.iter().any(|a| a.contains("W703")));
     assert!(String::from_utf8_lossy(&fixed).contains("PLAC Alcover, Tarragona"));
 }
-
-
 
 #[test]
 fn hispanic_naming_rules_are_off_by_default() {

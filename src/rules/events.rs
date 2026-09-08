@@ -9,8 +9,8 @@ use crate::parse::{Line, Version};
 
 // Common individual/family events whose detail singletons are {0:1}.
 const EVENT_TAGS: &[&str] = &[
-    "BIRT", "CHR", "DEAT", "BURI", "MARR", "DIV", "OCCU", "RESI", "EVEN", "FACT",
-    "CENS", "EMIG", "IMMI", "GRAD", "RETI", "BAPM", "CONF",
+    "BIRT", "CHR", "DEAT", "BURI", "MARR", "DIV", "OCCU", "RESI", "EVEN", "FACT", "CENS", "EMIG",
+    "IMMI", "GRAD", "RETI", "BAPM", "CONF",
 ];
 const EVENT_SINGLETONS: &[&str] = &[
     "DATE", "PLAC", "ADDR", "AGNC", "CAUS", "RELI", "RESN", "TYPE", "AGE", "SDATE", "PAGE",
@@ -67,7 +67,10 @@ pub(crate) fn open_instances(st: &mut Events, l: &Line, xref: &str, lvl: u32) {
         if l.tag == "DIV" {
             st.div_lines.entry(xref.to_string()).or_default().push(l.no);
         } else if l.tag == "MARR" {
-            st.marr_lines.entry(xref.to_string()).or_default().push(l.no);
+            st.marr_lines
+                .entry(xref.to_string())
+                .or_default()
+                .push(l.no);
         }
     }
     // E009 EVEN/FACT instance counter (TYPE required in 7.0).
@@ -91,13 +94,19 @@ pub(crate) fn record_required(
     let parent_tag: &str = parent.as_ref().map(|p| p.0.as_str()).unwrap_or("");
     // E009 EVEN/FACT TYPE mark (instance = latest opened block).
     if (cur_sub == "EVEN" || cur_sub == "FACT") && l.tag == "TYPE" && !rec.is_empty() {
-        if let Some(n) = st.ef_inst.get(&(rec.to_string(), cur_sub.to_string())).copied() {
-            st.ef_typed.insert((rec.to_string(), cur_sub.to_string(), n));
+        if let Some(n) = st
+            .ef_inst
+            .get(&(rec.to_string(), cur_sub.to_string()))
+            .copied()
+        {
+            st.ef_typed
+                .insert((rec.to_string(), cur_sub.to_string(), n));
         }
     }
     // E009 LDS STAT register; a DATE directly under STAT satisfies it.
     if l.tag == "STAT" && LDS_EVENTS.contains(&cur_sub) && !rec.is_empty() {
-        st.lds_stat.push((rec.to_string(), cur_sub.to_string(), l.no));
+        st.lds_stat
+            .push((rec.to_string(), cur_sub.to_string(), l.no));
     }
     if l.tag == "DATE" && parent_tag == "STAT" && !rec.is_empty() {
         if let Some((_, pline)) = parent {
@@ -138,7 +147,7 @@ pub(crate) fn check_detail_singletons(
                         format!(
                             "duplicate {} in {} {} (block {}, first at line {})",
                             l.tag, rec, ev, inst, first
-                        )
+                        ),
                     ));
                 } else {
                     st.event_seen.insert(key, l.no);
@@ -161,7 +170,7 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Events, version: Version) {
                     Category::Correctness,
                     Severity::Error,
                     *line,
-                    format!("{}: {} without required TYPE (7.0)", rec, tag)
+                    format!("{}: {} without required TYPE (7.0)", rec, tag),
                 ));
             }
         }
@@ -171,7 +180,7 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Events, version: Version) {
                 Category::Correctness,
                 Severity::Error,
                 *sline,
-                format!("{}: {} STAT without required DATE (7.0)", rec, ev)
+                format!("{}: {} STAT without required DATE (7.0)", rec, ev),
             ));
         }
     }
@@ -183,7 +192,10 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Events, version: Version) {
         let mut by_event: HashMap<(String, String), Vec<EvHit>> = HashMap::new();
         for ((rec, ev, inst), (val, line)) in &st.event_dates {
             if CONFLICT_EVENTS.contains(&ev.as_str()) {
-                by_event.entry((rec.clone(), ev.clone())).or_default().push((*inst, val.clone(), *line));
+                by_event
+                    .entry((rec.clone(), ev.clone()))
+                    .or_default()
+                    .push((*inst, val.clone(), *line));
             }
         }
         let empty: Vec<usize> = Vec::new();
@@ -208,7 +220,7 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Events, version: Version) {
                                 format!(
                                     "{}: duplicate {} with conflicting dates ({} vs {})",
                                     rec, ev, pval, hit.1
-                                )
+                                ),
                             ));
                             prev = None;
                             continue;

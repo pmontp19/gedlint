@@ -32,26 +32,32 @@ pub(crate) fn check_surname_value(diags: &mut Vec<Diag>, line: usize, surname: &
     if comma_split(surname).is_none() {
         return false;
     }
-    diags.push(Diag::new(
-        "W601",
-        Category::Style,
-        Severity::Warning,
-        line,
-        format!("comma in surname: {}", truncate(surname, 60)),
-    ).in_ruleset("hispanic-naming"));
+    diags.push(
+        Diag::new(
+            "W601",
+            Category::Style,
+            Severity::Warning,
+            line,
+            format!("comma in surname: {}", truncate(surname, 60)),
+        )
+        .in_ruleset("hispanic-naming"),
+    );
     true
 }
 
 /// W602: no-married-name
 pub(crate) fn check_married_name(diags: &mut Vec<Diag>, l: &Line) {
     if l.tag == "_MARNM" {
-        diags.push(Diag::new(
-            "W602",
-            Category::Style,
-            Severity::Warning,
-            l.no,
-            "married name tag (_MARNM) is usually an export artifact".to_string(),
-        ).in_ruleset("hispanic-naming"));
+        diags.push(
+            Diag::new(
+                "W602",
+                Category::Style,
+                Severity::Warning,
+                l.no,
+                "married name tag (_MARNM) is usually an export artifact".to_string(),
+            )
+            .in_ruleset("hispanic-naming"),
+        );
     }
 }
 
@@ -61,13 +67,16 @@ pub(crate) fn check_abbreviated_given_name(diags: &mut Vec<Diag>, line: usize, v
     let bad = ["Mª", "Ma.", "Fco.", "Jph."];
     for b in bad.iter() {
         if val.contains(b) {
-            diags.push(Diag::new(
-                "W603",
-                Category::Style,
-                Severity::Info,
-                line,
-                format!("abbreviated given name: {}", b),
-            ).in_ruleset("hispanic-naming"));
+            diags.push(
+                Diag::new(
+                    "W603",
+                    Category::Style,
+                    Severity::Info,
+                    line,
+                    format!("abbreviated given name: {}", b),
+                )
+                .in_ruleset("hispanic-naming"),
+            );
             return true;
         }
     }

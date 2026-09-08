@@ -3,7 +3,11 @@ use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use gedlint::{apply_baseline, baseline_from_report, baseline_to_json, parse_baseline, Applicability, Category, Config, Diag, DiagGroup, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_reader_with, parse_config};
+use gedlint::{
+    apply_baseline, baseline_from_report, baseline_to_json, fix_bytes_with, lint_reader_with,
+    parse_baseline, parse_config, Applicability, Category, Config, Diag, DiagGroup, FixSelection,
+    Report, RuleMeta, Severity,
+};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The file discovery looks for, walking up from the linted file.
@@ -71,14 +75,21 @@ fn explain(what: Option<&str>) -> ExitCode {
     let Some(what) = what else {
         for rs in gedlint::rulesets() {
             let rules: Vec<&RuleMeta> = gedlint::RULES.iter().filter(|r| r.ruleset == rs).collect();
-            let on = if rules.iter().all(|r| r.default_enabled) { "on by default" } else { "off by default" };
+            let on = if rules.iter().all(|r| r.default_enabled) {
+                "on by default"
+            } else {
+                "off by default"
+            };
             let _ = writeln!(h, "{} ({} rules, {})", rs, rules.len(), on);
             for r in rules {
                 let _ = writeln!(h, "  {:<5} {:<30} {}", r.code, r.name, r.title);
             }
             let _ = writeln!(h);
         }
-        let _ = writeln!(h, "gedlint --explain <CODE> prints why one rule exists and how to satisfy it.");
+        let _ = writeln!(
+            h,
+            "gedlint --explain <CODE> prints why one rule exists and how to satisfy it."
+        );
         return ExitCode::from(0);
     };
     let found = match what.split_once('/') {
@@ -86,7 +97,10 @@ fn explain(what: Option<&str>) -> ExitCode {
         None => gedlint::rule(&what.to_ascii_uppercase()),
     };
     let Some(r) = found else {
-        eprintln!("unknown rule: {} (run --explain with no argument to list every rule)", what);
+        eprintln!(
+            "unknown rule: {} (run --explain with no argument to list every rule)",
+            what
+        );
         return ExitCode::from(2);
     };
     let _ = writeln!(h, "{}  {}  [{}/{}]", r.code, r.title, r.ruleset, r.name);
@@ -95,7 +109,11 @@ fn explain(what: Option<&str>) -> ExitCode {
         "\ncategory {}   severity {}   {}   {}\n",
         r.category.as_str(),
         r.default_severity.tag().trim().to_ascii_lowercase(),
-        if r.default_enabled { "on by default" } else { "off by default" },
+        if r.default_enabled {
+            "on by default"
+        } else {
+            "off by default"
+        },
         match r.fixable {
             Some(Applicability::Safe) => "fixable by --fix",
             Some(Applicability::MaybeIncorrect) => "fixable, but only under --fix --unsafe",
@@ -161,7 +179,8 @@ fn load_config(lint_path: &str, explicit: Option<&str>, no_config: bool) -> Resu
             None => return Ok(Config::default()),
         },
     };
-    let text = fs::read_to_string(&file).map_err(|e| format!("cannot read {}: {}", file.display(), e))?;
+    let text =
+        fs::read_to_string(&file).map_err(|e| format!("cannot read {}: {}", file.display(), e))?;
     parse_config(&text).map_err(|e| format!("{}: {}", file.display(), e))
 }
 
@@ -220,7 +239,10 @@ fn main() -> ExitCode {
                 // mistake, not a request for the whole listing.
                 match args.get(i + 1) {
                     Some(a) if a.starts_with('-') => {
-                        eprintln!("--explain takes a rule code, not {} (try --explain with no argument)", a);
+                        eprintln!(
+                            "--explain takes a rule code, not {} (try --explain with no argument)",
+                            a
+                        );
                         return ExitCode::from(2);
                     }
                     what => return explain(what.map(String::as_str)),
@@ -330,7 +352,10 @@ fn main() -> ExitCode {
     // config travels into the repair (#44): a ruleset the user did not
     // enable must not rewrite the file, exactly as it reports nothing.
     if fix {
-        let sel = FixSelection { only: fix_only, allow_unsafe: fix_unsafe };
+        let sel = FixSelection {
+            only: fix_only,
+            allow_unsafe: fix_unsafe,
+        };
         match fs::read(&path) {
             Ok(data) => {
                 let (fixed, applied) = fix_bytes_with(&data, &sel, &cfg);
@@ -433,7 +458,11 @@ fn main() -> ExitCode {
         let stdout = std::io::stdout();
         let mut h = stdout.lock();
         let shown_all: Vec<&Diag> = match &outcome {
-            Some(o) => o.new_diags.iter().filter(|d| d.severity >= min_sev).collect(),
+            Some(o) => o
+                .new_diags
+                .iter()
+                .filter(|d| d.severity >= min_sev)
+                .collect(),
             None => report.filtered(min_sev),
         };
         let total = shown_all.len();
@@ -443,21 +472,44 @@ fn main() -> ExitCode {
         let (new_total, new_e, new_w, new_i, base_extra) = match &outcome {
             Some(o) => (
                 o.new_diags.len(),
-                o.new_diags.iter().filter(|d| d.severity == Severity::Error).count(),
-                o.new_diags.iter().filter(|d| d.severity == Severity::Warning).count(),
-                o.new_diags.iter().filter(|d| d.severity == Severity::Info).count(),
+                o.new_diags
+                    .iter()
+                    .filter(|d| d.severity == Severity::Error)
+                    .count(),
+                o.new_diags
+                    .iter()
+                    .filter(|d| d.severity == Severity::Warning)
+                    .count(),
+                o.new_diags
+                    .iter()
+                    .filter(|d| d.severity == Severity::Info)
+                    .count(),
                 format!(", {} baselined, {} resolved", o.baselined, o.resolved.len()),
             ),
-            None => (total, report.errors(), report.warnings(), report.infos(), String::new()),
+            None => (
+                total,
+                report.errors(),
+                report.warnings(),
+                report.infos(),
+                String::new(),
+            ),
         };
         let new_word = if outcome.is_some() { "new " } else { "" };
         if verbose {
             // --verbose lists every occurrence, exactly as the output always
             // looked (issue 20).
-            let shown: &[&Diag] = if max_show > 0 && total > max_show { &shown_all[..max_show] } else { &shown_all };
+            let shown: &[&Diag] = if max_show > 0 && total > max_show {
+                &shown_all[..max_show]
+            } else {
+                &shown_all
+            };
             for d in shown {
                 let (c1, c2) = color_for(&d.severity, no_color);
-                let loc = if d.line > 0 { format!("line {}", d.line) } else { "-".to_string() };
+                let loc = if d.line > 0 {
+                    format!("line {}", d.line)
+                } else {
+                    "-".to_string()
+                };
                 let _ = writeln!(
                     h,
                     "{}{} [{}:{}]{} {}: {}",
@@ -490,12 +542,30 @@ fn main() -> ExitCode {
             // Default (issue 20): one line per rule code, worst and most
             // frequent first, from the engine's grouping (Report::grouped).
             let groups = Report::group_diags(&shown_all);
-            let shown_groups: &[DiagGroup] = if max_show > 0 && groups.len() > max_show { &groups[..max_show] } else { &groups };
+            let shown_groups: &[DiagGroup] = if max_show > 0 && groups.len() > max_show {
+                &groups[..max_show]
+            } else {
+                &groups
+            };
             for g in shown_groups {
                 let (c1, c2) = color_for(&g.severity, no_color);
                 if g.count == 1 {
-                    let loc = if g.line > 0 { format!("line {}", g.line) } else { "-".to_string() };
-                    let _ = writeln!(h, "{}{} [{}:{}]{} {}: {}", c1, g.severity.tag(), g.code, g.category.as_str(), c2, loc, g.example);
+                    let loc = if g.line > 0 {
+                        format!("line {}", g.line)
+                    } else {
+                        "-".to_string()
+                    };
+                    let _ = writeln!(
+                        h,
+                        "{}{} [{}:{}]{} {}: {}",
+                        c1,
+                        g.severity.tag(),
+                        g.code,
+                        g.category.as_str(),
+                        c2,
+                        loc,
+                        g.example
+                    );
                 } else {
                     let _ = writeln!(
                         h,
