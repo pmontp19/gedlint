@@ -1,8 +1,10 @@
 //! Diagnostic types and their dependency-free JSON serialization.
 //!
-//! `Severity`, `Category`, `Diag` and `Report` are part of the public API
-//! (re-exported from the crate root) and are consumed verbatim by the CLI,
-//! by `scripts/gh-report.js` and by the web viewer.
+//! `Severity`, `Category`, `Diag`, `Report` and `DiagGroup` are part of the
+//! public API (re-exported from the crate root) and are consumed verbatim by
+//! the CLI, by `scripts/gh-report.js` and by the web viewer.
+
+use std::collections::HashMap;
 
 use crate::parse::Version;
 
@@ -103,6 +105,24 @@ pub struct Report {
     pub families: usize,
 }
 
+/// One collapsed rule-code group over a report's diagnostics (issue 20 /
+/// RFC 014 section 7). The CLI's default output, the Action's job summary
+/// and the web viewer all render from this one shape so they cannot drift.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagGroup {
+    pub code: &'static str,
+    pub category: Category,
+    /// Worst severity among the group's occurrences (a rule may emit two:
+    /// W306 warns on bad values and informs on OTHER without PHRASE).
+    pub severity: Severity,
+    pub count: usize,
+    /// Line of the first occurrence: diagnostics arrive severity/line
+    /// sorted, so this is the topmost one.
+    pub line: usize,
+    /// Message of that first occurrence: the example a consumer shows.
+    pub example: String,
+}
+
 impl Report {
     pub fn errors(&self) -> usize {
         self.diags.iter().filter(|d| d.severity == Severity::Error).count()
@@ -125,6 +145,51 @@ impl Report {
 
     pub fn filtered(&self, min: Severity) -> Vec<&Diag> {
         self.diags.iter().filter(|d| d.severity >= min).collect()
+    }
+
+    /// The whole report grouped by rule code (issue 20). Sorted by severity
+    /// descending, then count descending, then code.
+    pub fn grouped(&self) -> Vec<DiagGroup> {
+        let refs: Vec<&Diag> = self.diags.iter().collect();
+        Self::group_diags(&refs)
+    }
+
+    /// Group an arbitrary slice of diagnostics by rule code. This is the
+    /// single grouping algorithm: the CLI, `scripts/gh-report.js` (through
+    /// the JSON `groups` key) and the web viewer all consume its output.
+    pub fn group_diags(diags: &[&Diag]) -> Vec<DiagGroup> {
+        let mut groups: HashMap<&'static str, DiagGroup> = HashMap::new();
+        for d in diags {
+            match groups.get_mut(d.code) {
+                Some(g) => {
+                    g.count += 1;
+                    if d.severity > g.severity {
+                        g.severity = d.severity;
+                    }
+                }
+                None => {
+                    groups.insert(
+                        d.code,
+                        DiagGroup {
+                            code: d.code,
+                            category: d.category,
+                            severity: d.severity,
+                            count: 1,
+                            line: d.line,
+                            example: d.msg.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        let mut out: Vec<DiagGroup> = groups.into_values().collect();
+        out.sort_by(|a, b| {
+            b.severity
+                .cmp(&a.severity)
+                .then(b.count.cmp(&a.count))
+                .then(a.code.cmp(b.code))
+        });
+        out
     }
 
     /// Dependency-free JSON serialization (for CLI --format json and WASM).
@@ -167,6 +232,28 @@ impl Report {
             out.push_str(&d.len.to_string());
             out.push_str(",\"message\":\"");
             out.push_str(&escape_json(&d.msg));
+            out.push_str("\"}");
+        }
+        out.push_str("],\"groups\":[");
+        // The engine's own grouping (issue 20): the Action's summary and the
+        // web viewer consume this instead of recomputing it. Additive key,
+        // like the span keys above.
+        for (i, g) in self.grouped().iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"code\":\"");
+            out.push_str(g.code);
+            out.push_str("\",\"category\":\"");
+            out.push_str(g.category.as_str());
+            out.push_str("\",\"severity\":\"");
+            out.push_str(g.severity.tag().trim());
+            out.push_str("\",\"count\":");
+            out.push_str(&g.count.to_string());
+            out.push_str(",\"line\":");
+            out.push_str(&g.line.to_string());
+            out.push_str(",\"example\":\"");
+            out.push_str(&escape_json(&g.example));
             out.push_str("\"}");
         }
         out.push_str("]}");

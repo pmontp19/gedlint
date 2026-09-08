@@ -139,16 +139,20 @@ pub(crate) fn finish_lifespans(diags: &mut Vec<Diag>, st: &People, graph: &Graph
 }
 
 /// End of run: W303 parent age at the child's birth and W304 child born
-/// before the marriage.
+/// before the marriage. Both report at the child's record line (issue 30):
+/// the child's birth is what triggers them, and a real line makes the
+/// whole-file graph findings deterministic.
 pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
     // W303: parent age at the child's birth.
     for (fam, chils) in &graph.fam_chil {
-        for c in chils {
+        for (c, _) in chils {
             let cb = st.indi_birth.get(c).copied().flatten();
             let Some(cb) = cb else { continue };
             if cb >= 10000 {
                 continue;
             }
+            // The child's record line: where the reader lands to fix the link.
+            let child_line = graph.records.get(c).map(|r| r.1).unwrap_or(0);
             for (parent, rol) in [(&graph.fam_husb.get(fam), "father"), (&graph.fam_wife.get(fam), "mother")] {
                 if let Some((px, _)) = parent {
                     if let Some(Some(pb)) = st.indi_birth.get(px) {
@@ -161,7 +165,7 @@ pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Gra
                                     "W303",
                                     Category::Suspicious,
                                     Severity::Warning,
-                                    0,
+                                    child_line,
                                     format!(
                                         "{}: {} {} (b. {}) was {} at {}'s birth (b. {})",
                                         fam, rol, px, pb, age, c, cb
@@ -181,7 +185,7 @@ pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Gra
                             "W304",
                             Category::Suspicious,
                             Severity::Warning,
-                            0,
+                            child_line,
                             format!("{}: {} born ({}) before marriage ({})", fam, c, cb, m),
                         )],
                     );
@@ -215,7 +219,7 @@ pub(crate) fn finish_sex(diags: &mut Vec<Diag>, st: &People, version: Version) {
 }
 
 /// End of run: W302 duplicates (same normalized name + birth within +-2 years).
-pub(crate) fn finish_duplicates(diags: &mut Vec<Diag>, st: &People) {
+pub(crate) fn finish_duplicates(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
     // W302: duplicates (same normalized name + birth within ±2 years).
     let mut by_name: HashMap<String, Vec<(String, i64)>> = HashMap::new();
     for (xref, b) in &st.indi_birth {
@@ -226,6 +230,12 @@ pub(crate) fn finish_duplicates(diags: &mut Vec<Diag>, st: &People) {
         }
     }
     for v in by_name.values() {
+        // The group arrives in HashMap iteration order, so the pairs (and the
+        // "A vs B" wording) would differ between runs: sort by xref first, and
+        // report at the second record's line (issue 30), which lands the
+        // reader on the suspect duplicate.
+        let mut v = v.clone();
+        v.sort();
         for a in 0..v.len() {
             for b in a + 1..v.len() {
                 if (v[a].1 - v[b].1).abs() <= 2 {
@@ -235,7 +245,7 @@ pub(crate) fn finish_duplicates(diags: &mut Vec<Diag>, st: &People) {
                             "W302",
                             Category::Suspicious,
                             Severity::Warning,
-                            0,
+                            graph.records.get(&v[b].0).map(|r| r.1).unwrap_or(0),
                             format!("possible duplicate: {} (b. {}) vs {} (b. {})", v[a].0, v[a].1, v[b].0, v[b].1),
                         )],
                     );

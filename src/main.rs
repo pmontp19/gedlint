@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{BufReader, Write};
 use std::process::ExitCode;
 
-use gedlint::{Applicability, Diag, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_bytes, lint_reader};
+use gedlint::{Applicability, Category, Diag, DiagGroup, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_bytes, lint_reader};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -17,9 +17,10 @@ fn help() -> String {
         --only CODE           with --fix: restrict to this repair code (repeatable)\n  \
         --unsafe              with --fix: also apply MaybeIncorrect repairs (never the default)\n  \
         --format text|json    output (default: text)\n  \
-        --severity N          minimum level: error, warning, info (default: info)\n  \
-        --max N               cap on text diagnostics shown (0 = all; JSON always complete)\n  \
-        --no-color            no ANSI colors\n  \
+         --severity N          minimum level: error, warning, info (default: info)\n  \
+         --max N               cap rule groups by default, single diagnostics with --verbose (0 = all; JSON always complete)\n  \
+         --verbose             list every occurrence instead of one line per rule\n  \
+         --no-color            no ANSI colors\n  \
         --quiet               summary + exit code only\n  \
         --explain [CODE]      explain a rule (no CODE: every rule by ruleset)\n  \
         -h, --help            this help\n  \
@@ -122,6 +123,7 @@ fn main() -> ExitCode {
     let mut format = "text".to_string();
     let mut min_sev = Severity::Info;
     let mut max_show: usize = 0;
+    let mut verbose = false;
     let mut no_color = false;
     let mut quiet = false;
     let mut path: Option<String> = None;
@@ -140,6 +142,7 @@ fn main() -> ExitCode {
                 fix_only.push(args[i].clone());
             }
             "--no-color" => no_color = true,
+            "--verbose" | "-v" => verbose = true,
             "--quiet" | "-q" => quiet = true,
             "-h" | "--help" => {
                 print!("{}", help());
@@ -282,36 +285,101 @@ fn main() -> ExitCode {
         let mut h = stdout.lock();
         let shown_all = report.filtered(min_sev);
         let total = shown_all.len();
-        let shown: &[&Diag] = if max_show > 0 && total > max_show { &shown_all[..max_show] } else { &shown_all };
-        for d in shown {
-            let (c1, c2) = color_for(&d.severity, no_color);
-            let loc = if d.line > 0 { format!("line {}", d.line) } else { "-".to_string() };
+        if verbose {
+            // --verbose lists every occurrence, exactly as the output always
+            // looked (issue 20).
+            let shown: &[&Diag] = if max_show > 0 && total > max_show { &shown_all[..max_show] } else { &shown_all };
+            for d in shown {
+                let (c1, c2) = color_for(&d.severity, no_color);
+                let loc = if d.line > 0 { format!("line {}", d.line) } else { "-".to_string() };
+                let _ = writeln!(
+                    h,
+                    "{}{} [{}:{}]{} {}: {}",
+                    c1,
+                    d.severity.tag(),
+                    d.code,
+                    d.category.as_str(),
+                    c2,
+                    loc,
+                    d.msg
+                );
+            }
             let _ = writeln!(
                 h,
-                "{}{} [{}:{}]{} {}: {}",
-                c1,
-                d.severity.tag(),
-                d.code,
-                d.category.as_str(),
-                c2,
-                loc,
-                d.msg
+                "\n{}: {} diagnostics{} ({} errors, {} warnings, {} infos), {} lines, {} INDI, {} FAM [GEDCOM {}]",
+                path,
+                total,
+                if total > shown.len() { format!(" (showing {})", shown.len()) } else { String::new() },
+                report.errors(),
+                report.warnings(),
+                report.infos(),
+                report.lines,
+                report.individuals,
+                report.families,
+                report.version.as_str()
             );
+        } else {
+            // Default (issue 20): one line per rule code, worst and most
+            // frequent first, from the engine's grouping (Report::grouped).
+            let groups = Report::group_diags(&shown_all);
+            let shown_groups: &[DiagGroup] = if max_show > 0 && groups.len() > max_show { &groups[..max_show] } else { &groups };
+            for g in shown_groups {
+                let (c1, c2) = color_for(&g.severity, no_color);
+                if g.count == 1 {
+                    let loc = if g.line > 0 { format!("line {}", g.line) } else { "-".to_string() };
+                    let _ = writeln!(h, "{}{} [{}:{}]{} {}: {}", c1, g.severity.tag(), g.code, g.category.as_str(), c2, loc, g.example);
+                } else {
+                    let _ = writeln!(
+                        h,
+                        "{}{} [{}:{}]{} {}, {} occurrences (--verbose to list all)",
+                        c1,
+                        g.severity.tag(),
+                        g.code,
+                        g.category.as_str(),
+                        c2,
+                        g.example,
+                        g.count
+                    );
+                }
+            }
+            let capped = max_show > 0 && groups.len() > shown_groups.len();
+            let _ = writeln!(
+                h,
+                "\n{}: {} diagnostics{} ({} errors, {} warnings, {} infos), {} lines, {} INDI, {} FAM [GEDCOM {}]",
+                path,
+                total,
+                if capped { format!(" (showing {} of {} groups)", shown_groups.len(), groups.len()) } else { String::new() },
+                report.errors(),
+                report.warnings(),
+                report.infos(),
+                report.lines,
+                report.individuals,
+                report.families,
+                report.version.as_str()
+            );
+            // Summary footer by category and by rule code (issue 20),
+            // over everything the severity filter let through.
+            if total > 0 {
+                let cats: Vec<String> = [
+                    (Category::Correctness, "correctness"),
+                    (Category::Suspicious, "suspicious"),
+                    (Category::Style, "style"),
+                    (Category::Upgrade, "upgrade"),
+                ]
+                .iter()
+                .map(|(c, name)| (shown_all.iter().filter(|d| d.category == *c).count(), *name))
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, name)| format!("{} {}", name, n))
+                .collect();
+                let _ = writeln!(h, "Categories: {}", cats.join(", "));
+                let rules: String = groups
+                    .iter()
+                    .map(|g| format!("{} {}", g.code, g.count))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(h, "Rules: {}", rules);
+            }
         }
-        let _ = writeln!(
-            h,
-            "\n{}: {} diagnostics{} ({} errors, {} warnings, {} infos), {} lines, {} INDI, {} FAM [GEDCOM {}]",
-            path,
-            total,
-            if total > shown.len() { format!(" (showing {})", shown.len()) } else { String::new() },
-            report.errors(),
-            report.warnings(),
-            report.infos(),
-            report.lines,
-            report.individuals,
-            report.families,
-            report.version.as_str()
-        );
     }
 
     // Silence unused-import warning if the engine changes.

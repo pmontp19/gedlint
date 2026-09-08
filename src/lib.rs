@@ -19,7 +19,7 @@ mod parse;
 mod registry;
 mod rules;
 
-pub use diag::{Category, Diag, Report, Severity};
+pub use diag::{Category, Diag, DiagGroup, Report, Severity};
 pub use fix::{apply_edits, compute_edits, fix_bytes, fix_bytes_with, normalize_endings, Applicability, Edit, FixSelection};
 pub use parse::Version;
 pub use registry::{rule, rule_by_name, rulesets, RuleMeta, RULES};
@@ -52,7 +52,16 @@ fn lint_bytes_split(data: &[u8], _already_str: bool) -> Report {
     // Encoding diags go first (low line numbers), then semantic ones.
     let mut all = diags;
     all.append(&mut r.diags);
-    all.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.line.cmp(&b.line)));
+    // Issue 30: severity and line alone leave ties to insertion order, so
+    // code and message break them; identical (sev, line, code, msg) rows
+    // render identically anyway.
+    all.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then(a.line.cmp(&b.line))
+            .then(a.code.cmp(b.code))
+            .then(a.msg.cmp(&b.msg))
+    });
     r.diags = all;
     // The byte-level pre-scan and the line parser must agree on version.
     if r.version == Version::Unknown {

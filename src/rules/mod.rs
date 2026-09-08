@@ -219,7 +219,7 @@ pub(crate) fn lint_lines(text: &str) -> Report {
     individuals::finish_lifespans(&mut diags, &people, &graph);
     individuals::finish_parent_ages(&mut diags, &people, &graph);
     individuals::finish_sex(&mut diags, &people, version);
-    individuals::finish_duplicates(&mut diags, &people);
+    individuals::finish_duplicates(&mut diags, &people, &graph);
 
     let individuals = people.indi_birth.len();
     let _count_dbg = graph.fam_chil.len() + graph.fam_husb.len() + graph.fam_wife.len();
@@ -228,6 +228,16 @@ pub(crate) fn lint_lines(text: &str) -> Report {
         families_set.insert(k);
     }
 
-    diags.sort_by(|a, b| b.severity.cmp(&a.severity).then(a.line.cmp(&b.line)));
+    // Issue 30: severity and line alone leave ties (whole-file findings)
+    // to insertion order, which a HashMap iteration re-seeds per process.
+    // The code and message backstop makes the order a total one, so the
+    // same input can never print in a different order.
+    diags.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then(a.line.cmp(&b.line))
+            .then(a.code.cmp(b.code))
+            .then(a.msg.cmp(&b.msg))
+    });
     Report { version, diags, lines: lines.len(), individuals, families: families_set.len() }
 }
