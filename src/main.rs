@@ -1,10 +1,13 @@
 use std::fs;
 use std::io::{BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use gedlint::{Applicability, Category, Diag, DiagGroup, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_bytes, lint_reader};
+use gedlint::{Applicability, Category, Config, Diag, DiagGroup, FixSelection, Report, RuleMeta, Severity, fix_bytes_with, lint_reader_with, parse_config};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The file discovery looks for, walking up from the linted file.
+const CONFIG_FILE: &str = "gedlint.toml";
 
 fn help() -> String {
     format!(
@@ -16,6 +19,8 @@ fn help() -> String {
         --fix                 repair (E001 orphan lines, E101 split CONC, trailing whitespace) with .bak copy\n  \
         --only CODE           with --fix: restrict to this repair code (repeatable)\n  \
         --unsafe              with --fix: also apply MaybeIncorrect repairs (never the default)\n  \
+        --config PATH         config file to use instead of the discovered gedlint.toml\n  \
+        --no-config           ignore any gedlint.toml (built-in rules only)\n  \
         --format text|json    output (default: text)\n  \
          --severity N          minimum level: error, warning, info (default: info)\n  \
          --max N               cap rule groups by default, single diagnostics with --verbose (0 = all; JSON always complete)\n  \
@@ -26,7 +31,12 @@ fn help() -> String {
         -h, --help            this help\n  \
         -V, --version         version\n\
         \n\
-        EXIT: 0 clean, 1 warnings, 2 errors\n\
+        CONFIG: gedlint.toml is looked up in the file's directory and every\n  \
+        parent. It sets presets and per-rule severities; an unknown rule,\n  \
+        preset or spelling is an error, never a silent no-op.\n\
+        \n\
+        EXIT: 0 clean, 1 warnings, 2 errors (also: bad usage, unreadable\n  \
+        file, invalid config)\n\
         \n\
         RULES: E001 level, E002 HEAD/TRLR, E003 duplicate xref, E004 xref,\n  \
         E005 CONT/CONC, E007 CONC in 7.0, E008 duplicate singleton,\n  \
@@ -115,11 +125,51 @@ fn wrapped(h: &mut impl Write, text: &str) {
     }
 }
 
+/// Walk up from the linted file's directory looking for a `gedlint.toml`.
+/// A bare filename resolves against the current directory, so discovery
+/// still starts there. Stops at the filesystem root.
+fn discover_config(from: &Path) -> Option<PathBuf> {
+    let file = fs::canonicalize(from).unwrap_or_else(|_| from.to_path_buf());
+    let mut dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
+    if dir.as_os_str().is_empty() {
+        dir = PathBuf::from(".");
+    }
+    loop {
+        let candidate = dir.join(CONFIG_FILE);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// Which configuration the run uses: `--no-config` keeps the built-ins,
+/// `--config PATH` names the file, otherwise discovery decides. A file that
+/// exists but does not parse is a hard error, never a silent fallback.
+fn load_config(lint_path: &str, explicit: Option<&str>, no_config: bool) -> Result<Config, String> {
+    if no_config {
+        return Ok(Config::default());
+    }
+    let file = match explicit {
+        Some(p) => PathBuf::from(p),
+        None => match discover_config(Path::new(lint_path)) {
+            Some(f) => f,
+            None => return Ok(Config::default()),
+        },
+    };
+    let text = fs::read_to_string(&file).map_err(|e| format!("cannot read {}: {}", file.display(), e))?;
+    parse_config(&text).map_err(|e| format!("{}: {}", file.display(), e))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let mut fix = false;
     let mut fix_only: Vec<String> = Vec::new();
     let mut fix_unsafe = false;
+    let mut config_path: Option<String> = None;
+    let mut no_config = false;
     let mut format = "text".to_string();
     let mut min_sev = Severity::Info;
     let mut max_show: usize = 0;
@@ -144,6 +194,15 @@ fn main() -> ExitCode {
             "--no-color" => no_color = true,
             "--verbose" | "-v" => verbose = true,
             "--quiet" | "-q" => quiet = true,
+            "--config" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--config needs a path to a gedlint.toml file");
+                    return ExitCode::from(2);
+                }
+                config_path = Some(args[i].clone());
+            }
+            "--no-config" => no_config = true,
             "-h" | "--help" => {
                 print!("{}", help());
                 return ExitCode::from(0);
@@ -228,6 +287,21 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
 
+    if no_config && config_path.is_some() {
+        eprintln!("--no-config and --config cannot be used together");
+        return ExitCode::from(2);
+    }
+
+    // Load before any --fix write: a broken config must stop the run, not
+    // let a repair happen under rules the user meant to silence.
+    let cfg = match load_config(&path, config_path.as_deref(), no_config) {
+        Ok(c) => c,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            return ExitCode::from(2);
+        }
+    };
+
     // --fix before linting: read bytes, repair, write .bak.
     if fix {
         let sel = FixSelection { only: fix_only, allow_unsafe: fix_unsafe };
@@ -256,15 +330,16 @@ fn main() -> ExitCode {
         }
     }
 
-    // Streaming via BufReader (no whole-file fs::read in the engine).
+    // Streaming via BufReader (no whole-file fs::read in the engine): the
+    // config is resolved before the read, so the engine stays fs-free and
+    // large exports are never loaded whole by the caller either.
     let report: Report = match fs::File::open(&path) {
-        Ok(f) => lint_reader(BufReader::new(f)),
+        Ok(f) => lint_reader_with(BufReader::new(f), &cfg),
         Err(e) => {
             eprintln!("cannot read {}: {}", path, e);
             return ExitCode::from(2);
         }
     };
-    // Note: lint_reader already covers encoding; lint_bytes is equivalent.
 
     if format == "json" {
         println!("{}", report.to_json());
@@ -382,7 +457,5 @@ fn main() -> ExitCode {
         }
     }
 
-    // Silence unused-import warning if the engine changes.
-    let _ = lint_bytes;
     ExitCode::from(report.exit_code() as u8)
 }
