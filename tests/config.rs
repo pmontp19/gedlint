@@ -294,3 +294,29 @@ fn config_error_is_a_std_error() {
     let e = parse_config("[lints]\n\"x\" = 1\n").expect_err("bad key");
     let _: &dyn std::error::Error = &e;
 }
+
+#[test]
+fn enables_reports_the_state_the_fix_gate_reads() {
+    // #44: the repair side asks the config which rules emit anything, so
+    // the answer must mirror `effective` exactly.
+    let d = Config::default();
+    assert!(d.enables("E001") && d.enables("E101"), "core rules are on by default");
+    assert!(!d.enables("W601") && !d.enables("W702") && !d.enables("W703"), "opt-in rulesets are off");
+
+    // A preset turns its ruleset on, nothing else.
+    let p = parse_ok("[lints]\npresets = [\"hispanic-naming\"]\n");
+    assert!(p.enables("W601"));
+    assert!(!p.enables("W703") && !p.enables("E001"));
+
+    // An explicit "off" beats a preset that enabled the rule.
+    let off = parse_ok("[lints]\npresets = [\"hygiene\"]\n\n[lints.rules]\n\"W703\" = \"off\"\n");
+    assert!(!off.enables("W703"));
+
+    // A severity entry enables a rule the presets left off.
+    let on = parse_ok("[lints]\npresets = []\n\n[lints.rules]\n\"W601\" = \"warn\"\n");
+    assert!(on.enables("W601"));
+
+    // A code no rule carries (the "style" pseudo-code) is always enabled:
+    // no configuration can name it.
+    assert!(d.enables("style"));
+}

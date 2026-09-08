@@ -2,18 +2,20 @@
 //! applied by default (`AGENTS.md`); the caller (`src/main.rs`) is the one
 //! that writes files and keeps the `.bak` copy, this module is pure.
 //!
-//! A repair is data: [`compute_edits`] proposes every candidate over an
-//! inclusive 1-based **line range**, [`apply_edits`] applies a chosen subset.
-//! Line ranges (not intra-line spans) are the right unit here because the
-//! repairs are not all intra-line: rejoining a split `CONC` replaces two
-//! lines with one, prefixing an orphan rewrites one line in place, and an
-//! empty replacement deletes the range.
+//! A repair is data: [`compute_edits_with`] proposes every candidate over
+//! an inclusive 1-based **line range** gated by the configuration (a
+//! disabled rule proposes nothing, #44), [`apply_edits`] applies a chosen
+//! subset. Line ranges (not intra-line spans) are the right unit here
+//! because the repairs are not all intra-line: rejoining a split `CONC`
+//! replaces two lines with one, prefixing an orphan rewrites one line in
+//! place, and an empty replacement deletes the range.
 //!
 //! Line-ending normalization is whole-file preprocessing
 //! ([`normalize_endings`]), never a per-rule edit.
 
 use std::borrow::Cow;
 
+use crate::config::Config;
 use crate::parse::{normalize_newlines, MAX_LEVEL};
 
 /// How much a repair can be trusted, in Biome's sense. This is what lets an
@@ -88,7 +90,10 @@ pub fn normalize_endings(data: &[u8]) -> (Cow<'_, [u8]>, bool) {
     (normalize_newlines(data), lone_cr)
 }
 
-/// Every candidate repair, without applying any:
+/// Every candidate repair, without applying any, under the built-in
+/// configuration (`recommended`, no opt-in ruleset): a pattern only an
+/// opt-in ruleset repairs is left alone here, exactly as `lint_str` leaves
+/// it unreported. Same as [`compute_edits_with`] with [`Config::default`].
 ///
 /// - `E001`: a line without a level (MyHeritage NOTE/TEXT continuations
 ///   without `CONT`) gets a `{previous_level + 1} CONT ` prefix.
@@ -100,19 +105,41 @@ pub fn normalize_endings(data: &[u8]) -> (Cow<'_, [u8]>, bool) {
 /// Returned in **repair-priority order**, not line order: `apply_edits`
 /// keeps the first of two overlapping edits, and the pass that runs first
 /// decides what a later pass on the same lines reads (`E001` before `E101`
-/// because the `CONT` prefix is what the rejoin reads; `style` before
-/// `E101` because a pad the rejoin absorbs must not land between the two
+/// because the `CONT` prefix is what the rejoin reads; `style` before `E101`
+/// because a pad the rejoin absorbs must not land between the two
 /// halves of the cut character). A caller that re-runs picks up the
 /// dropped ones.
 pub fn compute_edits(data: &[u8]) -> Vec<Edit> {
+    compute_edits_with(data, &Config::default())
+}
+
+/// [`compute_edits`] under an explicit configuration, gated at production
+/// (#44): an edit belonging to a rule the configuration disables is never
+/// produced, so no consumer can rewrite a file according to a rule the same
+/// configuration reports nothing for. The gate lives here rather than at
+/// the call sites so every consumer (the CLI's `--fix`, the web viewer)
+/// inherits it instead of having to remember it. The `style` pseudo-code
+/// has no rule to configure and is always proposed; line-ending
+/// normalization is preprocessing and always runs.
+pub fn compute_edits_with(data: &[u8], cfg: &Config) -> Vec<Edit> {
     let lines = split_lines(data);
     let mut out = Vec::new();
-    orphan_edits(&lines, &mut out);
+    if cfg.enables("E001") {
+        orphan_edits(&lines, &mut out);
+    }
     whitespace_edits(&lines, &mut out);
-    conc_edits(&lines, &mut out);
-    w601_edits(&lines, &mut out);
-    w702_edits(&lines, &mut out);
-    w703_edits(&lines, &mut out);
+    if cfg.enables("E101") {
+        conc_edits(&lines, &mut out);
+    }
+    if cfg.enables("W601") {
+        w601_edits(&lines, &mut out);
+    }
+    if cfg.enables("W702") {
+        w702_edits(&lines, &mut out);
+    }
+    if cfg.enables("W703") {
+        w703_edits(&lines, &mut out);
+    }
     out
 }
 
@@ -172,24 +199,28 @@ pub fn apply_edits(data: &[u8], edits: &[Edit]) -> (Vec<u8>, Vec<Edit>) {
 }
 
 /// Safe repairs applied by `--fix`: normalize line endings, then apply every
-/// `Safe` edit. Returns the repaired bytes and one report line per code.
+/// `Safe` edit, both under the built-in configuration. Returns the repaired
+/// bytes and one report line per code.
 pub fn fix_bytes(data: &[u8]) -> (Vec<u8>, Vec<String>) {
-    fix_bytes_with(data, &FixSelection::default())
+    fix_bytes_with(data, &FixSelection::default(), &Config::default())
 }
 
-/// `fix_bytes` with an explicit selection (`--fix --only` / `--fix --unsafe`).
-/// Line-ending normalization is preprocessing and always runs: the line
-/// model depends on it.
-pub fn fix_bytes_with(data: &[u8], sel: &FixSelection) -> (Vec<u8>, Vec<String>) {
+/// `fix_bytes` with an explicit selection (`--fix --only` / `--fix
+/// --unsafe`) and configuration (`gedlint.toml`): the selection narrows the
+/// repairs, the configuration gates them (#44), and neither can widen the
+/// other's reach (`--only W601` without the ruleset enabled repairs
+/// nothing). Line-ending normalization is preprocessing and always runs:
+/// the line model depends on it.
+pub fn fix_bytes_with(data: &[u8], sel: &FixSelection, cfg: &Config) -> (Vec<u8>, Vec<String>) {
     let (norm, lone_cr) = normalize_endings(data);
     let mut cur = norm.into_owned();
     let mut applied: Vec<String> = Vec::new();
     // Recomputed only by a pass that actually rewrote something, so a file
     // whose only repair is trailing whitespace costs two scans, not four.
-    let mut edits = compute_edits(&cur);
+    let mut edits = compute_edits_with(&cur, cfg);
 
     for code in REPAIR_ORDER {
-        run_stage(&mut cur, &mut edits, &mut applied, sel, code);
+        run_stage(&mut cur, &mut edits, &mut applied, sel, cfg, code);
     }
     // A repair `REPAIR_ORDER` does not name would never be applied. Adding
     // one is a deliberate decision about where in the pipeline it belongs,
@@ -228,7 +259,14 @@ pub fn fix_bytes_with(data: &[u8], sel: &FixSelection) -> (Vec<u8>, Vec<String>)
 const REPAIR_ORDER: [&str; 6] = ["E001", "style", "E101", "W601", "W702", "W703"];
 
 /// One pass for one code, over whatever the previous pass left behind.
-fn run_stage(cur: &mut Vec<u8>, edits: &mut Vec<Edit>, applied: &mut Vec<String>, sel: &FixSelection, code: &str) {
+fn run_stage(
+    cur: &mut Vec<u8>,
+    edits: &mut Vec<Edit>,
+    applied: &mut Vec<String>,
+    sel: &FixSelection,
+    cfg: &Config,
+    code: &str,
+) {
     let wanted = |e: &Edit| e.code == code && sel.allows(e);
     if !edits.iter().any(wanted) {
         return;
@@ -236,7 +274,7 @@ fn run_stage(cur: &mut Vec<u8>, edits: &mut Vec<Edit>, applied: &mut Vec<String>
     let chosen: Vec<Edit> = std::mem::take(edits).into_iter().filter(wanted).collect();
     let (next, dropped) = apply_edits(cur, &chosen);
     *cur = next;
-    *edits = compute_edits(cur);
+    *edits = compute_edits_with(cur, cfg);
     // Same-code edits never overlap today, so `dropped` is empty; a future
     // rule that breaks that gets the rest on the next run.
     let n = weight(&chosen).saturating_sub(weight(&dropped));

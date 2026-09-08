@@ -79,6 +79,16 @@ impl Config {
         }
         map
     }
+
+    /// Whether the rule `code` emits anything under this configuration.
+    /// This is the gate the `--fix` side reads too (#44): a rule that is
+    /// "off", or that no preset covers, must produce no edit either, so the
+    /// repairs and the diagnostics of one run cannot disagree. A code with
+    /// no registry entry (the `style` pseudo-code trailing whitespace
+    /// carries) is always enabled: no configuration can name it.
+    pub fn enables(&self, code: &str) -> bool {
+        !matches!(self.effective().get(code), Some(RuleLevel::Off))
+    }
 }
 
 /// Why a configuration file was refused. `line` is 1-based.
