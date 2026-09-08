@@ -92,21 +92,24 @@ pub fn normalize_endings(data: &[u8]) -> (Cow<'_, [u8]>, bool) {
 ///
 /// - `E001`: a line without a level (MyHeritage NOTE/TEXT continuations
 ///   without `CONT`) gets a `{previous_level + 1} CONT ` prefix.
-/// - `E101`: a run of `CONC` lines whose payload starts mid-UTF-8-sequence
-///   is rejoined into the line above it.
 /// - `style`: trailing whitespace is trimmed. The linter has no code for
 ///   this, so the pseudo-code matches the `--fix` report line.
+/// - `E101`: a run of `CONC` lines whose payload starts mid-UTF-8-sequence
+///   is rejoined into the line above it.
 ///
 /// Returned in **repair-priority order**, not line order: `apply_edits`
-/// keeps the first of two overlapping edits, and a structural repair has to
-/// win over a cosmetic one on the same line (the `CONT` prefix is what the
-/// rejoin then reads). A caller that re-runs picks up the dropped ones.
+/// keeps the first of two overlapping edits, and the pass that runs first
+/// decides what a later pass on the same lines reads (`E001` before `E101`
+/// because the `CONT` prefix is what the rejoin reads; `style` before
+/// `E101` because a pad the rejoin absorbs must not land between the two
+/// halves of the cut character). A caller that re-runs picks up the
+/// dropped ones.
 pub fn compute_edits(data: &[u8]) -> Vec<Edit> {
     let lines = split_lines(data);
     let mut out = Vec::new();
     orphan_edits(&lines, &mut out);
-    conc_edits(&lines, &mut out);
     whitespace_edits(&lines, &mut out);
+    conc_edits(&lines, &mut out);
     out
 }
 
@@ -115,9 +118,7 @@ pub fn compute_edits(data: &[u8]) -> Vec<Edit> {
 /// too. The dropped edits are returned so the caller can re-run.
 ///
 /// A dropped edit still reserves its lines, so a lower-priority edit cannot
-/// slip inside the range of a repair that is merely postponed: trimming the
-/// whitespace of a line a pending rejoin is about to absorb would change
-/// what that rejoin produces.
+/// slip inside the range of a repair that is merely postponed.
 pub fn apply_edits(data: &[u8], edits: &[Edit]) -> (Vec<u8>, Vec<Edit>) {
     let lines = split_lines(data);
     let mut kept: Vec<&Edit> = Vec::new();
@@ -206,17 +207,22 @@ pub fn fix_bytes_with(data: &[u8], sel: &FixSelection) -> (Vec<u8>, Vec<String>)
 /// `compute_edits` returns them in. Exactly **one pass per code**, in this
 /// order, and that is the whole control flow.
 ///
+/// `style` runs before `E101` (#36): a MyHeritage pad on the anchor line
+/// must be gone before the rejoin absorbs the line, or it lands between
+/// the two halves of the cut UTF-8 sequence and the repaired file is still
+/// invalid, silently failing the repair it just reported. `E001` still
+/// runs before `E101` because the `CONT` prefix is what the rejoin reads.
+///
 /// One pass each because two edits on one line (an orphan that also has
 /// trailing whitespace) overlap by construction, so a single pass cannot
-/// apply both, and a structural repair has to land before a cosmetic one
-/// reads the line.
+/// apply both.
 ///
 /// Exactly one, and never a fixpoint, because re-running a code would
 /// repair things `--fix` never reported: rejoining a `CONC` can turn a
 /// blank line into a levelless one, and a second `E001` pass would prefix
 /// it with `CONT`, silently inventing a `CONT` record. The next `--fix`
 /// picks up whatever this one exposed.
-const REPAIR_ORDER: [&str; 3] = ["E001", "E101", "style"];
+const REPAIR_ORDER: [&str; 3] = ["E001", "style", "E101"];
 
 /// One pass for one code, over whatever the previous pass left behind.
 fn run_stage(cur: &mut Vec<u8>, edits: &mut Vec<Edit>, applied: &mut Vec<String>, sel: &FixSelection, code: &str) {
@@ -306,14 +312,17 @@ fn conc_edits(lines: &[&[u8]], out: &mut Vec<Edit>) {
             continue;
         }
         let mut joined = strip_cr(lines[i - 1]).to_vec();
+        // A CRLF file must stay CRLF (#36): the joined line takes the
+        // anchor's terminator, which the payloads never carry.
+        let anchor_cr = lines[i - 1].last() == Some(&b'\r');
         let mut end = i;
         while let Some(pos) = lines.get(end).and_then(|l| split_conc_pos(l)) {
             joined.extend_from_slice(&strip_cr(lines[end])[pos..]);
             end += 1;
         }
-        // The rejoined line intentionally keeps no CR: the payload never
-        // carries one and the line above it loses its own, exactly as the
-        // single-pass repair did before this was structured.
+        if anchor_cr {
+            joined.push(b'\r');
+        }
         let n = end - i;
         out.push(Edit {
             code: "E101",
