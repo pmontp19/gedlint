@@ -12,14 +12,17 @@ pub(crate) fn check_rela_record(diags: &mut Vec<Diag>, l: &Line, version: Versio
             Category::Upgrade,
             Severity::Info,
             l.no,
-            "RELA removed in 7.0: use enumerated ROLE (see gedcom.io/migrate)".into()
+            "RELA removed in 7.0: use enumerated ROLE (see gedcom.io/migrate)".into(),
         ));
     }
 }
 
 /// U502: vendor tags kept as undocumented extensions in 7.0.
 pub(crate) fn check_vendor_tag(diags: &mut Vec<Diag>, l: &Line, version: Version) {
-    if version == Version::V551 && l.tag.starts_with("_") && matches!(l.tag.as_str(), "_MARNM" | "_UPD" | "_APID" | "_OID") {
+    if version == Version::V551
+        && l.tag.starts_with("_")
+        && matches!(l.tag.as_str(), "_MARNM" | "_UPD" | "_APID" | "_OID")
+    {
         diags.push(Diag::new(
             "U502",
             Category::Upgrade,
@@ -53,7 +56,7 @@ pub(crate) fn check_pedi_case(diags: &mut Vec<Diag>, l: &Line, version: Version)
                 Category::Upgrade,
                 Severity::Info,
                 l.no,
-                format!("lowercase PEDI ({}): 7.0 requires uppercase", v)
+                format!("lowercase PEDI ({}): 7.0 requires uppercase", v),
             ));
         }
     }

@@ -27,10 +27,11 @@ pub(crate) fn record_sex(diags: &mut Vec<Diag>, st: &mut People, l: &Line, xref:
             Category::Correctness,
             Severity::Error,
             l.no,
-            format!("duplicate SEX in {} (first at line {})", xref, first)
+            format!("duplicate SEX in {} (first at line {})", xref, first),
         ));
     } else {
-        st.indi_sex.insert(xref.to_string(), (l.value.clone(), l.no));
+        st.indi_sex
+            .insert(xref.to_string(), (l.value.clone(), l.no));
     }
 }
 
@@ -59,7 +60,12 @@ pub(crate) fn record_event_year(st: &mut People, l: &Line, xref: &str, kind: &st
 }
 
 /// BIRT/DEAT/MARR DATE below level 1: the authoritative year for W301-W304.
-pub(crate) fn record_sub_date(st: &mut People, l: &Line, cur_sub: &str, cur: &Option<(String, String)>) {
+pub(crate) fn record_sub_date(
+    st: &mut People,
+    l: &Line,
+    cur_sub: &str,
+    cur: &Option<(String, String)>,
+) {
     if cur_sub == "BIRT" && l.tag == "DATE" {
         if let Some((xref, kind)) = cur.clone() {
             if kind == "INDI" {
@@ -88,7 +94,13 @@ pub(crate) fn record_sub_date(st: &mut People, l: &Line, cur_sub: &str, cur: &Op
 }
 
 /// W301 for one individual: died before birth, or an implausible lifespan.
-pub(crate) fn flush_person(diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d: Option<i64>, line: usize) {
+pub(crate) fn flush_person(
+    diags: &mut Vec<Diag>,
+    xref: &str,
+    b: Option<i64>,
+    d: Option<i64>,
+    line: usize,
+) {
     if let (Some(bb), Some(dd)) = (b, d) {
         if dd < 10000 && bb < 10000 && dd < bb {
             diags.push(Diag::new(
@@ -96,7 +108,7 @@ pub(crate) fn flush_person(diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d:
                 Category::Suspicious,
                 Severity::Warning,
                 line,
-                format!("{}: died ({}) before being born ({})", xref, dd, bb)
+                format!("{}: died ({}) before being born ({})", xref, dd, bb),
             ));
         }
         if dd < 10000 && dd - bb > 105 {
@@ -105,7 +117,13 @@ pub(crate) fn flush_person(diags: &mut Vec<Diag>, xref: &str, b: Option<i64>, d:
                 Category::Suspicious,
                 Severity::Warning,
                 line,
-                format!("{}: {} - {} = {} years, please verify", xref, bb, dd, dd - bb)
+                format!(
+                    "{}: {} - {} = {} years, please verify",
+                    xref,
+                    bb,
+                    dd,
+                    dd - bb
+                ),
             ));
         }
     }
@@ -118,7 +136,13 @@ pub(crate) fn finish_lifespans(diags: &mut Vec<Diag>, st: &People, graph: &Graph
         let d = st.indi_death.get(xref).copied().flatten();
         if let (Some(bb), Some(dd)) = (*b, d) {
             if dd < 10000 {
-                flush_person(diags, xref, Some(bb), Some(dd), graph.records.get(xref).map(|r| r.1).unwrap_or(0));
+                flush_person(
+                    diags,
+                    xref,
+                    Some(bb),
+                    Some(dd),
+                    graph.records.get(xref).map(|r| r.1).unwrap_or(0),
+                );
             }
         }
     }
@@ -139,7 +163,10 @@ pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Gra
             }
             // The child's record line: where the reader lands to fix the link.
             let child_line = graph.records.get(c).map(|r| r.1).unwrap_or(0);
-            for (parent, rol) in [(&graph.fam_husb.get(fam), "father"), (&graph.fam_wife.get(fam), "mother")] {
+            for (parent, rol) in [
+                (&graph.fam_husb.get(fam), "father"),
+                (&graph.fam_wife.get(fam), "mother"),
+            ] {
                 if let Some((px, _)) = parent {
                     if let Some(Some(pb)) = st.indi_birth.get(px) {
                         let age = cb - pb;
@@ -153,7 +180,7 @@ pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Gra
                                 format!(
                                     "{}: {} {} (b. {}) was {} at {}'s birth (b. {})",
                                     fam, rol, px, pb, age, c, cb
-                                )
+                                ),
                             ));
                         }
                     }
@@ -167,7 +194,7 @@ pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Gra
                         Category::Suspicious,
                         Severity::Warning,
                         child_line,
-                        format!("{}: {} born ({}) before marriage ({})", fam, c, cb, m)
+                        format!("{}: {} born ({}) before marriage ({})", fam, c, cb, m),
                     ));
                 }
             }
@@ -189,7 +216,12 @@ pub(crate) fn finish_sex(diags: &mut Vec<Diag>, st: &People, version: Version) {
                 Category::Suspicious,
                 Severity::Warning,
                 *line,
-                format!("{}: invalid SEX ({}), expected M/F/U{}", xref, v, if version == Version::V70 { "/X" } else { "" })
+                format!(
+                    "{}: invalid SEX ({}), expected M/F/U{}",
+                    xref,
+                    v,
+                    if version == Version::V70 { "/X" } else { "" }
+                ),
             ));
         }
     }
@@ -202,7 +234,10 @@ pub(crate) fn finish_duplicates(diags: &mut Vec<Diag>, st: &People, graph: &Grap
     for (xref, b) in &st.indi_birth {
         if let (Some(nm), Some(bb)) = (st.indi_name.get(xref), *b) {
             if bb < 10000 {
-                by_name.entry(norm_name(nm)).or_default().push((xref.clone(), bb));
+                by_name
+                    .entry(norm_name(nm))
+                    .or_default()
+                    .push((xref.clone(), bb));
             }
         }
     }
@@ -221,7 +256,10 @@ pub(crate) fn finish_duplicates(diags: &mut Vec<Diag>, st: &People, graph: &Grap
                         Category::Suspicious,
                         Severity::Warning,
                         graph.records.get(&v[b].0).map(|r| r.1).unwrap_or(0),
-                        format!("possible duplicate: {} (b. {}) vs {} (b. {})", v[a].0, v[a].1, v[b].0, v[b].1)
+                        format!(
+                            "possible duplicate: {} (b. {}) vs {} (b. {})",
+                            v[a].0, v[a].1, v[b].0, v[b].1
+                        ),
                     ));
                 }
             }

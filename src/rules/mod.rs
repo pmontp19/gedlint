@@ -10,13 +10,13 @@ pub(crate) mod encoding;
 pub(crate) mod enums;
 pub(crate) mod events;
 pub(crate) mod graph;
+pub(crate) mod hispanic_naming;
+pub(crate) mod hygiene;
 pub(crate) mod individuals;
 pub(crate) mod names;
 pub(crate) mod structure;
 pub(crate) mod style;
 pub(crate) mod upgrade;
-pub(crate) mod hispanic_naming;
-pub(crate) mod hygiene;
 
 use std::collections::HashSet;
 
@@ -35,7 +35,11 @@ pub(crate) fn lint_lines(text: &str) -> Report {
     // and stripped so "0 HEAD" on the first line is recognized. Spans, on the
     // other hand, are on-disk offsets, so line 1 carries the stripped bytes as
     // its span base and every span lands where the file really has it.
-    let bom = if text.starts_with('\u{FEFF}') { BOM_LEN } else { 0 };
+    let bom = if text.starts_with('\u{FEFF}') {
+        BOM_LEN
+    } else {
+        0
+    };
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut diags: Vec<Diag> = Vec::new();
     let raw_lines: Vec<&str> = text.lines().collect();
@@ -76,7 +80,10 @@ pub(crate) fn lint_lines(text: &str) -> Report {
                 Category::Correctness,
                 Severity::Error,
                 l.no,
-                format!("malformed line (non-numeric level): {}", truncate(&l.raw, 60)),
+                format!(
+                    "malformed line (non-numeric level): {}",
+                    truncate(&l.raw, 60)
+                ),
             ));
             structure.prev_level = None;
             continue;
@@ -177,14 +184,18 @@ pub(crate) fn lint_lines(text: &str) -> Report {
             let rec = cur.clone().map(|c| c.0).unwrap_or_default();
             if l.tag == "PHRASE" {
                 if let Some((ptag, pline)) = &parent {
-                    enum_state.phrased.insert((rec.clone(), ptag.clone(), *pline));
+                    enum_state
+                        .phrased
+                        .insert((rec.clone(), ptag.clone(), *pline));
                     // A PHRASE may also hang under the OTHER-valued structure
                     // itself (maximal70: "2 TYPE OTHER" + "3 PHRASE"): mark
                     // the grandparent too, not only the sibling slot. The
                     // stack already holds PHRASE itself at the top.
                     if stack.len() >= 3 {
                         let (gtag, gline) = &stack[stack.len() - 3];
-                        enum_state.phrased.insert((rec.clone(), gtag.clone(), *gline));
+                        enum_state
+                            .phrased
+                            .insert((rec.clone(), gtag.clone(), *gline));
                     }
                 }
             } else {
@@ -230,7 +241,12 @@ pub(crate) fn lint_lines(text: &str) -> Report {
 
     let individuals = people.indi_birth.len();
     let mut families_set: HashSet<&String> = HashSet::new();
-    for k in graph.fam_chil.keys().chain(graph.fam_husb.keys()).chain(graph.fam_wife.keys()) {
+    for k in graph
+        .fam_chil
+        .keys()
+        .chain(graph.fam_husb.keys())
+        .chain(graph.fam_wife.keys())
+    {
         families_set.insert(k);
     }
 
@@ -245,5 +261,11 @@ pub(crate) fn lint_lines(text: &str) -> Report {
             .then(a.code.cmp(b.code))
             .then(a.msg.cmp(&b.msg))
     });
-    Report { version, diags, lines: lines.len(), individuals, families: families_set.len() }
+    Report {
+        version,
+        diags,
+        lines: lines.len(),
+        individuals,
+        families: families_set.len(),
+    }
 }

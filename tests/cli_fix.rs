@@ -30,14 +30,32 @@ fn write(dir: &std::path::Path, name: &str, content: &[u8]) -> PathBuf {
 fn only_restricts_the_repair_and_the_report() {
     let d = tmpdir("only");
     let f = write(&d, "o.ged", TWO_REPAIRS);
-    let o = Command::new(bin()).arg(&f).arg("--fix").arg("--only").arg("E001").arg("--no-color").output().unwrap();
+    let o = Command::new(bin())
+        .arg(&f)
+        .arg("--fix")
+        .arg("--only")
+        .arg("E001")
+        .arg("--no-color")
+        .output()
+        .unwrap();
     let out = String::from_utf8_lossy(&o.stdout).into_owned();
-    assert!(out.contains("fix: E001: 1 orphan lines prefixed with CONT (backup"), "{}", out);
+    assert!(
+        out.contains("fix: E001: 1 orphan lines prefixed with CONT (backup"),
+        "{}",
+        out
+    );
     assert!(!out.contains("trailing whitespace"), "{}", out);
     let fixed = String::from_utf8(fs::read(&f).unwrap()).unwrap();
     assert!(fixed.contains("3 CONT orphan line"), "{}", fixed);
-    assert!(fixed.contains("2 TEXT part   \n"), "the unselected repair must not run: {:?}", fixed);
-    assert!(fs::read(d.join("o.ged.bak")).unwrap() == TWO_REPAIRS, ".bak is still written");
+    assert!(
+        fixed.contains("2 TEXT part   \n"),
+        "the unselected repair must not run: {:?}",
+        fixed
+    );
+    assert!(
+        fs::read(d.join("o.ged.bak")).unwrap() == TWO_REPAIRS,
+        ".bak is still written"
+    );
 }
 
 #[test]
@@ -55,17 +73,30 @@ fn only_is_repeatable() {
         .output()
         .unwrap();
     let out = String::from_utf8_lossy(&o.stdout).into_owned();
-    assert!(out.contains("E001: 1 orphan lines") && out.contains("trailing whitespace on 1 lines"), "{}", out);
+    assert!(
+        out.contains("E001: 1 orphan lines") && out.contains("trailing whitespace on 1 lines"),
+        "{}",
+        out
+    );
     // Both codes selected is the same as a bare --fix here.
     let d2 = tmpdir("only2b");
     let f2 = write(&d2, "o.ged", TWO_REPAIRS);
-    Command::new(bin()).arg(&f2).arg("--fix").arg("--no-color").output().unwrap();
+    Command::new(bin())
+        .arg(&f2)
+        .arg("--fix")
+        .arg("--no-color")
+        .output()
+        .unwrap();
     assert_eq!(fs::read(&f).unwrap(), fs::read(&f2).unwrap());
 }
 
 #[test]
 fn only_without_a_code_exits_2() {
-    let o = Command::new(bin()).arg("--fix").arg("--only").output().unwrap();
+    let o = Command::new(bin())
+        .arg("--fix")
+        .arg("--only")
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&o.stderr).contains("--only needs a rule code"));
 }
@@ -77,9 +108,16 @@ fn only_and_unsafe_require_fix() {
     for flag in [vec!["--only", "E001"], vec!["--unsafe"]] {
         let o = Command::new(bin()).arg(&f).args(&flag).output().unwrap();
         assert_eq!(o.status.code(), Some(2), "{:?}", flag);
-        assert!(String::from_utf8_lossy(&o.stderr).contains("only apply with --fix"), "{:?}", flag);
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains("only apply with --fix"),
+            "{:?}",
+            flag
+        );
     }
-    assert!(!d.join("o.ged.bak").exists(), "nothing may be written when the flags are rejected");
+    assert!(
+        !d.join("o.ged.bak").exists(),
+        "nothing may be written when the flags are rejected"
+    );
 }
 
 #[test]
@@ -89,10 +127,22 @@ fn unsafe_changes_nothing_while_every_repair_is_safe() {
     let d = tmpdir("unsafe");
     let a = write(&d, "a.ged", TWO_REPAIRS);
     let b = write(&d, "b.ged", TWO_REPAIRS);
-    let plain = Command::new(bin()).arg(&a).arg("--fix").arg("--no-color").output().unwrap();
-    let opted = Command::new(bin()).arg(&b).arg("--fix").arg("--unsafe").arg("--no-color").output().unwrap();
+    let plain = Command::new(bin())
+        .arg(&a)
+        .arg("--fix")
+        .arg("--no-color")
+        .output()
+        .unwrap();
+    let opted = Command::new(bin())
+        .arg(&b)
+        .arg("--fix")
+        .arg("--unsafe")
+        .arg("--no-color")
+        .output()
+        .unwrap();
     assert_eq!(fs::read(&a).unwrap(), fs::read(&b).unwrap());
-    let strip = |o: &std::process::Output, n: &str| String::from_utf8_lossy(&o.stdout).replace(n, "F");
+    let strip =
+        |o: &std::process::Output, n: &str| String::from_utf8_lossy(&o.stdout).replace(n, "F");
     assert_eq!(strip(&plain, "a.ged"), strip(&opted, "b.ged"));
 }
 
@@ -109,9 +159,17 @@ fn help_lists_the_new_flags() {
     let options: Vec<&str> = out.lines().filter(|l| l.starts_with("  -")).collect();
     assert!(options.len() >= 10, "{:?}", options);
     for l in options {
-        assert!(l.len() > 24, "option line is too short to be aligned: {:?}", l);
+        assert!(
+            l.len() > 24,
+            "option line is too short to be aligned: {:?}",
+            l
+        );
         assert_eq!(&l[22..24], "  ", "description column is not 24: {:?}", l);
-        assert!(!l[24..].starts_with(' '), "description does not start in column 24: {:?}", l);
+        assert!(
+            !l[24..].starts_with(' '),
+            "description does not start in column 24: {:?}",
+            l
+        );
     }
 }
 
@@ -130,25 +188,51 @@ fn fix_without_a_preset_leaves_opt_in_patterns_alone() {
     // report line, no .bak.
     let d = tmpdir("gate-default");
     let f = write(&d, "o.ged", OPT_IN_ONLY);
-    let o = Command::new(bin()).arg(&f).arg("--fix").arg("--no-config").arg("--no-color").output().unwrap();
+    let o = Command::new(bin())
+        .arg(&f)
+        .arg("--fix")
+        .arg("--no-config")
+        .arg("--no-color")
+        .output()
+        .unwrap();
     let out = String::from_utf8_lossy(&o.stdout).into_owned();
     assert!(!out.contains("fix:"), "nothing was repaired: {}", out);
-    assert_eq!(fs::read(&f).unwrap(), OPT_IN_ONLY, "the file must come back untouched");
-    assert!(!d.join("o.ged.bak").exists(), "no rewrite means no backup either");
+    assert_eq!(
+        fs::read(&f).unwrap(),
+        OPT_IN_ONLY,
+        "the file must come back untouched"
+    );
+    assert!(
+        !d.join("o.ged.bak").exists(),
+        "no rewrite means no backup either"
+    );
 }
 
 #[test]
 fn fix_applies_opt_in_repairs_only_under_their_preset() {
     let d = tmpdir("gate-preset");
     let f = write(&d, "o.ged", OPT_IN_ONLY);
-    write(&d, "gedlint.toml", b"[lints]\npresets = [\"recommended\", \"hispanic-naming\", \"hygiene\"]\n");
-    let o = Command::new(bin()).arg(&f).arg("--fix").arg("--no-color").output().unwrap();
+    write(
+        &d,
+        "gedlint.toml",
+        b"[lints]\npresets = [\"recommended\", \"hispanic-naming\", \"hygiene\"]\n",
+    );
+    let o = Command::new(bin())
+        .arg(&f)
+        .arg("--fix")
+        .arg("--no-color")
+        .output()
+        .unwrap();
     let out = String::from_utf8_lossy(&o.stdout).into_owned();
     assert!(out.contains("W601") && out.contains("W703"), "{}", out);
     let fixed = String::from_utf8(fs::read(&f).unwrap()).unwrap();
     assert!(fixed.contains("/Cognom1 Cognom2/"), "{}", fixed);
     assert!(fixed.contains("PLAC Reus, Spain"), "{}", fixed);
-    assert_eq!(fs::read(d.join("o.ged.bak")).unwrap(), OPT_IN_ONLY, ".bak keeps the original");
+    assert_eq!(
+        fs::read(d.join("o.ged.bak")).unwrap(),
+        OPT_IN_ONLY,
+        ".bak keeps the original"
+    );
 }
 
 #[test]

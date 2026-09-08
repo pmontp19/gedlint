@@ -37,11 +37,7 @@ pub(crate) fn surname_slot(val: &str) -> Option<&str> {
 
 /// W402 check on the accumulated NAME value (NAME + CONC/CONT run), then
 /// the rulesets' name checks, recording what fired.
-pub(crate) fn flush(
-    diags: &mut Vec<Diag>,
-    st: &mut Names,
-    names: &mut HashMap<String, String>,
-) {
+pub(crate) fn flush(diags: &mut Vec<Diag>, st: &mut Names, names: &mut HashMap<String, String>) {
     let Some((xref, line, val)) = st.name_buf.take() else {
         return;
     };
@@ -52,7 +48,11 @@ pub(crate) fn flush(
             Category::Style,
             Severity::Warning,
             line,
-            format!("{}: NAME with unbalanced slashes: {}", xref, truncate(&val, 50)),
+            format!(
+                "{}: NAME with unbalanced slashes: {}",
+                xref,
+                truncate(&val, 50)
+            ),
         ));
     }
 
@@ -126,18 +126,32 @@ fn check_once(
 /// rulesets' specifications name alongside `1 NAME` itself. Runs after
 /// [`flush`], so `reported` already knows what the NAME value produced and
 /// a defect sitting in both places is reported once, not twice.
-pub(crate) fn check_subtag(diags: &mut Vec<Diag>, st: &mut Names, tag: &str, val: &str, line: usize) {
+pub(crate) fn check_subtag(
+    diags: &mut Vec<Diag>,
+    st: &mut Names,
+    tag: &str,
+    val: &str,
+    line: usize,
+) {
     if val.is_empty() {
         return;
     }
     match tag {
         "SURN" => {
-            check_once(diags, st, "W601", |d| hispanic_naming::check_surname_value(d, line, val));
-            check_once(diags, st, "W701", |d| hygiene::check_polluted_name(d, line, val));
-            check_once(diags, st, "W702", |d| hygiene::check_all_caps_value(d, line, val));
+            check_once(diags, st, "W601", |d| {
+                hispanic_naming::check_surname_value(d, line, val)
+            });
+            check_once(diags, st, "W701", |d| {
+                hygiene::check_polluted_name(d, line, val)
+            });
+            check_once(diags, st, "W702", |d| {
+                hygiene::check_all_caps_value(d, line, val)
+            });
         }
         "GIVN" => {
-            check_once(diags, st, "W603", |d| hispanic_naming::check_abbreviated_given_name(d, line, val));
+            check_once(diags, st, "W603", |d| {
+                hispanic_naming::check_abbreviated_given_name(d, line, val)
+            });
         }
         _ => {}
     }

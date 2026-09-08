@@ -7,7 +7,10 @@ use crate::parse::{truncate, Version};
 pub(crate) fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, version: Version) {
     let v = value.trim();
     // Months in other languages or lowercase: GEDCOM requires JAN FEB MAR...
-    let lower_months = ["enero", "febrero", "gener", "febrer", "marzo", "març", "abril", "mayo", "maig", "junio", "juny"];
+    let lower_months = [
+        "enero", "febrero", "gener", "febrer", "marzo", "març", "abril", "mayo", "maig", "junio",
+        "juny",
+    ];
     let vl = v.to_lowercase();
     if lower_months.iter().any(|m| vl.contains(m)) {
         diags.push(Diag::new(
@@ -15,7 +18,10 @@ pub(crate) fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, 
             Category::Style,
             Severity::Warning,
             line,
-            format!("DATE with non-standard month (use JAN/FEB/...): {}", truncate(v, 50))
+            format!(
+                "DATE with non-standard month (use JAN/FEB/...): {}",
+                truncate(v, 50)
+            ),
         ));
         return;
     }
@@ -25,7 +31,10 @@ pub(crate) fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, 
             Category::Style,
             Severity::Warning,
             line,
-            format!("DATE with lowercase approximation (use ABT/CAL/EST): {}", truncate(v, 50))
+            format!(
+                "DATE with lowercase approximation (use ABT/CAL/EST): {}",
+                truncate(v, 50)
+            ),
         ));
     }
     if v.contains("BET") && !v.contains("AND") {
@@ -36,7 +45,10 @@ pub(crate) fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, 
                 Category::Upgrade,
                 Severity::Info,
                 line,
-                format!("BET without AND (7.0 needs a full range): {}", truncate(v, 50))
+                format!(
+                    "BET without AND (7.0 needs a full range): {}",
+                    truncate(v, 50)
+                ),
             ));
         } else {
             diags.push(Diag::new(
@@ -44,7 +56,10 @@ pub(crate) fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, 
                 Category::Style,
                 Severity::Warning,
                 line,
-                format!("BET without AND (DATE_RANGE needs BET x AND y): {}", truncate(v, 50))
+                format!(
+                    "BET without AND (DATE_RANGE needs BET x AND y): {}",
+                    truncate(v, 50)
+                ),
             ));
         }
     }
@@ -61,7 +76,10 @@ pub(crate) fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, 
                 Category::Upgrade,
                 Severity::Info,
                 line,
-                format!("BET range out of order (swap to chronological): {}", truncate(v, 50))
+                format!(
+                    "BET range out of order (swap to chronological): {}",
+                    truncate(v, 50)
+                ),
             ));
         }
     }
@@ -74,12 +92,19 @@ pub(crate) fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, 
             Category::Style,
             Severity::Warning,
             line,
-            format!("DATE with unbalanced parentheses: {}", truncate(v, 50))
+            format!("DATE with unbalanced parentheses: {}", truncate(v, 50)),
         ));
     }
     // Calendar escape @#...@: must close and name a known calendar.
     if let Some(start) = v.find("@#") {
-        const CALENDARS: &[&str] = &["GREGORIAN", "JULIAN", "HEBREW", "FRENCH_R", "ROMAN", "UNKNOWN"];
+        const CALENDARS: &[&str] = &[
+            "GREGORIAN",
+            "JULIAN",
+            "HEBREW",
+            "FRENCH_R",
+            "ROMAN",
+            "UNKNOWN",
+        ];
         let rest = &v[start + 2..];
         match rest.find('@') {
             Some(end) if CALENDARS.contains(&rest[..end].to_ascii_uppercase().as_str()) => {}
@@ -88,7 +113,10 @@ pub(crate) fn check_date_style(diags: &mut Vec<Diag>, line: usize, value: &str, 
                 Category::Style,
                 Severity::Warning,
                 line,
-                format!("DATE with bad calendar escape (use @#GREGORIAN@ etc.): {}", truncate(v, 50))
+                format!(
+                    "DATE with bad calendar escape (use @#GREGORIAN@ etc.): {}",
+                    truncate(v, 50)
+                ),
             )),
         }
     }

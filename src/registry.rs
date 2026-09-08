@@ -532,7 +532,9 @@ pub fn rule(code: &str) -> Option<&'static RuleMeta> {
 
 /// Look up a rule by the `<ruleset>/<name>` pair configuration addresses it by.
 pub fn rule_by_name(ruleset: &str, name: &str) -> Option<&'static RuleMeta> {
-    RULES.iter().find(|r| r.ruleset == ruleset && r.name == name)
+    RULES
+        .iter()
+        .find(|r| r.ruleset == ruleset && r.name == name)
 }
 
 /// Every ruleset present in `RULES`, in first-appearance order. Lets a

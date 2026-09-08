@@ -26,10 +26,16 @@ mod registry;
 mod rules;
 pub mod wasm;
 
-pub use baseline::{apply_baseline, baseline_from_report, baseline_to_json, fingerprint, parse_baseline, Baseline, BaselineEntry, BaselineOutcome};
-pub use config::{Config, ConfigError, RuleLevel, parse_config};
+pub use baseline::{
+    apply_baseline, baseline_from_report, baseline_to_json, fingerprint, parse_baseline, Baseline,
+    BaselineEntry, BaselineOutcome,
+};
+pub use config::{parse_config, Config, ConfigError, RuleLevel};
 pub use diag::{Category, Diag, DiagGroup, Report, Severity};
-pub use fix::{apply_edits, compute_edits, compute_edits_with, fix_bytes, fix_bytes_with, normalize_endings, Applicability, Edit, FixSelection};
+pub use fix::{
+    apply_edits, compute_edits, compute_edits_with, fix_bytes, fix_bytes_with, normalize_endings,
+    Applicability, Edit, FixSelection,
+};
 pub use parse::Version;
 pub use registry::{rule, rule_by_name, rules_to_json, rulesets, RuleMeta, RULES};
 
@@ -148,7 +154,19 @@ mod tests {
 
     #[test]
     fn json_escapes() {
-        let r = Report { version: Version::V551, lines: 1, individuals: 0, families: 0, diags: vec![Diag::new("E001", Category::Correctness, Severity::Error, 1, "a\"b\\c".into())] };
+        let r = Report {
+            version: Version::V551,
+            lines: 1,
+            individuals: 0,
+            families: 0,
+            diags: vec![Diag::new(
+                "E001",
+                Category::Correctness,
+                Severity::Error,
+                1,
+                "a\"b\\c".into(),
+            )],
+        };
         let j = r.to_json();
         assert!(j.contains("a\\\"b\\\\c"));
     }

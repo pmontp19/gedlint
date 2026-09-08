@@ -10,7 +10,12 @@ use gedlint::{
 
 const HEAD: &[u8] = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n";
 
-fn edit(code: &'static str, lines: (usize, usize), replacement: &[&str], applicability: Applicability) -> Edit {
+fn edit(
+    code: &'static str,
+    lines: (usize, usize),
+    replacement: &[&str],
+    applicability: Applicability,
+) -> Edit {
     Edit {
         code,
         lines,
@@ -21,7 +26,12 @@ fn edit(code: &'static str, lines: (usize, usize), replacement: &[&str], applica
 }
 
 fn golden(name: &str) -> Vec<u8> {
-    std::fs::read(format!("{}/tests/fixtures/golden/{}", env!("CARGO_MANIFEST_DIR"), name)).unwrap()
+    std::fs::read(format!(
+        "{}/tests/fixtures/golden/{}",
+        env!("CARGO_MANIFEST_DIR"),
+        name
+    ))
+    .unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -54,16 +64,26 @@ fn overlapping_edits_first_wins_and_second_is_returned() {
     let second = edit("T2", (2, 3), &["other"], Applicability::Safe);
     let (out, dropped) = apply_edits(data, &[first, second.clone()]);
     assert_eq!(out, b"joined\nc\n");
-    assert_eq!(dropped, vec![second], "the loser comes back so the caller can re-run");
+    assert_eq!(
+        dropped,
+        vec![second],
+        "the loser comes back so the caller can re-run"
+    );
 }
 
 #[test]
 fn re_running_applies_the_dropped_edit() {
     let data = b"a\nb\nc\n";
     let second = edit("T2", (2, 3), &["other"], Applicability::Safe);
-    let (once, dropped) = apply_edits(data, &[edit("T1", (1, 2), &["joined"], Applicability::Safe), second]);
+    let (once, dropped) = apply_edits(
+        data,
+        &[edit("T1", (1, 2), &["joined"], Applicability::Safe), second],
+    );
     // Line numbers moved with the first edit, so the caller recomputes.
-    let (twice, left) = apply_edits(&once, &[edit("T2", (2, 2), &["other"], Applicability::Safe)]);
+    let (twice, left) = apply_edits(
+        &once,
+        &[edit("T2", (2, 2), &["other"], Applicability::Safe)],
+    );
     assert_eq!(dropped.len(), 1);
     assert_eq!(twice, b"joined\nother\n");
     assert!(left.is_empty());
@@ -77,13 +97,18 @@ fn an_edit_can_delete_its_range() {
     let (out, dropped) = apply_edits(data, &[edit("T1", (2, 2), &[], Applicability::Safe)]);
     assert_eq!(out, b"a\nc\n");
     assert!(dropped.is_empty());
-    assert!(compute_edits(&golden("maximal70.ged")).iter().all(|e| !e.replacement.is_empty()));
+    assert!(compute_edits(&golden("maximal70.ged"))
+        .iter()
+        .all(|e| !e.replacement.is_empty()));
 }
 
 #[test]
 fn one_edit_can_replace_a_range_with_several_lines() {
     let data = b"a\nb\nc\n";
-    let (out, _) = apply_edits(data, &[edit("T1", (1, 2), &["x", "y", "z"], Applicability::Safe)]);
+    let (out, _) = apply_edits(
+        data,
+        &[edit("T1", (1, 2), &["x", "y", "z"], Applicability::Safe)],
+    );
     assert_eq!(out, b"x\ny\nz\nc\n");
 }
 
@@ -121,7 +146,10 @@ fn edits_may_arrive_in_any_order() {
     let data = b"a\nb\nc\n";
     let (out, dropped) = apply_edits(
         data,
-        &[edit("T1", (3, 3), &["C"], Applicability::Safe), edit("T2", (1, 1), &["A"], Applicability::Safe)],
+        &[
+            edit("T1", (3, 3), &["C"], Applicability::Safe),
+            edit("T2", (1, 1), &["A"], Applicability::Safe),
+        ],
     );
     assert_eq!(out, b"A\nb\nC\n");
     assert!(dropped.is_empty());
@@ -137,17 +165,26 @@ fn maybe_incorrect_needs_an_explicit_opt_in() {
     let provable = edit("E001", (1, 1), &["1 CONT x"], Applicability::Safe);
 
     let default = FixSelection::default();
-    assert!(!default.allows(&opinionated), "a bare --fix must never apply MaybeIncorrect");
+    assert!(
+        !default.allows(&opinionated),
+        "a bare --fix must never apply MaybeIncorrect"
+    );
     assert!(default.allows(&provable));
 
-    let opt_in = FixSelection { only: Vec::new(), allow_unsafe: true };
+    let opt_in = FixSelection {
+        only: Vec::new(),
+        allow_unsafe: true,
+    };
     assert!(opt_in.allows(&opinionated));
     assert!(opt_in.allows(&provable));
 }
 
 #[test]
 fn only_restricts_by_code_ignoring_case() {
-    let sel = FixSelection { only: vec!["e001".into()], allow_unsafe: false };
+    let sel = FixSelection {
+        only: vec!["e001".into()],
+        allow_unsafe: false,
+    };
     assert!(sel.allows(&edit("E001", (1, 1), &["x"], Applicability::Safe)));
     assert!(!sel.allows(&edit("E101", (1, 1), &["x"], Applicability::Safe)));
     // `only` never widens applicability.
@@ -156,23 +193,37 @@ fn only_restricts_by_code_ignoring_case() {
 
 #[test]
 fn only_applies_one_repair_and_reports_one_line() {
-    let data = [HEAD, b"0 @S1@ SOUR\n1 DATA\n2 TEXT part   \norphan line\n0 TRLR\n"].concat();
+    let data = [
+        HEAD,
+        b"0 @S1@ SOUR\n1 DATA\n2 TEXT part   \norphan line\n0 TRLR\n",
+    ]
+    .concat();
     let (all, applied_all) = fix_bytes(&data);
     assert_eq!(applied_all.len(), 2, "{:?}", applied_all);
 
-    let sel = FixSelection { only: vec!["E001".into()], allow_unsafe: false };
+    let sel = FixSelection {
+        only: vec!["E001".into()],
+        allow_unsafe: false,
+    };
     let (only_e001, applied) = fix_bytes_with(&data, &sel, &Config::default());
     assert_eq!(applied, vec!["E001: 1 orphan lines prefixed with CONT"]);
     let text = String::from_utf8(only_e001).unwrap();
     assert!(text.contains("3 CONT orphan line"), "{}", text);
-    assert!(text.contains("2 TEXT part   \n"), "the whitespace repair was not selected: {:?}", text);
+    assert!(
+        text.contains("2 TEXT part   \n"),
+        "the whitespace repair was not selected: {:?}",
+        text
+    );
     assert_ne!(String::from_utf8(all).unwrap(), text);
 }
 
 #[test]
 fn an_unknown_only_code_repairs_nothing() {
     let data = [HEAD, b"0 TRLR   \n"].concat();
-    let sel = FixSelection { only: vec!["W999".into()], allow_unsafe: false };
+    let sel = FixSelection {
+        only: vec!["W999".into()],
+        allow_unsafe: false,
+    };
     let (out, applied) = fix_bytes_with(&data, &sel, &Config::default());
     assert_eq!(out, data);
     assert!(applied.is_empty());
@@ -184,7 +235,11 @@ fn an_unknown_only_code_repairs_nothing() {
 
 #[test]
 fn compute_edits_describes_the_orphan_repair() {
-    let data = [HEAD, b"0 @S1@ SOUR\n1 DATA\n2 TEXT part\norphan line\n0 TRLR\n"].concat();
+    let data = [
+        HEAD,
+        b"0 @S1@ SOUR\n1 DATA\n2 TEXT part\norphan line\n0 TRLR\n",
+    ]
+    .concat();
     let edits = compute_edits(&data);
     assert_eq!(edits.len(), 1, "{:?}", edits);
     let e = &edits[0];
@@ -213,12 +268,23 @@ fn compute_edits_rejoins_a_conc_run_as_one_edit() {
     assert_eq!(edits.len(), 1, "{:?}", edits);
     assert_eq!(edits[0].code, "E101");
     assert_eq!(edits[0].lines, (5, 7), "the anchor plus both CONC lines");
-    assert_eq!(edits[0].note, "rejoin 2 CONC lines split inside a UTF-8 sequence");
-    assert_eq!(edits[0].replacement, vec!["1 NAME José Mañana".as_bytes().to_vec()]);
+    assert_eq!(
+        edits[0].note,
+        "rejoin 2 CONC lines split inside a UTF-8 sequence"
+    );
+    assert_eq!(
+        edits[0].replacement,
+        vec!["1 NAME José Mañana".as_bytes().to_vec()]
+    );
 
     let (fixed, applied) = fix_bytes(&data);
-    assert_eq!(applied, vec!["E101: rejoined 2 CONC lines with split UTF-8"]);
-    assert!(String::from_utf8(fixed).unwrap().contains("1 NAME José Mañana"));
+    assert_eq!(
+        applied,
+        vec!["E101: rejoined 2 CONC lines with split UTF-8"]
+    );
+    assert!(String::from_utf8(fixed)
+        .unwrap()
+        .contains("1 NAME José Mañana"));
 }
 
 #[test]
@@ -235,9 +301,15 @@ fn a_rejoin_keeps_bytes_that_are_not_valid_utf8() {
     data.extend_from_slice(b"\n0 TRLR\n");
 
     let edits = compute_edits(&data);
-    assert_eq!(edits[0].replacement, vec![b"1 NAME Jos\xC3\xA9\xA9 x".to_vec()]);
+    assert_eq!(
+        edits[0].replacement,
+        vec![b"1 NAME Jos\xC3\xA9\xA9 x".to_vec()]
+    );
     let (fixed, _) = fix_bytes(&data);
-    assert!(fixed.windows(3).any(|w| w == [0xC3, 0xA9, 0xA9]), "the stray byte must survive verbatim");
+    assert!(
+        fixed.windows(3).any(|w| w == [0xC3, 0xA9, 0xA9]),
+        "the stray byte must survive verbatim"
+    );
     assert!(String::from_utf8(fixed).is_err());
 }
 
@@ -247,14 +319,23 @@ fn compute_edits_returns_repairs_in_priority_order() {
     // reads: E001 before E101 (the CONT prefix is what the rejoin reads),
     // and style before E101 (a pad the rejoin absorbs must not land
     // between the halves of the cut character, #36).
-    let data = [HEAD, b"0 @S1@ SOUR\n1 DATA\n2 TEXT part  \norphan line  \n0 TRLR\n"].concat();
+    let data = [
+        HEAD,
+        b"0 @S1@ SOUR\n1 DATA\n2 TEXT part  \norphan line  \n0 TRLR\n",
+    ]
+    .concat();
     let codes: Vec<&str> = compute_edits(&data).iter().map(|e| e.code).collect();
     assert_eq!(codes, vec!["E001", "style", "style"]);
 }
 
 #[test]
 fn compute_edits_finds_nothing_in_a_clean_file() {
-    for name in ["minimal70.ged", "maximal70.ged", "remarriage1.ged", "same-sex-marriage.ged"] {
+    for name in [
+        "minimal70.ged",
+        "maximal70.ged",
+        "remarriage1.ged",
+        "same-sex-marriage.ged",
+    ] {
         assert!(compute_edits(&golden(name)).is_empty(), "{}", name);
     }
 }
@@ -277,11 +358,22 @@ fn normalize_endings_is_not_a_rule() {
     assert!(!changed);
     // No rule ever proposes it, so it cannot be selected away.
     let cr = b"0 HEAD\r1 GEDC\r2 VERS 5.5.1\r0 TRLR\r".to_vec();
-    assert!(compute_edits(&cr).iter().all(|e| e.code != "style" || !e.replacement.is_empty()));
-    let sel = FixSelection { only: vec!["E001".into()], allow_unsafe: false };
+    assert!(compute_edits(&cr)
+        .iter()
+        .all(|e| e.code != "style" || !e.replacement.is_empty()));
+    let sel = FixSelection {
+        only: vec!["E001".into()],
+        allow_unsafe: false,
+    };
     let (fixed, applied) = fix_bytes_with(&cr, &sel, &Config::default());
-    assert!(!fixed.contains(&b'\r'), "normalization runs even under --only");
-    assert_eq!(applied, vec!["style: normalized classic Mac CR line endings to LF"]);
+    assert!(
+        !fixed.contains(&b'\r'),
+        "normalization runs even under --only"
+    );
+    assert_eq!(
+        applied,
+        vec!["style: normalized classic Mac CR line endings to LF"]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -296,8 +388,14 @@ fn fix_bytes_report_lines_for_the_golden_set() {
         ("remarriage1.ged", &[]),
         ("remarriage2.ged", &[]),
         ("same-sex-marriage.ged", &[]),
-        ("escapes.ged", &["style: trimmed trailing whitespace on 1 lines"]),
-        ("TGC551LF.ged", &["style: trimmed trailing whitespace on 352 lines"]),
+        (
+            "escapes.ged",
+            &["style: trimmed trailing whitespace on 1 lines"],
+        ),
+        (
+            "TGC551LF.ged",
+            &["style: trimmed trailing whitespace on 352 lines"],
+        ),
         (
             "TGC551.ged",
             &[
@@ -337,14 +435,24 @@ fn fix_bytes_only_repairs_what_it_reports() {
     // reported before the rejoin absorbs it.
     assert_eq!(
         applied,
-        vec!["style: trimmed trailing whitespace on 1 lines", "E101: rejoined 1 CONC lines with split UTF-8"]
+        vec![
+            "style: trimmed trailing whitespace on 1 lines",
+            "E101: rejoined 1 CONC lines with split UTF-8"
+        ]
     );
     let text = String::from_utf8_lossy(&fixed).into_owned();
-    assert!(!text.contains("CONT"), "no CONT was reported, so none may appear: {}", text);
+    assert!(
+        !text.contains("CONT"),
+        "no CONT was reported, so none may appear: {}",
+        text
+    );
     // The exposed line is a genuine E001, and a second run repairs it.
     assert!(lint_bytes(&fixed).diags.iter().any(|d| d.code == "E001"));
     let (twice, applied_twice) = fix_bytes(&fixed);
-    assert_eq!(applied_twice, vec!["E001: 1 orphan lines prefixed with CONT"]);
+    assert_eq!(
+        applied_twice,
+        vec!["E001: 1 orphan lines prefixed with CONT"]
+    );
     assert!(String::from_utf8_lossy(&twice).contains("CONT"));
 }
 
@@ -352,15 +460,26 @@ fn fix_bytes_only_repairs_what_it_reports() {
 fn fix_bytes_matches_a_hand_applied_selection() {
     // fix_bytes is a thin wrapper: driving compute_edits/apply_edits by hand
     // in the same order must give the same bytes.
-    let data = [HEAD, b"0 @S1@ SOUR\n1 DATA\n2 TEXT part  \norphan line  \n0 TRLR\n"].concat();
+    let data = [
+        HEAD,
+        b"0 @S1@ SOUR\n1 DATA\n2 TEXT part  \norphan line  \n0 TRLR\n",
+    ]
+    .concat();
     let mut cur = data.clone();
     for code in ["E001", "style", "E101"] {
-        let chosen: Vec<Edit> = compute_edits(&cur).into_iter().filter(|e| e.code == code).collect();
+        let chosen: Vec<Edit> = compute_edits(&cur)
+            .into_iter()
+            .filter(|e| e.code == code)
+            .collect();
         if chosen.is_empty() {
             continue;
         }
         let (next, dropped) = apply_edits(&cur, &chosen);
-        assert!(dropped.is_empty(), "same-code edits must not overlap: {:?}", dropped);
+        assert!(
+            dropped.is_empty(),
+            "same-code edits must not overlap: {:?}",
+            dropped
+        );
         cur = next;
     }
     assert_eq!(cur, fix_bytes(&data).0);
@@ -377,11 +496,17 @@ fn crlf_lines_keep_their_cr() {
     let data = b"0 HEAD\r\n1 GEDC\r\n2 VERS 5.5.1\r\n0 @S1@ SOUR\r\n1 DATA\r\n2 TEXT a  \r\norphan line  \r\n0 TRLR\r\n";
     let edits = compute_edits(data);
     assert_eq!(edits[0].code, "E001");
-    assert_eq!(edits[0].replacement, vec![b"3 CONT orphan line  \r".to_vec()]);
+    assert_eq!(
+        edits[0].replacement,
+        vec![b"3 CONT orphan line  \r".to_vec()]
+    );
     let (fixed, applied) = fix_bytes(data);
     assert_eq!(
         applied,
-        vec!["E001: 1 orphan lines prefixed with CONT", "style: trimmed trailing whitespace on 2 lines"]
+        vec![
+            "E001: 1 orphan lines prefixed with CONT",
+            "style: trimmed trailing whitespace on 2 lines"
+        ]
     );
     assert_eq!(fixed, &b"0 HEAD\r\n1 GEDC\r\n2 VERS 5.5.1\r\n0 @S1@ SOUR\r\n1 DATA\r\n2 TEXT a\r\n3 CONT orphan line\r\n0 TRLR\r\n"[..]);
 }
@@ -391,11 +516,18 @@ fn an_orphan_under_the_deepest_level_is_left_alone() {
     // Level 99 is the deepest legal one (5.5.1 ch. 1), so there is no level
     // to give the continuation: report it and do not invent a level 100.
     let data = [HEAD, b"0 @S1@ SOUR\n99 DATA\norphan under 99\n0 TRLR\n"].concat();
-    assert!(compute_edits(&data).is_empty(), "{:?}", compute_edits(&data));
+    assert!(
+        compute_edits(&data).is_empty(),
+        "{:?}",
+        compute_edits(&data)
+    );
     let (fixed, applied) = fix_bytes(&data);
     assert_eq!(fixed, data);
     assert!(applied.is_empty());
-    assert!(lint_bytes(&data).diags.iter().any(|d| d.code == "E001"), "still reported, just not repaired");
+    assert!(
+        lint_bytes(&data).diags.iter().any(|d| d.code == "E001"),
+        "still reported, just not repaired"
+    );
 }
 
 #[test]
@@ -408,8 +540,13 @@ fn a_conc_tag_without_a_space_is_still_rejoined() {
     data.extend_from_slice(&[0xA9, b' ', b'/', b'O', b's', b'o', b'/']);
     data.extend_from_slice(b"\n0 TRLR\n");
     let (fixed, applied) = fix_bytes(&data);
-    assert_eq!(applied, vec!["E101: rejoined 1 CONC lines with split UTF-8"]);
-    assert!(String::from_utf8(fixed).unwrap().contains("1 NAME José /Oso/"));
+    assert_eq!(
+        applied,
+        vec!["E101: rejoined 1 CONC lines with split UTF-8"]
+    );
+    assert!(String::from_utf8(fixed)
+        .unwrap()
+        .contains("1 NAME José /Oso/"));
 }
 
 #[test]
@@ -430,11 +567,18 @@ fn a_padded_anchor_is_trimmed_before_the_rejoin() {
     let (fixed, applied) = fix_bytes(&data);
     assert_eq!(
         applied,
-        vec!["style: trimmed trailing whitespace on 1 lines", "E101: rejoined 1 CONC lines with split UTF-8"]
+        vec![
+            "style: trimmed trailing whitespace on 1 lines",
+            "E101: rejoined 1 CONC lines with split UTF-8"
+        ]
     );
     let text = String::from_utf8(fixed.clone()).unwrap();
     assert!(text.contains("1 NAME José /Oso/"), "{}", text);
-    assert!(!lint_bytes(&fixed).diags.iter().any(|d| d.code == "E101"), "{}", text);
+    assert!(
+        !lint_bytes(&fixed).diags.iter().any(|d| d.code == "E101"),
+        "{}",
+        text
+    );
 
     // Repairing twice changes nothing.
     let (again, applied_again) = fix_bytes(&fixed);
@@ -454,7 +598,10 @@ fn a_crlf_rejoin_stays_crlf() {
     data.extend_from_slice(b" /Oso/\r\n0 TRLR\r\n");
 
     let (fixed, applied) = fix_bytes(&data);
-    assert_eq!(applied, vec!["E101: rejoined 1 CONC lines with split UTF-8"]);
+    assert_eq!(
+        applied,
+        vec!["E101: rejoined 1 CONC lines with split UTF-8"]
+    );
     let expected = {
         let mut e = b"0 HEAD\r\n1 GEDC\r\n2 VERS 5.5.1\r\n0 @I1@ INDI\r\n1 NAME Jos".to_vec();
         e.extend_from_slice(&[0xC3, 0xA9]);
@@ -462,9 +609,16 @@ fn a_crlf_rejoin_stays_crlf() {
         e
     };
     assert_eq!(fixed, expected);
-    assert!(fixed.windows(2).all(|w| w[1] != b'\n' || w[0] == b'\r'), "every LF is preceded by a CR");
+    assert!(
+        fixed.windows(2).all(|w| w[1] != b'\n' || w[0] == b'\r'),
+        "every LF is preceded by a CR"
+    );
     let diags = lint_bytes(&fixed).diags;
-    assert!(!diags.iter().any(|d| d.code == "W102"), "{:?}", diags.iter().map(|d| d.code).collect::<Vec<_>>());
+    assert!(
+        !diags.iter().any(|d| d.code == "W102"),
+        "{:?}",
+        diags.iter().map(|d| d.code).collect::<Vec<_>>()
+    );
     assert!(!diags.iter().any(|d| d.code == "E101"));
 
     // Repairing twice changes nothing.
@@ -489,7 +643,11 @@ fn a_file_without_a_trailing_newline_does_not_gain_one() {
     let data = [HEAD, b"0 @S1@ SOUR\n1 DATA\n2 TEXT a\norphan no newline"].concat();
     let (fixed, applied) = fix_bytes(&data);
     assert_eq!(applied, vec!["E001: 1 orphan lines prefixed with CONT"]);
-    assert!(fixed.ends_with(b"3 CONT orphan no newline"), "{:?}", String::from_utf8_lossy(&fixed));
+    assert!(
+        fixed.ends_with(b"3 CONT orphan no newline"),
+        "{:?}",
+        String::from_utf8_lossy(&fixed)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -505,7 +663,9 @@ fn repairable_patterns() -> Vec<u8> {
     let mut data = Vec::new();
     data.extend_from_slice(HEAD);
     data.extend_from_slice(b"0 @I1@ INDI\n1 NAME Maria /Montpeo, Osso/\n2 SURN Montpeo, Osso\n");
-    data.extend_from_slice(b"0 @I2@ INDI\n1 NAME Anna /Puig/\n2 SURN PUIG SOLE\n1 BIRT\n2 PLAC Alcover, , Tarragona\n");
+    data.extend_from_slice(
+        b"0 @I2@ INDI\n1 NAME Anna /Puig/\n2 SURN PUIG SOLE\n1 BIRT\n2 PLAC Alcover, , Tarragona\n",
+    );
     data.extend_from_slice(b"0 @S1@ SOUR\n1 DATA\n2 TEXT part  \norphan line\n");
     data.extend_from_slice(b"0 @I3@ INDI\n1 NAME Jos");
     data.push(0xC3);
@@ -544,7 +704,10 @@ fn diagnostics_and_edits_agree_under_every_config() {
 
     for (name, cfg) in &configs {
         let report = lint_bytes_with(&norm, cfg);
-        let edit_codes: BTreeSet<&str> = compute_edits_with(&norm, cfg).iter().map(|e| e.code).collect();
+        let edit_codes: BTreeSet<&str> = compute_edits_with(&norm, cfg)
+            .iter()
+            .map(|e| e.code)
+            .collect();
         for code in &edit_codes {
             // "style" is the one repair with no diagnostic by design: the
             // linter has no code for trailing whitespace, and CR
@@ -565,18 +728,29 @@ fn diagnostics_and_edits_agree_under_every_config() {
     // stopped triggering anything: every preset state produces the exact
     // edit set it should.
     let codes = |cfg: &Config| -> BTreeSet<&'static str> {
-        compute_edits_with(&norm, cfg).iter().map(|e| e.code).collect()
+        compute_edits_with(&norm, cfg)
+            .iter()
+            .map(|e| e.code)
+            .collect()
     };
     assert_eq!(
         codes(&configs[1].1),
-        ["E001", "E101", "W601", "W702", "W703", "style"].into_iter().collect(),
+        ["E001", "E101", "W601", "W702", "W703", "style"]
+            .into_iter()
+            .collect(),
         "every ruleset on must exercise every repair"
     );
     // An explicit "off" silences the edit even with the preset enabled.
-    assert!(!codes(&configs[2].1).contains("W601"), "the override must beat the preset");
+    assert!(
+        !codes(&configs[2].1).contains("W601"),
+        "the override must beat the preset"
+    );
     assert!(codes(&configs[2].1).contains("W702") && codes(&configs[2].1).contains("W703"));
     // The built-in config repairs exactly the core.
-    assert_eq!(codes(&configs[0].1), ["E001", "E101", "style"].into_iter().collect());
+    assert_eq!(
+        codes(&configs[0].1),
+        ["E001", "E101", "style"].into_iter().collect()
+    );
     // And silence leaves only the unruled style repair.
     assert_eq!(codes(&configs[3].1), ["style"].into_iter().collect());
 }
@@ -588,11 +762,30 @@ fn the_default_config_leaves_opt_in_patterns_untouched() {
     let data = repairable_patterns();
     let (fixed, applied) = fix_bytes(&data);
     let text = String::from_utf8_lossy(&fixed);
-    assert!(text.contains("/Montpeo, Osso/"), "W601 not enabled: no comma removed");
-    assert!(text.contains("2 SURN PUIG SOLE"), "W702 not enabled: no case change");
-    assert!(text.contains("PLAC Alcover, , Tarragona"), "W703 not enabled: no comma removed");
-    assert!(applied.iter().any(|a| a.starts_with("E001")), "the core repairs still run: {:?}", applied);
-    assert!(!applied.iter().any(|a| a.starts_with("W6") || a.starts_with("W7")), "{:?}", applied);
+    assert!(
+        text.contains("/Montpeo, Osso/"),
+        "W601 not enabled: no comma removed"
+    );
+    assert!(
+        text.contains("2 SURN PUIG SOLE"),
+        "W702 not enabled: no case change"
+    );
+    assert!(
+        text.contains("PLAC Alcover, , Tarragona"),
+        "W703 not enabled: no comma removed"
+    );
+    assert!(
+        applied.iter().any(|a| a.starts_with("E001")),
+        "the core repairs still run: {:?}",
+        applied
+    );
+    assert!(
+        !applied
+            .iter()
+            .any(|a| a.starts_with("W6") || a.starts_with("W7")),
+        "{:?}",
+        applied
+    );
 }
 
 #[test]
@@ -605,13 +798,29 @@ fn an_enabled_preset_repairs_its_ruleset_and_only_its_ruleset() {
     let (fixed, applied) = fix_bytes_with(&data, &FixSelection::default(), &cfg);
     assert_eq!(
         applied,
-        vec!["style: trimmed trailing whitespace on 2 lines", "W601: removed comma from 2 surnames"]
+        vec![
+            "style: trimmed trailing whitespace on 2 lines",
+            "W601: removed comma from 2 surnames"
+        ]
     );
     let text = String::from_utf8_lossy(&fixed);
-    assert!(text.contains("/Montpeo Osso/") && text.contains("2 SURN Montpeo Osso"), "{}", text);
-    assert!(text.contains("orphan line\n"), "E001 is off under this config, so no CONT prefix");
-    assert!(fixed.windows(4).any(|w| w == b"CONC"), "E101 is off under this config, so no rejoin");
-    assert!(text.contains("PLAC Alcover, , Tarragona"), "hygiene is off under this config");
+    assert!(
+        text.contains("/Montpeo Osso/") && text.contains("2 SURN Montpeo Osso"),
+        "{}",
+        text
+    );
+    assert!(
+        text.contains("orphan line\n"),
+        "E001 is off under this config, so no CONT prefix"
+    );
+    assert!(
+        fixed.windows(4).any(|w| w == b"CONC"),
+        "E101 is off under this config, so no rejoin"
+    );
+    assert!(
+        text.contains("PLAC Alcover, , Tarragona"),
+        "hygiene is off under this config"
+    );
 }
 
 #[test]
@@ -619,7 +828,10 @@ fn only_narrows_the_gate_but_never_overrides_it() {
     // --only selects among the edits the configuration produced; it cannot
     // grant an edit the gate refused (#44 acceptance).
     let data = repairable_patterns();
-    let sel = FixSelection { only: vec!["W601".into()], allow_unsafe: false };
+    let sel = FixSelection {
+        only: vec!["W601".into()],
+        allow_unsafe: false,
+    };
     let (out, applied) = fix_bytes_with(&data, &sel, &Config::default());
     assert!(applied.is_empty(), "{:?}", applied);
     assert_eq!(out, data, "the file must come back byte-identical");

@@ -6,7 +6,10 @@
 
 use std::io::Cursor;
 
-use gedlint::{Config, RuleLevel, Severity, lint_bytes_with, lint_reader, lint_reader_with, lint_str, lint_str_with, parse_config};
+use gedlint::{
+    lint_bytes_with, lint_reader, lint_reader_with, lint_str, lint_str_with, parse_config, Config,
+    RuleLevel, Severity,
+};
 
 /// Triggers E201 (error), W305 (warning) and U502 (info) at once.
 const MULTI: &str = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n1 _UPD X\n1 FAMC @F9@\n0 TRLR\n";
@@ -16,7 +19,11 @@ fn parse_ok(text: &str) -> Config {
 }
 
 fn codes(text: &str, cfg: &Config) -> Vec<String> {
-    lint_str_with(text, cfg).diags.iter().map(|d| d.code.to_string()).collect()
+    lint_str_with(text, cfg)
+        .diags
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect()
 }
 
 #[test]
@@ -37,8 +44,18 @@ fn default_config_preserves_per_finding_severities() {
     let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @I2@\n2 ROLE OTHER\n0 @I2@ INDI\n1 NAME C /D/\n0 TRLR\n";
     let key = |d: &gedlint::Diag| (d.code, d.severity);
     let plain: Vec<_> = lint_str(g).diags.iter().map(key).collect();
-    let with: Vec<_> = lint_str_with(g, &Config::default()).diags.iter().map(key).collect();
-    assert!(plain.iter().any(|(c, s)| *c == "W306" && *s == Severity::Info), "{:?}", plain);
+    let with: Vec<_> = lint_str_with(g, &Config::default())
+        .diags
+        .iter()
+        .map(key)
+        .collect();
+    assert!(
+        plain
+            .iter()
+            .any(|(c, s)| *c == "W306" && *s == Severity::Info),
+        "{:?}",
+        plain
+    );
     assert_eq!(plain, with);
 }
 
@@ -65,11 +82,26 @@ fn an_empty_or_comment_only_file_is_the_default() {
 
 #[test]
 fn the_fixture_covers_all_three_severities() {
-    let found: Vec<(String, Severity)> =
-        lint_str(MULTI).diags.iter().map(|d| (d.code.to_string(), d.severity)).collect();
-    assert!(found.contains(&("E201".to_string(), Severity::Error)), "{:?}", found);
-    assert!(found.contains(&("W305".to_string(), Severity::Warning)), "{:?}", found);
-    assert!(found.contains(&("U502".to_string(), Severity::Info)), "{:?}", found);
+    let found: Vec<(String, Severity)> = lint_str(MULTI)
+        .diags
+        .iter()
+        .map(|d| (d.code.to_string(), d.severity))
+        .collect();
+    assert!(
+        found.contains(&("E201".to_string(), Severity::Error)),
+        "{:?}",
+        found
+    );
+    assert!(
+        found.contains(&("W305".to_string(), Severity::Warning)),
+        "{:?}",
+        found
+    );
+    assert!(
+        found.contains(&("U502".to_string(), Severity::Info)),
+        "{:?}",
+        found
+    );
 }
 
 #[test]
@@ -84,7 +116,10 @@ fn off_rule_emits_nothing_and_does_not_affect_the_exit_code() {
     // Every error and warning off -> exit 0, even though U502 still fires.
     let cfg = parse_ok("[lints.rules]\n\"E201\" = \"off\"\n\"W305\" = \"off\"\n");
     let r = lint_str_with(MULTI, &cfg);
-    assert_eq!(r.diags.iter().map(|d| d.code).collect::<Vec<_>>(), vec!["U502"]);
+    assert_eq!(
+        r.diags.iter().map(|d| d.code).collect::<Vec<_>>(),
+        vec!["U502"]
+    );
     assert_eq!(r.exit_code(), 0);
 }
 
@@ -92,7 +127,11 @@ fn off_rule_emits_nothing_and_does_not_affect_the_exit_code() {
 fn severity_can_be_lowered_and_the_exit_code_follows() {
     let cfg = parse_ok("[lints.rules]\n\"E201\" = \"warn\"\n");
     let r = lint_str_with(MULTI, &cfg);
-    let e201 = r.diags.iter().find(|d| d.code == "E201").expect("E201 still present");
+    let e201 = r
+        .diags
+        .iter()
+        .find(|d| d.code == "E201")
+        .expect("E201 still present");
     assert_eq!(e201.severity, Severity::Warning);
     // E201 (now warn) and W305 (warn) remain: exit 1, not 2.
     assert_eq!(r.exit_code(), 1);
@@ -105,7 +144,11 @@ fn severity_can_be_lowered_and_the_exit_code_follows() {
 fn severity_can_be_raised_and_the_exit_code_follows() {
     let cfg = parse_ok("[lints.rules]\n\"U502\" = \"error\"\n");
     let r = lint_str_with(MULTI, &cfg);
-    let u502 = r.diags.iter().find(|d| d.code == "U502").expect("U502 still present");
+    let u502 = r
+        .diags
+        .iter()
+        .find(|d| d.code == "U502")
+        .expect("U502 still present");
     assert_eq!(u502.severity, Severity::Error);
     assert_eq!(r.exit_code(), 2);
 }
@@ -121,9 +164,13 @@ fn a_rule_is_addressable_by_ruleset_and_name() {
 #[test]
 fn explicit_rules_beat_the_preset() {
     // recommended enables W305 as a warning; the explicit entry wins.
-    let cfg = parse_ok("[lints]\npresets = [\"recommended\"]\n\n[lints.rules]\n\"W305\" = \"error\"\n");
+    let cfg =
+        parse_ok("[lints]\npresets = [\"recommended\"]\n\n[lints.rules]\n\"W305\" = \"error\"\n");
     let r = lint_str_with(MULTI, &cfg);
-    assert_eq!(r.diags.iter().find(|d| d.code == "W305").unwrap().severity, Severity::Error);
+    assert_eq!(
+        r.diags.iter().find(|d| d.code == "W305").unwrap().severity,
+        Severity::Error
+    );
     assert_eq!(r.exit_code(), 2);
 }
 
@@ -183,11 +230,16 @@ fn lint_reader_with_applies_the_config_while_streaming() {
     let r = lint_reader_with(Cursor::new(MULTI), &cfg);
     let got: Vec<String> = r.diags.iter().map(|d| d.code.to_string()).collect();
     assert!(!got.contains(&"E201".to_string()), "{:?}", got);
-    assert_eq!(r.diags.iter().find(|d| d.code == "W305").unwrap().severity, Severity::Error);
+    assert_eq!(
+        r.diags.iter().find(|d| d.code == "W305").unwrap().severity,
+        Severity::Error
+    );
     assert_eq!(r.exit_code(), 2, "the raised W305 decides the exit code");
     // And silence through the streaming path:
     let silence = parse_ok("[lints]\npresets = []\n");
-    assert!(lint_reader_with(Cursor::new(MULTI), &silence).diags.is_empty());
+    assert!(lint_reader_with(Cursor::new(MULTI), &silence)
+        .diags
+        .is_empty());
 }
 
 #[test]
@@ -199,7 +251,14 @@ fn an_equals_sign_inside_a_quoted_key_still_reports_unknown_rule() {
 
 #[test]
 fn unknown_rule_key_is_a_hard_error() {
-    for key in ["NOPE", "nope/no-such-rule", "hygiene/bogus-name", "core/no-such-rule", "w305", "W305X"] {
+    for key in [
+        "NOPE",
+        "nope/no-such-rule",
+        "hygiene/bogus-name",
+        "core/no-such-rule",
+        "w305",
+        "W305X",
+    ] {
         let e = parse_config(&format!("[lints.rules]\n\"{}\" = \"off\"\n", key)).expect_err(key);
         assert!(e.msg.contains("unknown rule"), "{}: {}", key, e.msg);
         assert_eq!(e.line, 2, "{}", key);
@@ -208,9 +267,14 @@ fn unknown_rule_key_is_a_hard_error() {
 
 #[test]
 fn unknown_preset_is_a_hard_error() {
-    let e = parse_config("[lints]\npresets = [\"recommended\", \"nope\"]\n").expect_err("unknown preset");
+    let e = parse_config("[lints]\npresets = [\"recommended\", \"nope\"]\n")
+        .expect_err("unknown preset");
     assert!(e.msg.contains("unknown preset"), "{}", e.msg);
-    assert!(e.msg.contains("\"recommended\""), "the message names the valid presets: {}", e.msg);
+    assert!(
+        e.msg.contains("\"recommended\""),
+        "the message names the valid presets: {}",
+        e.msg
+    );
     assert_eq!(e.line, 2);
 }
 
@@ -231,29 +295,57 @@ fn malformed_toml_is_a_hard_error() {
         ("[lints]\npresets = [recommended]\n", "double-quoted"),
         ("[lints]\npresets = [\"a\" \"b\"]\n", "',' between"),
         ("[lints]\npresets = [\"a\"] extra\n", "same line"),
-        ("[lints]\npresets = [\"recommended\"]\npresets = [\"recommended\"]\n", "twice"),
-        ("[lints]\npresets = [\"recommended\", \"recommended\"]\n", "listed twice"),
+        (
+            "[lints]\npresets = [\"recommended\"]\npresets = [\"recommended\"]\n",
+            "twice",
+        ),
+        (
+            "[lints]\npresets = [\"recommended\", \"recommended\"]\n",
+            "listed twice",
+        ),
         ("[lints]\n[lints]\n", "appears twice"),
         ("[lints.rules]\n[lints.rules]\n", "appears twice"),
         ("[lints] presets = []\n", "after the section header"),
-        ("[lints.rules]\nW305 = off\n", "double-quoted string, e.g. \"off\""),
-        ("[lints.rules]\n\"W305\" = off\n", "double-quoted string, e.g. \"off\""),
+        (
+            "[lints.rules]\nW305 = off\n",
+            "double-quoted string, e.g. \"off\"",
+        ),
+        (
+            "[lints.rules]\n\"W305\" = off\n",
+            "double-quoted string, e.g. \"off\"",
+        ),
         ("[lints.rules]\n\"W305\" = \"warning\"\n", "invalid level"),
         ("[lints.rules]\n\"W305\" = \"\"\n", "invalid level"),
-        ("[lints.rules]\n\"W305\" = \"off\n", "value string must close"),
-        ("[lints.rules]\n\"W305\" = \"off\" extra\n", "after the value"),
+        (
+            "[lints.rules]\n\"W305\" = \"off\n",
+            "value string must close",
+        ),
+        (
+            "[lints.rules]\n\"W305\" = \"off\" extra\n",
+            "after the value",
+        ),
         ("[lints.rules]\n\"W305 = \"off\"\n", "`key = value`"),
         ("[lints.rules]\n\"W305\" \"off\"\n", "`key = value`"),
-        ("[lints.rules]\n\"W305\" = \"off\"\n\"core/invalid-sex-value\" = \"off\"\n", "configured twice"),
+        (
+            "[lints.rules]\n\"W305\" = \"off\"\n\"core/invalid-sex-value\" = \"off\"\n",
+            "configured twice",
+        ),
     ] {
         let e = parse_config(text).expect_err(text);
-        assert!(e.msg.contains(fragment), "{:?}: expected \"{}\" in {}", text, fragment, e.msg);
+        assert!(
+            e.msg.contains(fragment),
+            "{:?}: expected \"{}\" in {}",
+            text,
+            fragment,
+            e.msg
+        );
     }
 }
 
 #[test]
 fn error_line_numbers_point_at_the_offending_line() {
-    let e = parse_config("[lints]\n\n[lints.rules]\n\"W305\" = \"moderate\"\n").expect_err("bad level");
+    let e =
+        parse_config("[lints]\n\n[lints.rules]\n\"W305\" = \"moderate\"\n").expect_err("bad level");
     assert_eq!(e.line, 4);
     assert!(e.to_string().contains("line 4"), "{}", e);
 }
@@ -276,9 +368,14 @@ fn an_enabled_preset_turns_its_rules_on() {
     // one rule: presets decide presence, explicit entries refine it.
     let silence = parse_ok("[lints]\npresets = []\n");
     assert!(lint_str_with(MULTI, &silence).diags.is_empty());
-    let back = parse_ok("[lints]\npresets = [\"recommended\"]\n\n[lints.rules]\n\"U502\" = \"off\"\n");
+    let back =
+        parse_ok("[lints]\npresets = [\"recommended\"]\n\n[lints.rules]\n\"U502\" = \"off\"\n");
     assert_eq!(
-        lint_str_with(MULTI, &back).diags.iter().map(|d| d.code).collect::<Vec<_>>(),
+        lint_str_with(MULTI, &back)
+            .diags
+            .iter()
+            .map(|d| d.code)
+            .collect::<Vec<_>>(),
         vec!["E201", "W305"]
     );
 }
@@ -286,7 +383,10 @@ fn an_enabled_preset_turns_its_rules_on() {
 #[test]
 fn rule_level_is_public_and_comparable() {
     assert_ne!(RuleLevel::Off, RuleLevel::Severity(Severity::Info));
-    assert_ne!(RuleLevel::Severity(Severity::Info), RuleLevel::Severity(Severity::Error));
+    assert_ne!(
+        RuleLevel::Severity(Severity::Info),
+        RuleLevel::Severity(Severity::Error)
+    );
 }
 
 #[test]
@@ -300,8 +400,14 @@ fn enables_reports_the_state_the_fix_gate_reads() {
     // #44: the repair side asks the config which rules emit anything, so
     // the answer must mirror `effective` exactly.
     let d = Config::default();
-    assert!(d.enables("E001") && d.enables("E101"), "core rules are on by default");
-    assert!(!d.enables("W601") && !d.enables("W702") && !d.enables("W703"), "opt-in rulesets are off");
+    assert!(
+        d.enables("E001") && d.enables("E101"),
+        "core rules are on by default"
+    );
+    assert!(
+        !d.enables("W601") && !d.enables("W702") && !d.enables("W703"),
+        "opt-in rulesets are off"
+    );
 
     // A preset turns its ruleset on, nothing else.
     let p = parse_ok("[lints]\npresets = [\"hispanic-naming\"]\n");

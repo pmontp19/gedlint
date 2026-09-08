@@ -136,36 +136,56 @@ pub(crate) const MAX_LEVEL: u32 = 99;
 pub(crate) fn parse_line(no: usize, raw: &str) -> Line {
     // Grammar: LEVEL [XREF] TAG [VALUE]. XREF only at level 0.
     let mut it = raw.splitn(3, char::is_whitespace);
-    let lvl: Option<u32> = it.next().and_then(|x| x.parse().ok()).filter(|n| *n <= MAX_LEVEL);
+    let lvl: Option<u32> = it
+        .next()
+        .and_then(|x| x.parse().ok())
+        .filter(|n| *n <= MAX_LEVEL);
     let second = it.next().unwrap_or("");
     let rest = it.next().unwrap_or("");
-    let (xref, tag, value) = if second.starts_with('@') && second.ends_with('@') && second.len() >= 3 {
-        // "0 @I1@ INDI ...": the tag is the first word of rest.
-        let (t, v) = match rest.split_once(' ') {
-            Some((t, v)) => (t, v.trim()),
-            None => (rest, ""),
+    let (xref, tag, value) =
+        if second.starts_with('@') && second.ends_with('@') && second.len() >= 3 {
+            // "0 @I1@ INDI ...": the tag is the first word of rest.
+            let (t, v) = match rest.split_once(' ') {
+                Some((t, v)) => (t, v.trim()),
+                None => (rest, ""),
+            };
+            (second.to_string(), t.to_string(), v.to_string())
+        } else if second.starts_with('@') {
+            // Malformed xref (unclosed): still record it as xref so E004 catches it.
+            let (t, v) = match rest.split_once(' ') {
+                Some((t, v)) => (t, v.trim()),
+                None => (rest, ""),
+            };
+            (second.to_string(), t.to_string(), v.to_string())
+        } else {
+            (String::new(), second.to_string(), rest.trim().to_string())
         };
-        (second.to_string(), t.to_string(), v.to_string())
-    } else if second.starts_with('@') {
-        // Malformed xref (unclosed): still record it as xref so E004 catches it.
-        let (t, v) = match rest.split_once(' ') {
-            Some((t, v)) => (t, v.trim()),
-            None => (rest, ""),
-        };
-        (second.to_string(), t.to_string(), v.to_string())
-    } else {
-        (String::new(), second.to_string(), rest.trim().to_string())
-    };
     // The value is always trimmed out of a slice that runs to the end of the
     // line, so it ends where the line's trailing whitespace begins: that
     // pins its offset exactly, without re-walking the split.
-    let value_col = if value.is_empty() { 0 } else { raw.trim_end().len() - value.len() };
-    Line { no, level: lvl, xref, tag, value, raw: raw.to_string(), value_col, span_base: 0 }
+    let value_col = if value.is_empty() {
+        0
+    } else {
+        raw.trim_end().len() - value.len()
+    };
+    Line {
+        no,
+        level: lvl,
+        xref,
+        tag,
+        value,
+        raw: raw.to_string(),
+        value_col,
+        span_base: 0,
+    }
 }
 
 pub(crate) fn is_pointer(s: &str) -> bool {
     let t = s.trim();
-    t.len() >= 3 && t.starts_with('@') && t.ends_with('@') && !t[1..t.len() - 1].contains(char::is_whitespace)
+    t.len() >= 3
+        && t.starts_with('@')
+        && t.ends_with('@')
+        && !t[1..t.len() - 1].contains(char::is_whitespace)
 }
 
 pub(crate) fn inner_ptr(s: &str) -> &str {
@@ -189,7 +209,11 @@ pub(crate) fn year_of(s: &str) -> Option<i64> {
 }
 
 pub(crate) fn norm_name(s: &str) -> String {
-    s.to_lowercase().replace('/', " ").split_whitespace().collect::<Vec<_>>().join(" ")
+    s.to_lowercase()
+        .replace('/', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub(crate) fn truncate(s: &str, n: usize) -> String {

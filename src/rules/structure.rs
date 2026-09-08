@@ -35,7 +35,7 @@ pub(crate) fn check_position(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line
                     Category::Correctness,
                     Severity::Error,
                     l.no,
-                    "HEAD must be the first line".into()
+                    "HEAD must be the first line".into(),
                 ));
             }
         } else if st.after_trlr {
@@ -44,7 +44,7 @@ pub(crate) fn check_position(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line
                 Category::Correctness,
                 Severity::Error,
                 l.no,
-                format!("content after TRLR: {}", truncate(&l.raw, 50))
+                format!("content after TRLR: {}", truncate(&l.raw, 50)),
             ));
         }
     }
@@ -60,7 +60,7 @@ pub(crate) fn check_level_jump(diags: &mut Vec<Diag>, st: &mut Structure, l: &Li
                 Category::Correctness,
                 Severity::Error,
                 l.no,
-                format!("level jump {} -> {} (max +1)", p, lvl)
+                format!("level jump {} -> {} (max +1)", p, lvl),
             ));
         }
     }
@@ -81,7 +81,7 @@ pub(crate) fn check_xref_syntax(diags: &mut Vec<Diag>, l: &Line) {
             l.no,
             col,
             len,
-            format!("malformed xref: {}", l.xref)
+            format!("malformed xref: {}", l.xref),
         ));
     }
 }
@@ -110,9 +110,18 @@ pub(crate) fn check_continuation(
             let msg = if parent.is_none() {
                 format!("{} has no parent line to continue", l.tag)
             } else {
-                format!("{} cannot continue a {} line (CONT/CONC do not nest)", l.tag, parent_tag)
+                format!(
+                    "{} cannot continue a {} line (CONT/CONC do not nest)",
+                    l.tag, parent_tag
+                )
             };
-            diags.push(Diag::new("E005", Category::Correctness, Severity::Error, l.no, msg));
+            diags.push(Diag::new(
+                "E005",
+                Category::Correctness,
+                Severity::Error,
+                l.no,
+                msg,
+            ));
         }
     }
     // E007: CONC was removed in 7.0 (spec 1.3, reserved tag): reflow to CONT.
@@ -122,7 +131,7 @@ pub(crate) fn check_continuation(
             Category::Correctness,
             Severity::Error,
             l.no,
-            "CONC is reserved in 7.0 (spec 1.3): split the value into CONT lines".into()
+            "CONC is reserved in 7.0 (spec 1.3): split the value into CONT lines".into(),
         ));
     }
 }
@@ -149,7 +158,7 @@ pub(crate) fn check_head_char(diags: &mut Vec<Diag>, st: &Structure, l: &Line, v
                 Category::Upgrade,
                 Severity::Info,
                 l.no,
-                "CHAR removed in 7.0 (UTF-8 is assumed)".into()
+                "CHAR removed in 7.0 (UTF-8 is assumed)".into(),
             ));
         } else {
             const CHAR551: &[&str] = &["ANSEL", "ASCII", "UNICODE", "UTF-8"];
@@ -162,7 +171,7 @@ pub(crate) fn check_head_char(diags: &mut Vec<Diag>, st: &Structure, l: &Line, v
                     format!(
                         "invalid HEAD.CHAR {:?} (expected ANSEL/ASCII/UNICODE/UTF-8)",
                         l.value.trim()
-                    )
+                    ),
                 ));
             }
         }
@@ -178,7 +187,7 @@ pub(crate) fn check_head_gedc(diags: &mut Vec<Diag>, st: &mut Structure, l: &Lin
                 Category::Correctness,
                 Severity::Error,
                 l.no,
-                format!("duplicate HEAD.GEDC (first at line {})", first)
+                format!("duplicate HEAD.GEDC (first at line {})", first),
             ));
         } else {
             st.saw_gedc_line = Some(l.no);
@@ -202,7 +211,7 @@ pub(crate) fn check_head_vers(
                     Category::Correctness,
                     Severity::Error,
                     l.no,
-                    format!("duplicate {}.VERS (first at line {})", ptag, first)
+                    format!("duplicate {}.VERS (first at line {})", ptag, first),
                 ));
             } else {
                 st.head_vers_seen.insert(pline, l.no);
@@ -219,17 +228,41 @@ pub(crate) fn check_head_vers(
 pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Structure) {
     // E002: HEAD/TRLR are required.
     if !st.saw_head {
-        diags.push(Diag::new("E002", Category::Correctness, Severity::Error, 0, "missing HEAD record".into()));
+        diags.push(Diag::new(
+            "E002",
+            Category::Correctness,
+            Severity::Error,
+            0,
+            "missing HEAD record".into(),
+        ));
     }
     if !st.saw_trlr {
-        diags.push(Diag::new("E002", Category::Correctness, Severity::Error, 0, "missing TRLR record".into()));
+        diags.push(Diag::new(
+            "E002",
+            Category::Correctness,
+            Severity::Error,
+            0,
+            "missing TRLR record".into(),
+        ));
     }
 
     // E009: HEAD.GEDC and GEDC.VERS are {1:1} in both 5.5.1 and 7.0.
     if st.saw_head && st.saw_gedc_line.is_none() {
-        diags.push(Diag::new("E009", Category::Correctness, Severity::Error, 0, "HEAD without required GEDC".into()));
+        diags.push(Diag::new(
+            "E009",
+            Category::Correctness,
+            Severity::Error,
+            0,
+            "HEAD without required GEDC".into(),
+        ));
     }
     if st.saw_gedc_line.is_some() && st.saw_vers_line.is_none() {
-        diags.push(Diag::new("E009", Category::Correctness, Severity::Error, 0, "GEDC without required VERS".into()));
+        diags.push(Diag::new(
+            "E009",
+            Category::Correctness,
+            Severity::Error,
+            0,
+            "GEDC without required VERS".into(),
+        ));
     }
 }

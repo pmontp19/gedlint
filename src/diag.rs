@@ -80,13 +80,45 @@ pub struct Diag {
 impl Diag {
     /// Spanless diagnostic: `ruleset` defaults to `core`, `col`/`len` to 0.
     /// The signature is deliberately frozen so rules adopt spans one at a time.
-    pub(crate) fn new(code: &'static str, category: Category, severity: Severity, line: usize, msg: String) -> Diag {
-        Diag { code, category, ruleset: CORE, severity, line, col: 0, len: 0, msg }
+    pub(crate) fn new(
+        code: &'static str,
+        category: Category,
+        severity: Severity,
+        line: usize,
+        msg: String,
+    ) -> Diag {
+        Diag {
+            code,
+            category,
+            ruleset: CORE,
+            severity,
+            line,
+            col: 0,
+            len: 0,
+            msg,
+        }
     }
 
     /// Same as `new` plus the byte span of the offending substring.
-    pub(crate) fn with_span(code: &'static str, category: Category, severity: Severity, line: usize, col: u32, len: u32, msg: String) -> Diag {
-        Diag { code, category, ruleset: CORE, severity, line, col, len, msg }
+    pub(crate) fn with_span(
+        code: &'static str,
+        category: Category,
+        severity: Severity,
+        line: usize,
+        col: u32,
+        len: u32,
+        msg: String,
+    ) -> Diag {
+        Diag {
+            code,
+            category,
+            ruleset: CORE,
+            severity,
+            line,
+            col,
+            len,
+            msg,
+        }
     }
 
     /// Move a diagnostic out of `core` into an opt-in ruleset.
@@ -125,13 +157,22 @@ pub struct DiagGroup {
 
 impl Report {
     pub fn errors(&self) -> usize {
-        self.diags.iter().filter(|d| d.severity == Severity::Error).count()
+        self.diags
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .count()
     }
     pub fn warnings(&self) -> usize {
-        self.diags.iter().filter(|d| d.severity == Severity::Warning).count()
+        self.diags
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .count()
     }
     pub fn infos(&self) -> usize {
-        self.diags.iter().filter(|d| d.severity == Severity::Info).count()
+        self.diags
+            .iter()
+            .filter(|d| d.severity == Severity::Info)
+            .count()
     }
     pub fn exit_code(&self) -> i32 {
         if self.errors() > 0 {
