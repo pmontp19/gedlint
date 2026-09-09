@@ -1,6 +1,6 @@
 [package]
 name = "gedlint"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 description = "GEDCOM 5.5.1 + 7.0 linter: categories, severities, --fix, streaming, WASM-ready"
 license = "MIT"

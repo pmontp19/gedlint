@@ -1,6 +1,8 @@
 # gedlint
 
-GEDCOM linter in Rust: fast, single binary, streaming for large files, dual 5.5.1 (legacy, MyHeritage exports) + 7.0 (formal spec) support. Compilable to WASM to reuse the engine in a web viewer.
+GEDCOM linter in Rust: fast, single binary, streaming for large files, dual 5.5.1 (legacy, MyHeritage exports) + 7.0 (formal spec) support.
+
+Three ways to run the same engine: the CLI, a GitHub Action, and a **[web viewer](https://pmontp19.github.io/gedlint)** that compiles the engine to WebAssembly and runs entirely in the browser. Rule explanations come from one registry, so `--explain` and the web page cannot disagree.
 
 Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 
@@ -12,7 +14,11 @@ Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 
 ## Status
 
-Working MVP: `cargo test` green across the unit tests and eight integration suites (rule fixtures, CLI, `--fix` end-to-end, config, engine fixes, baseline, golden corpora, registry), `cargo clippy --all-targets` clean, coverage kept above the 84% regions floor (`cargo llvm-cov`), release validated at 4.5MB in 0.13s, `cargo check --target wasm32-unknown-unknown` OK. Prebuilt binaries (linux/macOS/Windows) attached to releases. Validated against a real 520-person MyHeritage tree (found 175 strict-grammar errors the previous validator missed: HTML continuations without CONT, plus encoding quirks). Rule set audited against the 5.5.1 and 7.0 specs (E007/E008/E009/W306 from the registries); two rounds of hand-rolled mutation testing (15/19), all survivors covered with regression tests. External dataset audit (issue #9): official spec corpora vendored and pinned in `tests/golden.rs` — the FamilySearch 7.0 reference files and the GEDCOM Committee TGC551 pair lint without false positives.
+`cargo test` green across the unit tests and eight integration suites (rule fixtures, CLI, `--fix` end-to-end, config, engine fixes, baseline, golden corpora, registry), `cargo clippy --all-targets -- -D warnings` clean, `cargo fmt --check` clean, coverage above the regions floor (`cargo llvm-cov`), `cargo check --target wasm32-unknown-unknown` OK. The toolchain is pinned in `rust-toolchain.toml` so those gates give the same answer locally and in CI.
+
+Rule set audited against the 5.5.1 and 7.0 registries, with hand-rolled mutation testing and a regression test for every survivor. Official spec corpora vendored and pinned in `tests/golden.rs`: the FamilySearch 7.0 reference files and the GEDCOM Committee TGC551 pair lint without false positives. A registry test fails the build if a rule code exists that the table does not document, or vice versa.
+
+Validated against a real 544-individual MyHeritage tree kept outside this repo. Under the default configuration it reports 1014 diagnostics, of which 516 are `U502` vendor tags and 140 are `E005`: `CONT` lines nested under a `CONC`, which neither the previous validator nor gedlint before [#8](https://github.com/pmontp19/gedlint/issues/8) could see, because each level step is legal on its own and only the structural check catches them. Enabling both opt-in rulesets adds 146 `W601`, 49 `W602`, 15 `W701` and 14 `W702`. `--fix` under the default configuration touches none of those: it only trims trailing whitespace, because opt-in repairs are gated on configuration ([#44](https://github.com/pmontp19/gedlint/issues/44)).
 
 ## Usage
 
