@@ -107,12 +107,12 @@ jobs:
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
-      - name: Coverage (floor 84% regions)
+      - name: Coverage (floor 95% regions)
         run: |
           cargo llvm-cov --summary-only --all-targets 2>/dev/null | tee /tmp/cov.txt
           COV=$(awk '/^TOTAL/ {print $4}' /tmp/cov.txt)
           echo "regions coverage: $COV"
-          awk -v cov="$COV" 'BEGIN { c = cov + 0; if (c < 84) { printf "FAIL: %s below 84%%\n", cov; exit 1 } }'
+          awk -v cov="$COV" 'BEGIN { c = cov + 0; if (c < 95) { printf "FAIL: %s below 95%%\n", cov; exit 1 } }'
       - name: WASM check
         run: cargo check --target wasm32-unknown-unknown
       - name: Report renderer (annotation escaping, grouping, outputs)
