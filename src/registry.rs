@@ -115,14 +115,18 @@ where this normally comes from.",
         category: Category::Correctness,
         default_severity: Severity::Error,
         default_enabled: true,
-        fixable: None,
+        fixable: Some(Applicability::Safe),
         title: "Anchor every CONT and CONC to the line it continues",
         why: "CONT and CONC continue the value of the line directly above them, one level up, and they never \
 nest inside each other. One that hangs from nothing, or from another CONT or CONC, continues nothing: \
 strict importers drop the text and lenient ones paste it into a neighbouring field. Long notes and \
-record transcriptions are what usually come out mangled.",
+record transcriptions are what usually come out mangled. A CONT nested under a CONC has only one \
+possible meaning: it continues the same value the CONC continues, and only its level number is wrong.",
         remedy: "Put the CONT or CONC line exactly one level below the value line it belongs to, and never \
-chain one under another: \"1 NOTE line one\", \"2 CONT line two\", \"2 CONT line three\".",
+chain one under another: \"1 NOTE line one\", \"2 CONT line two\", \"2 CONT line three\". `gedlint --fix` \
+rewrites the level of a nested continuation for you, and only the number in column one changes, so you \
+can judge the result against the text. A CONT or CONC with no line above it at all is left for you to \
+place, because only you know which value it was meant to continue.",
     },
     RuleMeta {
         code: "E007",

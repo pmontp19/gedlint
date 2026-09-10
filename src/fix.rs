@@ -107,6 +107,8 @@ pub fn normalize_endings(data: &[u8]) -> (Cow<'_, [u8]>, bool) {
 ///
 /// - `E001`: a line without a level (MyHeritage NOTE/TEXT continuations
 ///   without `CONT`) gets a `{previous_level + 1} CONT ` prefix.
+/// - `E005`: a `CONT`/`CONC` nested under another `CONT`/`CONC` is
+///   re-leveled to sit beside the run, one under the value line.
 /// - `style`: trailing whitespace is trimmed. The linter has no code for
 ///   this, so the pseudo-code matches the `--fix` report line.
 /// - `E101`: a run of `CONC` lines whose payload starts mid-UTF-8-sequence
@@ -114,11 +116,13 @@ pub fn normalize_endings(data: &[u8]) -> (Cow<'_, [u8]>, bool) {
 ///
 /// Returned in **repair-priority order**, not line order: `apply_edits`
 /// keeps the first of two overlapping edits, and the pass that runs first
-/// decides what a later pass on the same lines reads (`E001` before `E101`
-/// because the `CONT` prefix is what the rejoin reads; `style` before `E101`
-/// because a pad the rejoin absorbs must not land between the two
-/// halves of the cut character). A caller that re-runs picks up the
-/// dropped ones.
+/// decides what a later pass on the same lines reads (`E001` before
+/// `E005` because the `CONT` prefix it writes can itself become the
+/// parent of a deeper continuation; `E005` before `E101` because the
+/// rejoin absorbs the `CONC` line a nested continuation hangs from;
+/// `style` before `E101` because a pad the rejoin absorbs must not land
+/// between the two halves of the cut character). A caller that re-runs
+/// picks up the dropped ones.
 pub fn compute_edits(data: &[u8]) -> Vec<Edit> {
     compute_edits_with(data, &Config::default())
 }
@@ -136,6 +140,9 @@ pub fn compute_edits_with(data: &[u8], cfg: &Config) -> Vec<Edit> {
     let mut out = Vec::new();
     if cfg.enables("E001") {
         orphan_edits(&lines, &mut out);
+    }
+    if cfg.enables("E005") {
+        nested_cont_edits(&lines, &mut out);
     }
     whitespace_edits(&lines, &mut out);
     if cfg.enables("E101") {
@@ -255,11 +262,24 @@ pub fn fix_bytes_with(data: &[u8], sel: &FixSelection, cfg: &Config) -> (Vec<u8>
 /// `compute_edits` returns them in. Exactly **one pass per code**, in this
 /// order, and that is the whole control flow.
 ///
-/// `style` runs before `E101` (#36): a MyHeritage pad on the anchor line
-/// must be gone before the rejoin absorbs the line, or it lands between
-/// the two halves of the cut UTF-8 sequence and the repaired file is still
-/// invalid, silently failing the repair it just reported. `E001` still
-/// runs before `E101` because the `CONT` prefix is what the rejoin reads.
+/// `E005` sits between `E001` and `style`/`E101`, and both neighbours are
+/// load-bearing:
+///
+/// * After `E001`: the `CONT` prefix E001 writes can itself become the
+///   parent of a deeper continuation that was legal before (its parent
+///   used to be the levelless line, which never enters the stack), so the
+///   nesting E001 exposes must be repaired by a later pass. Each pass
+///   recomputes over what the previous left, so one `--fix` run settles
+///   the compounded case.
+/// * Before `E101` (#36 is what happens when this kind of ordering is
+///   guessed wrong): the rejoin absorbs the `CONC` line a nested
+///   continuation hangs from. Run first, it would leave that continuation
+///   at a level no line supports any more, and `--fix` would finish
+///   having minted a fresh E001 level jump no repair can settle. `E005`
+///   flattens the continuation first, then the rejoin runs over siblings.
+/// * `style` only trims the tail and `E005` only rewrites the leading
+///   digits, so the two commute on a line needing both; it groups with
+///   `E001`, the other column-one repair.
 ///
 /// One pass each because two edits on one line (an orphan that also has
 /// trailing whitespace) overlap by construction, so a single pass cannot
@@ -270,7 +290,7 @@ pub fn fix_bytes_with(data: &[u8], sel: &FixSelection, cfg: &Config) -> (Vec<u8>
 /// blank line into a levelless one, and a second `E001` pass would prefix
 /// it with `CONT`, silently inventing a `CONT` record. The next `--fix`
 /// picks up whatever this one exposed.
-const REPAIR_ORDER: [&str; 6] = ["E001", "style", "E101", "W601", "W702", "W703"];
+const REPAIR_ORDER: [&str; 7] = ["E001", "E005", "style", "E101", "W601", "W702", "W703"];
 
 /// One pass for one code, over whatever the previous pass left behind.
 fn run_stage(
@@ -318,6 +338,7 @@ fn weight(edits: &[Edit]) -> usize {
 fn report(code: &str, n: usize) -> String {
     match code {
         "E001" => format!("E001: {} orphan lines prefixed with CONT", n),
+        "E005" => format!("E005: re-leveled {} nested CONT/CONC lines", n),
         "E101" => format!("E101: rejoined {} CONC lines with split UTF-8", n),
         "W601" => format!("W601: removed comma from {} surnames", n),
         "W702" => format!("W702: converted {} surnames to title case", n),
@@ -365,6 +386,75 @@ fn orphan_edits(lines: &[&[u8]], out: &mut Vec<Edit>) {
                 });
             }
         }
+    }
+}
+
+/// E005, nesting branch only: a `CONT`/`CONC` sitting one or more levels
+/// below another `CONT`/`CONC` instead of beside it. `CONT`/`CONC` are
+/// pseudo-substructures of the value-bearing line and never nest, so a
+/// `CONT` under a `CONC` has exactly one reading: it continues the value
+/// the `CONC` continues, and only its level number is wrong. The repair
+/// rewrites column one to `{level of the nearest enclosing non-CONT/CONC
+/// line} + 1`, which is what makes it safe and invertible: no byte of the
+/// content moves.
+///
+/// The other branch of E005 (a `CONT`/`CONC` with no parent at all) is
+/// deliberately not repaired: no line says what it was meant to continue,
+/// and inventing a parent would guess at the user's data.
+///
+/// A staircase of increasingly nested continuations collapses in one pass
+/// because every line is re-leveled independently, against the original
+/// context.
+fn nested_cont_edits(lines: &[&[u8]], out: &mut Vec<Edit>) {
+    for (i, l) in lines.iter().enumerate() {
+        let body = strip_cr(l);
+        let Some((lvl, digits, tag)) = level_tag_and_digits(body) else {
+            continue;
+        };
+        if tag != b"CONT" && tag != b"CONC" {
+            continue;
+        }
+        let Some((pj, plvl, ptag)) = nearest_ancestor(lines, i, lvl) else {
+            continue; // no parent at all: reported, never repaired
+        };
+        if ptag != b"CONT" && ptag != b"CONC" {
+            continue; // an ordinary parent: not this branch of E005
+        }
+        // Walk the parent chain to the nearest enclosing line that is not
+        // itself a CONT/CONC: that is the value line the whole run
+        // continues, and the repair puts the continuation directly under
+        // it. Each chain step is at least one level shallower than the
+        // line it parents, so the target is always a legal level. A chain
+        // that tops out inside the unrepaired orphan branch has no anchor;
+        // the line stays reported.
+        let mut j = pj;
+        let mut cur = plvl;
+        let target = loop {
+            match nearest_ancestor(lines, j, cur) {
+                Some((j2, l2, t2)) if t2 == b"CONT" || t2 == b"CONC" => {
+                    j = j2;
+                    cur = l2;
+                }
+                Some((_, l2, _)) => break Some(l2 + 1),
+                None => break None,
+            }
+        };
+        let Some(target) = target else { continue };
+        // Only the digit run is replaced; the separator byte and everything
+        // after it are copied verbatim, so a pathological leading-zero
+        // level ("02 CONT ...") cannot grow an extra space.
+        let mut nl = target.to_string().into_bytes();
+        nl.extend_from_slice(&body[digits..]);
+        if l.last() == Some(&b'\r') {
+            nl.push(b'\r');
+        }
+        out.push(Edit {
+            code: "E005",
+            lines: (i + 1, i + 1),
+            replacement: vec![nl],
+            applicability: Applicability::Safe,
+            note: format!("rewrite the level to {} (CONT/CONC do not nest)", target),
+        });
     }
 }
 
@@ -468,6 +558,39 @@ fn leading_level(line: &[u8]) -> Option<usize> {
     } else {
         None
     }
+}
+
+/// `(level, digit count, tag)` of a raw line, byte-based so the walk also
+/// works on lines that are not valid UTF-8. The level grammar is
+/// [`leading_level`]'s: digits, then a space or end of line. A level-0
+/// record line reports its xref token as the tag, which is harmless here:
+/// the only comparison is against CONT/CONC, and an xref token never
+/// spells either.
+fn level_tag_and_digits(line: &[u8]) -> Option<(usize, usize, &[u8])> {
+    let lvl = leading_level(line)?;
+    let digits = line.iter().take_while(|b| b.is_ascii_digit()).count();
+    // A bare number is a level with an empty tag, the same way
+    // `parse_line` reads it, so it anchors the walk like any other line.
+    let rest = line.get(digits + 1..).unwrap_or(&[]);
+    let end = rest.iter().position(|&b| b == b' ').unwrap_or(rest.len());
+    Some((lvl, digits, &rest[..end]))
+}
+
+/// The parent the linter resolves for `lines[i]`: the nearest preceding
+/// line with a level strictly below `below`. That is exactly
+/// `stack.last()` after the truncation in `lint_lines`, including on
+/// input that trips E001, where the stack degrades to the nearest actual
+/// ancestor. Blank and levelless lines never enter the linter's stack, so
+/// they are skipped here too.
+fn nearest_ancestor<'a>(
+    lines: &[&'a [u8]],
+    i: usize,
+    below: usize,
+) -> Option<(usize, usize, &'a [u8])> {
+    (0..i).rev().find_map(|j| {
+        let (lvl, _, tag) = level_tag_and_digits(strip_cr(lines[j]))?;
+        (lvl < below).then_some((j, lvl, tag))
+    })
 }
 
 fn strip_cr(line: &[u8]) -> &[u8] {

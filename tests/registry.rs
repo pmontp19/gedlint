@@ -405,7 +405,11 @@ fn fixable_matches_the_repairs_fix_really_carries() {
     src.push(0xC3);
     src.extend_from_slice(b"\n2 CONC ");
     src.push(0xA9);
-    src.extend_from_slice(b"\norphan line\n0 @I1@ INDI\n1 NAME Joan /CRUZ, LOPEZ/\n0 @I2@ INDI\n1 NAME A, /DE LA O/\n1 BIRT\n2 PLAC Reus,, Spain\n0 TRLR\n");
+    src.extend_from_slice(
+        b"\norphan line\n0 @I1@ INDI\n1 NAME Joan /CRUZ, LOPEZ/\n0 @I2@ INDI\n1 NAME A, /DE LA O/\n1 BIRT\n2 PLAC Reus,, Spain\n",
+    );
+    // E005: a CONT nested under a CONT (#51).
+    src.extend_from_slice(b"0 @I3@ INDI\n1 NOTE some text\n2 CONT first\n3 CONT second\n0 TRLR\n");
 
     // Repairs are config-gated (#44), so this table check runs with every
     // ruleset enabled: the default config would (correctly) propose none of

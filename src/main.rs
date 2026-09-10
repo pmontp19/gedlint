@@ -20,7 +20,7 @@ fn help() -> String {
         USAGE: gedlint [options] <file.ged>\n\
         \n\
         OPTIONS:\n  \
-        --fix                 repair (E001 orphan lines, E101 split CONC, trailing whitespace) with .bak copy\n  \
+        --fix                 repair (E001 orphan lines, E005 nested CONT/CONC, E101 split CONC, trailing whitespace) with .bak copy\n  \
         --only CODE           with --fix: restrict to this repair code (repeatable)\n  \
         --unsafe              with --fix: also apply MaybeIncorrect repairs (never the default)\n  \
         --config PATH         config file to use instead of the discovered gedlint.toml\n  \
