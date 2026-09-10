@@ -171,6 +171,9 @@ runs:
 
         # Config and baseline are optional; an empty input must not become an
         # empty argv entry, which gedlint would read as a filename.
+        # Expanded as ${EXTRA[@]+"${EXTRA[@]}"} below: under `set -u`, bash 3.2
+        # (still the system bash on macOS runners) treats "${EXTRA[@]}" on an
+        # empty array as an unbound variable.
         EXTRA=()
         if [ "$GEDLINT_CONFIG" = "none" ]; then
           EXTRA+=(--no-config)
@@ -189,7 +192,7 @@ runs:
           SLOT="$REPORTS/$(printf '%04d' "$INDEX")"
           INDEX=$((INDEX + 1))
           printf '%s' "$FILE" > "$SLOT.path"
-          if "$BIN" --format json "${EXTRA[@]}" "$FILE" > "$SLOT.json" 2> "$SLOT.err"; then
+          if "$BIN" --format json ${EXTRA[@]+"${EXTRA[@]}"} "$FILE" > "$SLOT.json" 2> "$SLOT.err"; then
             CODE=0
           else
             CODE=$?
