@@ -24,6 +24,17 @@ jobs:
           printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n' > smoke/clean.ged
           printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 SEX Q\n0 TRLR\n' > smoke/warn.ged
           printf '0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F9@\n0 TRLR\n' > smoke/nested/broken.ged
+          # smoke/warn.ged trips W305 (SEX Q). One fixture proves config can
+          # silence it and a baseline can absorb it.
+          printf '[lints.rules]\n"W305" = "off"\n' > smoke/off.toml
+          cat > smoke/warn.baseline.json <<'JSON'
+          {
+            "gedlint-baseline": 1,
+            "entries": [
+              {"code": "W305", "fingerprint": "@i#@: invalid sex (q), expected m/f/u", "count": 1}
+            ]
+          }
+          JSON
       - name: Clean file passes
         uses: ./
         with:
@@ -36,6 +47,27 @@ jobs:
           path: smoke/warn.ged
           fail-on: error
           version: v1
+      - name: Config silences a rule
+        uses: ./
+        with:
+          path: smoke/warn.ged
+          config: smoke/off.toml
+          fail-on: warning
+      - name: Baseline absorbs a known warning
+        uses: ./
+        with:
+          path: smoke/warn.ged
+          baseline: smoke/warn.baseline.json
+          fail-on: warning
+      - name: Missing config is an error, not a silent pass
+        id: badcfg
+        continue-on-error: true
+        uses: ./
+        with:
+          path: smoke/clean.ged
+          config: smoke/does-not-exist.toml
+      - name: Missing config must have failed
+        run: '[ "${{ steps.badcfg.outcome }}" = "failure" ] || { echo "a missing config was ignored"; exit 1; }'
       - name: Warning fails with fail-on warning
         id: warn
         continue-on-error: true

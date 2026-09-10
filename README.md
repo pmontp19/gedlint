@@ -67,6 +67,8 @@ Findings land as inline annotations on the diff, plus a job summary grouped by r
     annotations: true  # inline file annotations
     max-annotations: 50   # worst first; '0' lifts the cap
     summary: true      # job summary grouped by rule code
+    config: gedlint.toml     # explicit config; omit for discovery, 'none' to disable
+    baseline: gedlint.baseline.json   # only findings absent from it affect the outcome
     require-checksum: true   # set false only to pin a release before v0.6.0, which ship no .sha256
     version: v1        # moving major tag; pin an exact tag (v0.5.0) to freeze the binary
 ```
