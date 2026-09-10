@@ -4,10 +4,11 @@
 //! silently when the engine changes.
 
 use gedlint::wasm::{
-    gedlint_alloc, gedlint_apply, gedlint_dealloc, gedlint_edits, gedlint_lint, gedlint_registry,
+    gedlint_alloc, gedlint_apply, gedlint_baseline, gedlint_baseline_match, gedlint_dealloc,
+    gedlint_edits, gedlint_lint, gedlint_registry,
 };
 use gedlint::RULES;
-use gedlint::{compute_edits, normalize_endings};
+use gedlint::{compute_edits, normalize_endings, parse_baseline};
 
 /// Decode the 16-byte return header, free it, copy the payload out, free
 /// that too: exactly what worker.js does.
@@ -70,6 +71,39 @@ fn apply_bufs(data: &[u8], mask: &[u8], cfg: &[u8]) -> *mut u8 {
 fn check(data: &[u8], cfg: &[u8]) -> String {
     let ret = with_bufs(data, cfg, gedlint_lint);
     String::from_utf8(take(ret)).unwrap()
+}
+
+/// Same as `with_bufs` for the baseline entry points: `gedlint_baseline`
+/// shares the (data, config) shape, `gedlint_baseline_match` carries the
+/// baseline text between the two.
+fn baseline_bufs(data: &[u8], baseline: &[u8], cfg: &[u8]) -> String {
+    let da = data.len().max(1);
+    let ba = baseline.len().max(1);
+    let ca = cfg.len().max(1);
+    let dp = gedlint_alloc(da);
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), dp, data.len()) };
+    let bp = gedlint_alloc(ba);
+    unsafe { std::ptr::copy_nonoverlapping(baseline.as_ptr(), bp, baseline.len()) };
+    let cp = gedlint_alloc(ca);
+    unsafe { std::ptr::copy_nonoverlapping(cfg.as_ptr(), cp, cfg.len()) };
+    let ret = unsafe { gedlint_baseline_match(dp, data.len(), bp, baseline.len(), cp, cfg.len()) };
+    unsafe {
+        gedlint_dealloc(dp, da);
+        gedlint_dealloc(bp, ba);
+        gedlint_dealloc(cp, ca);
+    }
+    String::from_utf8(take(ret)).unwrap()
+}
+
+/// Extract the `"known":[...]` flag array of a match payload without a
+/// JSON dependency: the ABI emits it as bare 0/1 bytes.
+fn known_flags(json: &str) -> Vec<u8> {
+    let from = json.find("\"known\":[").expect("known array") + 9;
+    let to = json[from..].find(']').expect("closed") + from;
+    json[from..to]
+        .split(',')
+        .map(|f| f.trim().parse::<u8>().expect("0 or 1"))
+        .collect()
 }
 
 fn edits(data: &[u8], cfg: &[u8]) -> String {
@@ -335,4 +369,103 @@ fn alloc_dealloc_round_trips_repeatedly() {
     // A zero-length allocation frees as a no-op.
     let p = gedlint_alloc(0);
     unsafe { gedlint_dealloc(p, 0) };
+}
+
+/// The baseline ratchet through the ABI the page drives (#52): save,
+/// load, line-insertion survival, surplus, resolved, re-save, and the
+/// error paths. The fixture carries a duplicate xref on purpose: its
+/// message embeds line numbers, which is exactly what the fingerprint
+/// keying exists to survive.
+#[test]
+fn baseline_round_trip_through_the_abi() {
+    // Three findings: a broken FAMC (E201), a duplicate xref (E003) and
+    // an invalid SEX (W305).
+    let tree = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Anna /B/\n1 SEX Q\n1 FAMC @F9@\n0 @I1@ INDI\n1 NAME Anna /B/\n0 TRLR\n";
+    let head = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n";
+
+    // Save: the download is the file `--write-baseline` writes.
+    let text = {
+        let ret = with_bufs(tree, b"", gedlint_baseline);
+        String::from_utf8(take(ret)).unwrap()
+    };
+    assert!(text.contains("\"gedlint-baseline\": 1"), "{}", text);
+    let parsed = parse_baseline(&text).unwrap();
+    assert_eq!(parsed.entries.len(), 3, "{}", text);
+    for code in ["E201", "E003", "W305"] {
+        assert!(
+            parsed.entries.iter().any(|e| e.code == code),
+            "{} missing: {}",
+            code,
+            text
+        );
+    }
+
+    // Load: the run it was saved from is fully seen, nothing new.
+    let m = baseline_bufs(tree, text.as_bytes(), b"");
+    assert!(!m.contains("\"error\""), "{}", m);
+    assert_eq!(known_flags(&m), vec![1, 1, 1], "{}", m);
+    assert!(m.contains("\"baselined\":3"), "{}", m);
+    assert!(m.contains("\"resolved\":[]"), "{}", m);
+    assert!(m.contains("\"resolved_total\":0"), "{}", m);
+
+    // Inserting lines at the top of the file shifts every line number,
+    // including the one inside the E003 message; matching must survive.
+    let mut shifted = head.to_vec();
+    for i in 1..=10 {
+        shifted.extend_from_slice(format!("0 NOTE filler {i}\n").as_bytes());
+    }
+    shifted.extend_from_slice(&tree[head.len()..]);
+    let m = baseline_bufs(&shifted, text.as_bytes(), b"");
+    assert_eq!(
+        known_flags(&m),
+        vec![1, 1, 1],
+        "a line insertion must not invalidate the baseline: {}",
+        m
+    );
+    assert!(m.contains("\"baselined\":3"), "{}", m);
+    assert!(m.contains("\"resolved\":[]"), "{}", m);
+
+    // A surplus finding of an already-recorded code is new: counts absorb,
+    // rules are never muted.
+    let mut bigger = tree.to_vec();
+    let cut = bigger.len() - b"0 TRLR\n".len();
+    bigger.splice(
+        cut..cut,
+        b"0 @I9@ INDI\n1 NAME Nou /P/\n1 FAMS @F7@\n".to_vec(),
+    );
+    let m = baseline_bufs(&bigger, text.as_bytes(), b"");
+    let flags = known_flags(&m);
+    assert_eq!(flags.len(), 4, "{}", m);
+    assert_eq!(flags.iter().filter(|&&f| f == 0).count(), 1, "{}", m);
+    assert!(m.contains("\"baselined\":3"), "{}", m);
+
+    // Fixing findings surfaces them as resolved; the total counts
+    // findings, not entries.
+    let fixed = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Anna /B/\n1 FAMC @F9@\n0 TRLR\n";
+    let m = baseline_bufs(fixed, text.as_bytes(), b"");
+    assert_eq!(known_flags(&m), vec![1], "{}", m);
+    assert!(m.contains("\"code\":\"E003\""), "{}", m);
+    assert!(m.contains("\"code\":\"W305\""), "{}", m);
+    assert!(m.contains("\"resolved_total\":2"), "{}", m);
+
+    // Re-save (the ratchet): the rewritten file covers only what is still
+    // there, the engine's own reader accepts it, and the fixed run
+    // matches it with nothing resolved.
+    let rewrite = {
+        let ret = with_bufs(fixed, b"", gedlint_baseline);
+        String::from_utf8(take(ret)).unwrap()
+    };
+    let pruned = parse_baseline(&rewrite).unwrap();
+    assert_eq!(pruned.entries.len(), 1, "{}", rewrite);
+    assert_eq!(pruned.entries[0].code, "E201");
+    let m = baseline_bufs(fixed, rewrite.as_bytes(), b"");
+    assert_eq!(known_flags(&m), vec![1], "{}", m);
+    assert!(m.contains("\"resolved\":[]"), "{}", m);
+
+    // A corrupt baseline and a broken config are errors, never a silent
+    // default-configuration match.
+    let bad = baseline_bufs(tree, b"this is not json", b"");
+    assert!(bad.contains("\"error\""), "{}", bad);
+    let bad = baseline_bufs(tree, text.as_bytes(), b"[lints]\npresets = [\"nope\"]\n");
+    assert!(bad.contains("\"error\""), "{}", bad);
 }

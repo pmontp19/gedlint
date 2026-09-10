@@ -10,9 +10,13 @@
 //   {type:'registry', id}
 //   {type:'edits',  id, data: ArrayBuffer, config: string}
 //   {type:'apply',  id, data: ArrayBuffer, mask: ArrayBuffer, config: string}
+//   {type:'baseline', id, data: ArrayBuffer, config: string}
+//   {type:'baseline-match', id, data: ArrayBuffer, baseline: string, config: string}
 // 'edits' and 'apply' must receive the same config string the 'check' used:
 // apply matches its mask against the edit list by index, so a different
-// config would select the wrong repairs.
+// config would select the wrong repairs. 'baseline-match' pairs the same
+// way: its known flags index the diagnostics list of the check run, so it
+// needs the same bytes and the same config.
 // (worker -> page)
 //   {type:'ready'} | {type:'phase', label} | {id, ok, ...} | {id, ok:false, error}
 //
@@ -129,6 +133,34 @@ self.onmessage = (ev) => {
         const json = new TextDecoder().decode(payload.subarray(8, 8 + jsonLen));
         const file = payload.slice(8 + jsonLen); // own buffer, transferable
         reply(m, { json, file, transfer: [file.buffer] });
+        break;
+      }
+      case 'baseline': {
+        phase('writing the baseline');
+        const data = new Uint8Array(m.data);
+        const cfg = new TextEncoder().encode(m.config || '');
+        const dp = writeIn(data);
+        const cp = writeIn(cfg);
+        const ret = ex.gedlint_baseline(dp, data.length, cp, cfg.length);
+        if (dp) ex.gedlint_dealloc(dp, data.length);
+        if (cp) ex.gedlint_dealloc(cp, cfg.length);
+        // The payload is the baseline file text itself, ready to download.
+        reply(m, { json: new TextDecoder().decode(takeReturn(ret)) });
+        break;
+      }
+      case 'baseline-match': {
+        phase('matching the baseline');
+        const data = new Uint8Array(m.data);
+        const baseline = new TextEncoder().encode(m.baseline || '');
+        const cfg = new TextEncoder().encode(m.config || '');
+        const dp = writeIn(data);
+        const bp = writeIn(baseline);
+        const cp = writeIn(cfg);
+        const ret = ex.gedlint_baseline_match(dp, data.length, bp, baseline.length, cp, cfg.length);
+        if (dp) ex.gedlint_dealloc(dp, data.length);
+        if (bp) ex.gedlint_dealloc(bp, baseline.length);
+        if (cp) ex.gedlint_dealloc(cp, cfg.length);
+        reply(m, { json: new TextDecoder().decode(takeReturn(ret)) });
         break;
       }
       default:

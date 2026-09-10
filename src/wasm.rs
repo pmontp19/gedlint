@@ -37,7 +37,16 @@
 //!   rather than serialized edits: round-tripping `Edit.replacement`
 //!   through JSON could not carry non-UTF-8 bytes without a base64 layer,
 //!   and a mask cannot desynchronize.
+//! * The baseline pair follows the same shape ([`gedlint_baseline`] writes
+//!   the ratchet file, [`gedlint_baseline_match`] classifies a run against
+//!   a loaded one). Matching, counting and pruning all happen here in the
+//!   engine, so the browser cannot disagree with the CLI about what
+//!   "already seen" means. `gedlint_baseline_match` returns one `known`
+//!   flag per diagnostic of the run **in report order**: the flags index
+//!   the diagnostics list of a `gedlint_lint` call on the same bytes and
+//!   configuration, the same pairing contract the repair mask follows.
 
+use crate::baseline::{apply_baseline, baseline_from_report, baseline_to_json, parse_baseline};
 use crate::config::{parse_config, Config};
 use crate::diag::escape_json;
 use crate::fix::{apply_edits, compute_edits_with, normalize_endings, Edit};
@@ -177,6 +186,51 @@ pub unsafe extern "C" fn gedlint_apply(
     ret(apply_entry(data, mask, cfg))
 }
 
+/// The baseline file covering every finding of this run under the given
+/// configuration: exactly the bytes `gedlint --write-baseline` writes, for
+/// the page's "save a baseline" download. The payload is the baseline file
+/// itself, not wrapped JSON.
+///
+/// # Safety
+/// `data..data+data_len` and `cfg..cfg+cfg_len` must be valid for reads for
+/// the duration of the call (the JS host blocks on it synchronously).
+#[no_mangle]
+pub unsafe extern "C" fn gedlint_baseline(
+    data: *const u8,
+    data_len: usize,
+    cfg: *const u8,
+    cfg_len: usize,
+) -> *mut u8 {
+    let data = unsafe { input(data, data_len) };
+    let cfg = unsafe { input(cfg, cfg_len) };
+    ret(baseline_entry(data, cfg).into_bytes())
+}
+
+/// Classify a run against a loaded baseline file: one `known` flag per
+/// diagnostic of the run in report order (see the module docs for the
+/// pairing contract), the absorbed count, and the entries the run no
+/// longer hits (the findings that were fixed since the baseline). A
+/// baseline that does not parse, or a broken config, returns
+/// `{"error": "..."}`.
+///
+/// # Safety
+/// `data..data+data_len`, `baseline..baseline+baseline_len` and
+/// `cfg..cfg+cfg_len` must be valid for reads for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn gedlint_baseline_match(
+    data: *const u8,
+    data_len: usize,
+    baseline: *const u8,
+    baseline_len: usize,
+    cfg: *const u8,
+    cfg_len: usize,
+) -> *mut u8 {
+    let data = unsafe { input(data, data_len) };
+    let baseline = unsafe { input(baseline, baseline_len) };
+    let cfg = unsafe { input(cfg, cfg_len) };
+    ret(baseline_match_entry(data, baseline, cfg).into_bytes())
+}
+
 // ---------------------------------------------------------------------------
 // Pure bodies (unit-testable without pointer plumbing)
 // ---------------------------------------------------------------------------
@@ -232,6 +286,70 @@ fn edits_entry(data: &[u8], cfg: &[u8]) -> String {
         out.push_str("\"}");
     }
     out.push_str("]}");
+    out
+}
+
+/// The baseline file text for this run (the `--write-baseline` payload).
+fn baseline_entry(data: &[u8], cfg: &[u8]) -> String {
+    match parse_cfg(cfg) {
+        Err(e) => error_json(&e),
+        Ok(c) => baseline_to_json(&baseline_from_report(&lint_bytes_with(data, &c))),
+    }
+}
+
+/// Parse a baseline buffer the way `parse_cfg` parses a config: UTF-8
+/// text, then the engine's own reader, with errors phrased for
+/// `error_json` so both baseline entry points report problems identically.
+fn parse_baseline_buf(baseline: &[u8]) -> Result<crate::baseline::Baseline, String> {
+    match std::str::from_utf8(baseline) {
+        Err(_) => Err("the baseline file is not valid UTF-8".to_string()),
+        Ok(text) => parse_baseline(text),
+    }
+}
+
+/// The classification the page renders: `known` flags aligned with the
+/// diagnostics of the paired lint run, the absorbed count, and the
+/// resolved entries (code, fingerprint, count) with their finding total.
+fn baseline_match_entry(data: &[u8], baseline: &[u8], cfg: &[u8]) -> String {
+    let c = match parse_cfg(cfg) {
+        Err(e) => return error_json(&e),
+        Ok(c) => c,
+    };
+    let b = match parse_baseline_buf(baseline) {
+        Err(e) => return error_json(&e),
+        Ok(b) => b,
+    };
+    let report = lint_bytes_with(data, &c);
+    let o = apply_baseline(&report, &b);
+
+    let mut out = String::with_capacity(48 + o.known_flags.len() * 2 + o.resolved.len() * 64);
+    out.push_str("{\"known\":[");
+    for (i, known) in o.known_flags.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push(if *known { '1' } else { '0' });
+    }
+    out.push_str("],\"baselined\":");
+    out.push_str(&o.baselined.to_string());
+    out.push_str(",\"resolved\":[");
+    let mut resolved_total: u64 = 0;
+    for (i, e) in o.resolved.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        resolved_total += e.count as u64;
+        out.push_str("{\"code\":\"");
+        out.push_str(&escape_json(&e.code));
+        out.push_str("\",\"fingerprint\":\"");
+        out.push_str(&escape_json(&e.fingerprint));
+        out.push_str("\",\"count\":");
+        out.push_str(&e.count.to_string());
+        out.push('}');
+    }
+    out.push_str("],\"resolved_total\":");
+    out.push_str(&resolved_total.to_string());
+    out.push('}');
     out
 }
 
@@ -329,6 +447,53 @@ fn error_json(msg: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One broken FAMC ref (E201), one invalid SEX (W305), one vendor tag
+    /// (U502): three findings the baseline round trip classifies.
+    const MESSY: &[u8] = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Anna /B/\n1 SEX Q\n1 FAMC @F9@\n1 _UPD 2020\n0 @I2@ INDI\n1 NAME Anna /B/\n0 TRLR\n";
+
+    #[test]
+    fn baseline_entry_serializes_the_write_baseline_payload() {
+        let text = baseline_entry(MESSY, b"");
+        let parsed = parse_baseline(&text).expect("the download must re-read");
+        assert_eq!(parsed.entries.len(), 3, "{}", text);
+        // A broken config is an error, never a default-config baseline.
+        assert!(baseline_entry(MESSY, b"[lints]\npresets = [\"nope\"]\n").contains("\"error\""),);
+    }
+
+    #[test]
+    fn baseline_match_entry_flags_new_and_known_and_resolved() {
+        let text = baseline_entry(MESSY, b"");
+        // The very run it was written from: everything seen, nothing new
+        // or resolved.
+        let j = baseline_match_entry(MESSY, text.as_bytes(), b"");
+        assert_eq!(
+            j, "{\"known\":[1,1,1],\"baselined\":3,\"resolved\":[],\"resolved_total\":0}",
+            "{}",
+            j
+        );
+
+        // One finding fixed (the SEX line): two flags stay 1, the W305
+        // diagnostic is absent so no 0 appears, and the entry resolves.
+        let fixed = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Anna /B/\n1 FAMC @F9@\n1 _UPD 2020\n0 @I2@ INDI\n1 NAME Anna /B/\n0 TRLR\n";
+        let j = baseline_match_entry(fixed, text.as_bytes(), b"");
+        assert!(
+            j.contains("\"known\":[1,1]") && !j.contains("\"known\":[1,1,1]"),
+            "{}",
+            j
+        );
+        assert!(j.contains("\"baselined\":2"), "{}", j);
+        assert!(j.contains("\"code\":\"W305\""), "{}", j);
+        assert!(j.contains("\"resolved_total\":1"), "{}", j);
+
+        // Errors: a corrupt baseline and a broken config, never a
+        // default-configuration match.
+        assert!(baseline_match_entry(MESSY, b"this is not json", b"").contains("\"error\""));
+        assert!(
+            baseline_match_entry(MESSY, text.as_bytes(), b"[lints]\npresets = [\"nope\"]\n")
+                .contains("\"error\"")
+        );
+    }
 
     #[test]
     fn replacement_preview_truncates_and_escapes() {
