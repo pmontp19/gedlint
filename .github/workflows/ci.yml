@@ -47,27 +47,6 @@ jobs:
           path: smoke/warn.ged
           fail-on: error
           version: v1
-      - name: Config silences a rule
-        uses: ./
-        with:
-          path: smoke/warn.ged
-          config: smoke/off.toml
-          fail-on: warning
-      - name: Baseline absorbs a known warning
-        uses: ./
-        with:
-          path: smoke/warn.ged
-          baseline: smoke/warn.baseline.json
-          fail-on: warning
-      - name: Missing config is an error, not a silent pass
-        id: badcfg
-        continue-on-error: true
-        uses: ./
-        with:
-          path: smoke/clean.ged
-          config: smoke/does-not-exist.toml
-      - name: Missing config must have failed
-        run: '[ "${{ steps.badcfg.outcome }}" = "failure" ] || { echo "a missing config was ignored"; exit 1; }'
       - name: Warning fails with fail-on warning
         id: warn
         continue-on-error: true
@@ -121,6 +100,34 @@ jobs:
           assert "glob exit-code" "$GLOB_EXIT" 1
           # Summary content is asserted in the ci job: GITHUB_STEP_SUMMARY is a
           # fresh file per step, so a later step cannot read what the action wrote.
+      # After the assertions above: these re-invoke the action several more
+      # times, and interleaving them with a block that reads earlier steps'
+      # outputs made those outputs come back empty on macOS and Windows.
+      - name: Config silences a rule
+        uses: ./
+        with:
+          path: smoke/warn.ged
+          config: smoke/off.toml
+          fail-on: warning
+          version: v1
+      - name: Baseline absorbs a known warning
+        uses: ./
+        with:
+          path: smoke/warn.ged
+          baseline: smoke/warn.baseline.json
+          fail-on: warning
+          version: v1
+      - name: Missing config is an error, not a silent pass
+        id: badcfg
+        continue-on-error: true
+        uses: ./
+        with:
+          path: smoke/clean.ged
+          config: smoke/does-not-exist.toml
+          version: v1
+      - name: Missing config must have failed
+        shell: bash
+        run: '[ "${{ steps.badcfg.outcome }}" = "failure" ] || { echo "a missing config was ignored"; exit 1; }'
   ci:
     runs-on: ubuntu-latest
     permissions:
