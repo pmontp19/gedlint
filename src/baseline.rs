@@ -43,6 +43,11 @@ pub struct BaselineOutcome {
     /// Baseline entries this run did not hit at all: the findings were
     /// fixed. Reported as resolved; `--write-baseline` prunes them.
     pub resolved: Vec<BaselineEntry>,
+    /// One bool per diagnostic of the matched report, in report order:
+    /// true when the baseline absorbed it. `baselined` is the number of
+    /// trues. The web viewer renders its new/seen split from this, so the
+    /// browser can never disagree with the CLI about absorption.
+    pub known_flags: Vec<bool>,
 }
 
 /// Normalized message fingerprint: case-folded, whitespace collapsed, every
@@ -107,17 +112,24 @@ pub fn apply_baseline(report: &Report, baseline: &Baseline) -> BaselineOutcome {
     for (i, e) in baseline.entries.iter().enumerate() {
         index.insert((e.code.as_str(), e.fingerprint.as_str()), i);
     }
-    let mut out = BaselineOutcome::default();
+    let mut out = BaselineOutcome {
+        known_flags: Vec::with_capacity(report.diags.len()),
+        ..BaselineOutcome::default()
+    };
     for d in &report.diags {
         let fp = fingerprint(&d.msg);
+        let mut known = false;
         if let Some(&i) = index.get(&(d.code, fp.as_str())) {
             if remaining[i] > 0 {
                 remaining[i] -= 1;
                 out.baselined += 1;
-                continue;
+                known = true;
             }
         }
-        out.new_diags.push(d.clone());
+        out.known_flags.push(known);
+        if !known {
+            out.new_diags.push(d.clone());
+        }
     }
     for (i, e) in baseline.entries.iter().enumerate() {
         if remaining[i] == e.count {

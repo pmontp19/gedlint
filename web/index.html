@@ -50,6 +50,7 @@
         </div>
       </div>
       <input id="file" type="file" accept=".ged,.gedcom" hidden>
+      <input id="baseline-file" type="file" accept=".json,application/json" hidden>
     </section>
 
     <p id="status" class="status" role="status" aria-live="polite">Loading the checking engine&hellip;</p>
@@ -70,6 +71,7 @@
     <section id="results" hidden>
       <section id="applied-banner" hidden></section>
       <section id="summary" class="card summary" aria-label="File summary"></section>
+      <section id="baseline" class="card baseline" hidden aria-labelledby="baseline-title"></section>
       <section id="explorer" aria-labelledby="explorer-title">
         <div class="explorer-head">
           <h2 id="explorer-title">Findings</h2>

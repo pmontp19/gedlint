@@ -23,8 +23,12 @@
     edits: [],
     normalizedEndings: false,
     appliedBanner: null, // {appliedGroups, postponed, normalizedEndings, fileName}
+    baselineText: null,  // loaded baseline file text, null = none
+    baselineName: null,  // file name it was loaded from
+    baselineMatch: null, // {known: number[], baselined, resolved, resolved_total}
     filters: { sev: 'all', cats: new Set(), q: '' },
     shown: PAGE_LIMIT,
+    shownKnown: PAGE_LIMIT,
   };
 
   // ---------------------------------------------------------------------
@@ -134,9 +138,30 @@
     if (parsed.error) throw new Error(parsed.error);
     state.report = parsed;
     state.reportRaw = m.json;
+    // The baseline comparison pairs with this run: same bytes, same
+    // config (the known flags index this report's diagnostics).
+    await matchBaseline(bytes, cfg);
     await refreshEdits();
     renderAll();
     setStatus('');
+  }
+
+  // Compare the current run against the loaded baseline, in the engine.
+  // No baseline loaded: nothing to do, findings render unsplit.
+  async function matchBaseline(bytes, cfg) {
+    state.baselineMatch = null;
+    if (state.baselineText === null) return;
+    const m = await call('baseline-match', {
+      data: bytes.buffer.slice(0),
+      baseline: state.baselineText,
+      config: cfg,
+    });
+    const parsed = JSON.parse(m.json);
+    if (parsed.error) throw new Error(parsed.error);
+    if (parsed.known.length !== state.report.diagnostics.length) {
+      throw new Error('the comparison is out of step with this run; check the file again');
+    }
+    state.baselineMatch = parsed;
   }
 
   async function refreshEdits() {
@@ -166,6 +191,76 @@
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     loadBytes(bytes, 'example.ged');
+  }
+
+  // ---------------------------------------------------------------------
+  // Baseline (issue 52): record what you have already seen, then work
+  // through only what is new. Everything is computed by the engine in the
+  // worker; this side only downloads and uploads text.
+  // ---------------------------------------------------------------------
+
+  function baselineFileName() {
+    return state.fileName.replace(/(\.ged)?$/i, '') + '.baseline.json';
+  }
+
+  async function saveBaseline() {
+    if (state.busy || !state.report) return;
+    state.busy = true;
+    setStatus('Writing the baseline\u2026');
+    try {
+      const m = await call('baseline', { data: state.bytes.buffer.slice(0), config: configText() });
+      const parsed = JSON.parse(m.json);
+      if (parsed.error) throw new Error(parsed.error);
+      // Download, and adopt what was saved: from now on the run is
+      // compared against this snapshot. Re-saving after fixing is the
+      // ratchet: findings that vanished drop out of the file.
+      state.baselineText = m.json;
+      state.baselineName = baselineFileName();
+      download(m.json, state.baselineName, 'application/json');
+      await matchBaseline(state.bytes, configText());
+      renderAll();
+      setStatus('Baseline saved as ' + state.baselineName);
+    } catch (e) {
+      setStatus('Saving the baseline failed: ' + e.message, 'error');
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  function loadBaselineFile(file) {
+    if (state.busy || !state.ready || !state.report) return;
+    const reader = new FileReader();
+    reader.onerror = () => setStatus('Could not read the baseline file.', 'error');
+    reader.onload = () => adoptBaseline(String(reader.result), file.name);
+    reader.readAsText(file);
+  }
+
+  async function adoptBaseline(text, name) {
+    state.busy = true;
+    setStatus('Matching ' + name + '\u2026');
+    try {
+      state.baselineText = text;
+      state.baselineName = name;
+      await matchBaseline(state.bytes, configText());
+      renderAll();
+      setStatus('Baseline loaded: ' + name);
+    } catch (e) {
+      state.baselineText = null;
+      state.baselineName = null;
+      state.baselineMatch = null;
+      renderAll();
+      setStatus('Could not use that baseline: ' + e.message, 'error');
+    } finally {
+      state.busy = false;
+    }
+  }
+
+  function removeBaseline() {
+    state.baselineText = null;
+    state.baselineName = null;
+    state.baselineMatch = null;
+    renderAll();
+    setStatus('');
   }
 
   // ---------------------------------------------------------------------
@@ -299,6 +394,85 @@
   }
 
   // ---------------------------------------------------------------------
+  // Rendering: baseline card
+  // ---------------------------------------------------------------------
+
+  function renderBaseline() {
+    const sec = $('#baseline');
+    if (!state.report) {
+      sec.hidden = true;
+      sec.innerHTML = '';
+      return;
+    }
+    const total = state.report.diagnostics.length;
+    const o = state.baselineMatch;
+
+    if (!o) {
+      if (!total) {
+        sec.hidden = true;
+        sec.innerHTML = '';
+        return;
+      }
+      sec.hidden = false;
+      sec.innerHTML =
+        `<div class="bl-row">
+           <div class="bl-main">
+             <h2 id="baseline-title">A thousand findings is a lot to face at once</h2>
+             <p class="hint">Save a baseline and this page will remember the ${total === 1 ? 'finding' : `<b>${total}</b> findings`} you
+             have already seen. From then on only what is <em>new</em> asks for your attention, and the ones you fix
+             are counted. Keep the downloaded file next to your tree and load it on your next visit.</p>
+           </div>
+           <div class="bl-actions">
+             <button id="bl-save" class="btn btn-primary btn-small" type="button">Save baseline</button>
+             <button id="bl-load" class="btn btn-ghost btn-small" type="button">Load a baseline</button>
+           </div>
+         </div>`;
+      $('#bl-save').addEventListener('click', saveBaseline);
+      $('#bl-load').addEventListener('click', () => $('#baseline-file').click());
+      return;
+    }
+
+    const known = o.baselined;
+    const fresh = state.report.diagnostics.length - known;
+    const fixed = o.resolved_total;
+    let headline;
+    if (fixed > 0) {
+      headline = `<p class="bl-fixed">You fixed <b>${fixed}</b> ${fixed === 1 ? 'finding' : 'findings'} since your baseline.` +
+        (fresh ? ` <b>${fresh}</b> ${fresh === 1 ? 'is' : 'are'} new.` : ' Nothing new.') + `</p>`;
+    } else if (fresh === 0) {
+      headline = '<p class="bl-fixed">No new findings since your baseline.</p>';
+    } else {
+      headline = `<p class="bl-fixed"><b>${fresh}</b> new ${fresh === 1 ? 'finding' : 'findings'} since your baseline.</p>`;
+    }
+    const resolvedList = o.resolved.length
+      ? `<ul class="bl-resolved">${o.resolved.map((e) => {
+          const meta = state.registry.get(e.code);
+          return `<li><span class="code">${esc(e.code)}</span> &times;${e.count}` +
+            (meta ? ` ${esc(meta.title)}` : '') + '</li>';
+        }).join('')}</ul>`
+      : '';
+    sec.hidden = false;
+    sec.innerHTML =
+      `<div class="bl-row">
+         <div class="bl-main">
+           <h2 id="baseline-title">Baseline: ${esc(state.baselineName || '')}</h2>
+           ${headline}
+           <p class="hint">${fresh} new &middot; ${known} already seen${o.resolved.length ? ` &middot; ${fixed} fixed` : ''}.
+           ${fixed || fresh ? ' Update the baseline to record where you are now; fixed findings drop out of it.' : ''}</p>
+           ${resolvedList}
+         </div>
+         <div class="bl-actions">
+           <button id="bl-save" class="btn btn-primary btn-small" type="button">Update baseline</button>
+           <button id="bl-load" class="btn btn-ghost btn-small" type="button">Load another baseline</button>
+           <button id="bl-remove" class="btn btn-ghost btn-small" type="button">Stop comparing</button>
+         </div>
+       </div>`;
+    $('#bl-save').addEventListener('click', saveBaseline);
+    $('#bl-load').addEventListener('click', () => $('#baseline-file').click());
+    $('#bl-remove').addEventListener('click', removeBaseline);
+  }
+
+  // ---------------------------------------------------------------------
   // Rendering: findings explorer
   // ---------------------------------------------------------------------
 
@@ -420,27 +594,89 @@
   function renderFindings() {
     renderFilters();
     const all = state.report.diagnostics;
-    const list = all.filter(findingMatches);
     const listEl = $('#findings');
+    const title = $('#explorer-title');
+    const staticMore = $('#show-more');
+
+    if (state.baselineMatch) {
+      renderSplitFindings();
+      return;
+    }
+    const list = all.filter(findingMatches);
     state.shown = Math.min(state.shown, list.length);
     const slice = list.slice(0, state.shown);
     listEl.innerHTML = slice.map(renderFinding).join('');
-    const title = $('#explorer-title');
     title.innerHTML = list.length === all.length
       ? `Findings <span class="count">${all.length}</span>`
       : `Findings <span class="count">${list.length}</span> of ${all.length}`;
     if (!list.length) {
       listEl.innerHTML = '<p class="empty">No findings match the current filters.</p>';
     }
-    const more = $('#show-more');
     const rest = list.length - slice.length;
-    more.hidden = !rest;
-    if (rest) more.textContent = 'Show ' + Math.min(rest, PAGE_LIMIT) + ' more findings (' + rest + ' remaining)';
+    staticMore.hidden = !rest;
+    if (rest) staticMore.textContent = 'Show ' + Math.min(rest, PAGE_LIMIT) + ' more findings (' + rest + ' remaining)';
+  }
+
+  // Baseline view: new findings first, everything you have already seen
+  // collapsed under its own header. Never hidden: the collapsed group
+  // carries its count in the summary, and the filters apply to both.
+  function renderSplitFindings() {
+    const all = state.report.diagnostics;
+    const flags = state.baselineMatch.known;
+    const paired = all.map((d, i) => ({ d, known: flags[i] === 1 }));
+    const filtered = paired.filter((p) => findingMatches(p.d));
+    const fresh = filtered.filter((p) => !p.known);
+    const seen = filtered.filter((p) => p.known);
+    const totalCount = all.length - state.baselineMatch.baselined;
+
+    state.shown = Math.min(state.shown, fresh.length);
+    state.shownKnown = Math.min(state.shownKnown, seen.length);
+    const freshSlice = fresh.slice(0, state.shown);
+    const seenSlice = seen.slice(0, state.shownKnown);
+
+    const moreBtn = (group, listLen, sliceLen) => {
+      const rest = listLen - sliceLen;
+      if (rest <= 0) return '';
+      return `<button class="btn btn-ghost wide bl-more" data-group="${group}" type="button">` +
+        'Show ' + Math.min(rest, PAGE_LIMIT) + ' more (' + rest + ' remaining)</button>';
+    };
+
+    let html = '';
+    html += `<h3 class="grp-head grp-new">New since your baseline <span class="count">${fresh.length}</span></h3>`;
+    html += freshSlice.map((p) => renderFinding(p.d)).join('');
+    if (!fresh.length) {
+      html += '<p class="empty">Nothing new since your baseline. Everything this run found is in the group below.</p>';
+    } else {
+      html += moreBtn('new', fresh.length, freshSlice.length);
+    }
+    html += `<details class="known-group">
+      <summary>Findings you have already seen <span class="count">${seen.length}</span></summary>
+      <div class="known-inner">
+        ${seenSlice.map((p) => renderFinding(p.d)).join('')}
+        ${seen.length ? '' : '<p class="empty">Nothing you have already seen matches the current filters.</p>'}
+        ${moreBtn('known', seen.length, seenSlice.length)}
+      </div>
+    </details>`;
+
+    $('#findings').innerHTML = html;
+    $('#show-more').hidden = true;
+    for (const b of document.querySelectorAll('#findings .bl-more')) {
+      b.addEventListener('click', () => {
+        if (b.dataset.group === 'known') state.shownKnown += PAGE_LIMIT;
+        else state.shown += PAGE_LIMIT;
+        renderSplitFindings();
+      });
+    }
+    $('#explorer-title').innerHTML =
+      `Findings <span class="count">${all.length}</span>` +
+      (totalCount ? ` <span class="bl-newnote">${totalCount} new</span>` : ' <span class="bl-newnote">none new</span>');
   }
 
   function renderAll() {
     renderSummary();
+    renderBaseline();
     state.shown = PAGE_LIMIT;
+    state.shownKnown = PAGE_LIMIT;
     renderFindings();
     renderRepairs();
     renderBanner();
@@ -595,6 +831,18 @@
 
   const dz = $('#dropzone');
   const fileInput = $('#file');
+  const baselineInput = $('#baseline-file');
+
+  // A .json dropped or picked where a tree belongs is almost always a
+  // baseline: route it there instead of linting it as a GEDCOM.
+  function routeFile(f) {
+    if (/\.json$/i.test(f.name)) {
+      if (state.report) loadBaselineFile(f);
+      else setStatus('Check a GEDCOM file first, then load its baseline here.', 'error');
+      return;
+    }
+    readFile(f);
+  }
 
   $('#browse').addEventListener('click', () => fileInput.click());
   dz.addEventListener('click', (e) => {
@@ -608,8 +856,12 @@
     }
   });
   fileInput.addEventListener('change', () => {
-    if (fileInput.files.length) readFile(fileInput.files[0]);
+    if (fileInput.files.length) routeFile(fileInput.files[0]);
     fileInput.value = '';
+  });
+  baselineInput.addEventListener('change', () => {
+    if (baselineInput.files.length) loadBaselineFile(baselineInput.files[0]);
+    baselineInput.value = '';
   });
 
   ['dragenter', 'dragover'].forEach((t) =>
@@ -624,7 +876,7 @@
     }));
   dz.addEventListener('drop', (e) => {
     const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) readFile(f);
+    if (f) routeFile(f);
   });
 
   // Page-level drop: keep a stray file from navigating the tab away.

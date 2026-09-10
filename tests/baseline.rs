@@ -442,6 +442,9 @@ fn counts_absorb_and_surplus_is_new() {
     assert_eq!(o.new_diags.len(), 1);
     assert_eq!(o.new_diags[0].line, 9);
     assert!(o.resolved.is_empty());
+    // The per-diagnostic classification mirrors the counts: the first two
+    // absorbed, the surplus new.
+    assert_eq!(o.known_flags, vec![true, true, false]);
 }
 
 #[test]
@@ -516,4 +519,5 @@ fn from_report_sorts_and_absorbs_shifted_line_references() {
     let o = apply_baseline(&shifted, &b);
     assert_eq!(o.baselined, 1);
     assert!(o.new_diags.is_empty());
+    assert_eq!(o.known_flags, vec![true]);
 }
