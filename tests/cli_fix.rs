@@ -177,6 +177,49 @@ fn help_lists_the_new_flags() {
 // The config gate, end to end (#44): --fix must pass the resolved config
 // ---------------------------------------------------------------------------
 
+/// A CONT/CONC staircase (#51): E005 flattens the whole run in one --fix.
+const NESTED_CONT: &[u8] = b"0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NOTE some text\n2 CONC continued\n3 CONT next paragraph\n4 CONT another\n0 TRLR\n";
+
+#[test]
+fn fix_flattens_nested_continuations_end_to_end() {
+    let d = tmpdir("e005");
+    let f = write(&d, "n.ged", NESTED_CONT);
+    let o = Command::new(bin())
+        .arg(&f)
+        .arg("--fix")
+        .arg("--no-color")
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(
+        out.contains("fix: E005: re-leveled 2 nested CONT/CONC lines (backup"),
+        "{}",
+        out
+    );
+    assert_eq!(o.status.code(), Some(0), "the repaired file lints clean");
+    let fixed = String::from_utf8(fs::read(&f).unwrap()).unwrap();
+    assert!(
+        fixed.contains("2 CONC continued\n2 CONT next paragraph\n2 CONT another\n"),
+        "{}",
+        fixed
+    );
+    assert_eq!(
+        fs::read(d.join("n.ged.bak")).unwrap(),
+        NESTED_CONT,
+        ".bak keeps the staircase"
+    );
+    // The second run is a no-op: no report line, no rewrite.
+    let o2 = Command::new(bin())
+        .arg(&f)
+        .arg("--fix")
+        .arg("--no-color")
+        .output()
+        .unwrap();
+    let out2 = String::from_utf8_lossy(&o2.stdout).into_owned();
+    assert!(!out2.contains("fix:"), "{}", out2);
+    assert_eq!(o2.status.code(), Some(0));
+}
+
 /// W601 and W703 patterns with no core defect: under the built-in rules
 /// this file is reported clean, so --fix has nothing to say about it.
 const OPT_IN_ONLY: &[u8] =

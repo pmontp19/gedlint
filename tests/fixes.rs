@@ -341,6 +341,220 @@ fn compute_edits_finds_nothing_in_a_clean_file() {
 }
 
 // ---------------------------------------------------------------------------
+// E005: nested CONT/CONC collapse to siblings (#51)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_single_nested_cont_repairs_and_re_lints_clean() {
+    // The trailing `2 CONT` is a legal sibling (its parent is the NOTE,
+    // not the CONC beside it): only the nested line may get an edit.
+    let data = [
+        HEAD,
+        b"0 @I1@ INDI\n1 NOTE some text\n2 CONC continued\n3 CONT next paragraph\n2 CONT last line\n0 TRLR\n",
+    ]
+    .concat();
+    assert!(lint_bytes(&data).diags.iter().any(|d| d.code == "E005"));
+
+    let edits = compute_edits(&data);
+    assert_eq!(edits.len(), 1, "{:?}", edits);
+    let e = &edits[0];
+    assert_eq!(e.code, "E005");
+    assert_eq!(e.lines, (7, 7));
+    assert_eq!(e.replacement, vec![b"2 CONT next paragraph".to_vec()]);
+    assert_eq!(e.applicability, Applicability::Safe);
+    assert_eq!(e.note, "rewrite the level to 2 (CONT/CONC do not nest)");
+
+    let (fixed, applied) = fix_bytes(&data);
+    assert_eq!(applied, vec!["E005: re-leveled 1 nested CONT/CONC lines"]);
+    // Byte-identical but for the level digit: that is the whole repair.
+    let expected = [
+        HEAD,
+        b"0 @I1@ INDI\n1 NOTE some text\n2 CONC continued\n2 CONT next paragraph\n2 CONT last line\n0 TRLR\n",
+    ]
+    .concat();
+    assert_eq!(fixed, expected);
+    assert!(!lint_bytes(&fixed).diags.iter().any(|d| d.code == "E005"));
+
+    // Repairing twice changes nothing.
+    let (again, applied_again) = fix_bytes(&fixed);
+    assert_eq!(again, fixed);
+    assert!(applied_again.is_empty(), "{:?}", applied_again);
+}
+
+#[test]
+fn a_staircase_of_continuations_collapses_in_one_pass() {
+    // The real-world shape (#51): each continuation one deeper than the
+    // last. Every line re-levels against the same value line, so one
+    // --fix flattens the run rather than one run per step.
+    let data = [
+        HEAD,
+        b"0 @I1@ INDI\n1 NOTE some text\n2 CONC continued\n3 CONT one\n4 CONT two\n5 CONT three\n0 TRLR\n",
+    ]
+    .concat();
+    let edits = compute_edits(&data);
+    let e005: Vec<(usize, usize)> = edits
+        .iter()
+        .filter(|e| e.code == "E005")
+        .map(|e| e.lines)
+        .collect();
+    assert_eq!(e005, vec![(7, 7), (8, 8), (9, 9)], "{:?}", edits);
+    for e in edits.iter().filter(|e| e.code == "E005") {
+        assert!(
+            e.replacement[0].starts_with(b"2 CONT"),
+            "{:?}",
+            e.replacement
+        );
+    }
+
+    let (fixed, applied) = fix_bytes(&data);
+    assert_eq!(applied, vec!["E005: re-leveled 3 nested CONT/CONC lines"]);
+    assert!(
+        String::from_utf8_lossy(&fixed)
+            .contains("2 CONC continued\n2 CONT one\n2 CONT two\n2 CONT three\n"),
+        "{:?}",
+        String::from_utf8_lossy(&fixed)
+    );
+    assert!(!lint_bytes(&fixed).diags.iter().any(|d| d.code == "E005"));
+
+    // Repairing twice changes nothing.
+    let (again, applied_again) = fix_bytes(&fixed);
+    assert_eq!(again, fixed);
+    assert!(applied_again.is_empty(), "{:?}", applied_again);
+}
+
+#[test]
+fn a_level_zero_cont_is_reported_but_never_repaired() {
+    // The other branch of E005: no parent at all. Nothing says which line
+    // it was meant to continue, so --fix leaves it for the user (#51).
+    let data = [HEAD, b"0 CONT orphan\n0 TRLR\n"].concat();
+    assert!(lint_bytes(&data).diags.iter().any(|d| d.code == "E005"));
+    assert!(
+        compute_edits(&data).is_empty(),
+        "{:?}",
+        compute_edits(&data)
+    );
+    let (fixed, applied) = fix_bytes(&data);
+    assert_eq!(fixed, data);
+    assert!(applied.is_empty());
+}
+
+#[test]
+fn a_continuation_chain_without_an_anchor_stays_put() {
+    // The `0 CONT` has no parent (the unrepaired branch), so the `1 CONT`
+    // under it has no non-CONT/CONC ancestor either: there is no value
+    // line to re-anchor against, and inventing one would guess at the
+    // data. Both stay reported, neither is repaired.
+    let data = [HEAD, b"0 CONT top\n1 CONT under\n0 TRLR\n"].concat();
+    let n = lint_bytes(&data)
+        .diags
+        .iter()
+        .filter(|d| d.code == "E005")
+        .count();
+    assert_eq!(n, 2);
+    assert!(
+        compute_edits(&data).is_empty(),
+        "{:?}",
+        compute_edits(&data)
+    );
+    let (fixed, applied) = fix_bytes(&data);
+    assert_eq!(fixed, data);
+    assert!(applied.is_empty());
+}
+
+#[test]
+fn an_orphan_below_a_staircase_repairs_fully_in_one_run() {
+    // E001 runs before E005: the "5 CONT " prefix it writes lands under
+    // the still-nested "4 CONT", and the E005 pass then re-levels both in
+    // the same --fix. One run ends with every line a sibling.
+    let data = [
+        HEAD,
+        b"0 @S1@ SOUR\n1 DATA\n2 TEXT a\n3 CONT b\n4 CONT c\norphan line\n0 TRLR\n",
+    ]
+    .concat();
+    let (fixed, applied) = fix_bytes(&data);
+    assert_eq!(
+        applied,
+        vec![
+            "E001: 1 orphan lines prefixed with CONT",
+            "E005: re-leveled 2 nested CONT/CONC lines",
+        ]
+    );
+    let text = String::from_utf8_lossy(&fixed);
+    assert!(
+        text.contains("2 TEXT a\n3 CONT b\n3 CONT c\n3 CONT orphan line\n"),
+        "{}",
+        text
+    );
+    let diags = lint_bytes(&fixed).diags;
+    assert!(
+        !diags.iter().any(|d| d.code == "E005" || d.code == "E001"),
+        "{:?}",
+        diags.iter().map(|d| d.code).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_nested_cont_hanging_off_a_split_conc_flattens_before_the_rejoin() {
+    // E101's rejoin absorbs the CONC line the CONT hangs from. Run first
+    // it would strand the CONT at a level nothing supports any more, so
+    // E005 runs before E101 (the ordering decision REPAIR_ORDER records).
+    let mut data = Vec::new();
+    data.extend_from_slice(HEAD);
+    data.extend_from_slice(b"0 @S1@ SOUR\n1 DATA\n2 TEXT Jos");
+    data.push(0xC3);
+    data.extend_from_slice(b"\n3 CONC ");
+    data.push(0xA9);
+    data.extend_from_slice(b" x\n4 CONT more\n0 TRLR\n");
+
+    let (fixed, applied) = fix_bytes(&data);
+    assert_eq!(
+        applied,
+        vec![
+            "E005: re-leveled 1 nested CONT/CONC lines",
+            "E101: rejoined 1 CONC lines with split UTF-8"
+        ]
+    );
+    let text = String::from_utf8(fixed.clone()).unwrap();
+    assert!(
+        text.contains("2 TEXT Jos\u{e9} x\n3 CONT more\n"),
+        "{}",
+        text
+    );
+    let diags = lint_bytes(&fixed).diags;
+    assert!(
+        !diags.iter().any(|d| d.code == "E005" || d.code == "E101"),
+        "{:?}",
+        diags.iter().map(|d| d.code).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn nested_edits_come_between_the_orphan_and_style_edits() {
+    // Priority order, not line order: E001, then E005, then style.
+    let data = [
+        HEAD,
+        b"0 @S1@ SOUR\n1 DATA\n2 TEXT a\n3 CONT b\n4 CONT c  \norphan line  \n0 TRLR\n",
+    ]
+    .concat();
+    let codes: Vec<&str> = compute_edits(&data).iter().map(|e| e.code).collect();
+    assert_eq!(codes, vec!["E001", "E005", "style", "style"]);
+}
+
+#[test]
+fn crlf_nested_continuations_keep_their_cr() {
+    // The rewrite must never touch line endings: a CRLF file stays CRLF.
+    let data = b"0 HEAD\r\n1 GEDC\r\n2 VERS 5.5.1\r\n0 @I1@ INDI\r\n1 NOTE a\r\n2 CONT b\r\n3 CONT c\r\n0 TRLR\r\n";
+    let edits = compute_edits(data);
+    assert_eq!(edits.len(), 1, "{:?}", edits);
+    assert_eq!(edits[0].replacement, vec![b"2 CONT c\r".to_vec()]);
+    let (fixed, _) = fix_bytes(data);
+    assert_eq!(
+        fixed,
+        b"0 HEAD\r\n1 GEDC\r\n2 VERS 5.5.1\r\n0 @I1@ INDI\r\n1 NOTE a\r\n2 CONT b\r\n2 CONT c\r\n0 TRLR\r\n"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Line-ending normalization: preprocessing, not an edit
 // ---------------------------------------------------------------------------
 
@@ -466,7 +680,7 @@ fn fix_bytes_matches_a_hand_applied_selection() {
     ]
     .concat();
     let mut cur = data.clone();
-    for code in ["E001", "style", "E101"] {
+    for code in ["E001", "E005", "style", "E101"] {
         let chosen: Vec<Edit> = compute_edits(&cur)
             .into_iter()
             .filter(|e| e.code == code)
@@ -655,10 +869,11 @@ fn a_file_without_a_trailing_newline_does_not_gain_one() {
 // ---------------------------------------------------------------------------
 
 /// One file carrying every repairable pattern, core and opt-in alike:
-/// E001 (an orphan line), style (trailing whitespace, twice), E101 (a UTF-8
-/// character split across CONC, in the #36 shape with a padded anchor),
-/// W601 (a comma surname in both the NAME slot and a `2 SURN`), W702 (an
-/// all-caps `2 SURN`) and W703 (doubled commas in a PLAC).
+/// E001 (an orphan line), E005 (a CONT nested under a CONT), style
+/// (trailing whitespace, twice), E101 (a UTF-8 character split across
+/// CONC, in the #36 shape with a padded anchor), W601 (a comma surname in
+/// both the NAME slot and a `2 SURN`), W702 (an all-caps `2 SURN`) and
+/// W703 (doubled commas in a PLAC).
 fn repairable_patterns() -> Vec<u8> {
     let mut data = Vec::new();
     data.extend_from_slice(HEAD);
@@ -671,7 +886,8 @@ fn repairable_patterns() -> Vec<u8> {
     data.push(0xC3);
     data.extend_from_slice(b"  \n2 CONC ");
     data.push(0xA9);
-    data.extend_from_slice(b" /Oso/\n0 TRLR\n");
+    data.extend_from_slice(b" /Oso/\n");
+    data.extend_from_slice(b"0 @I4@ INDI\n1 NOTE some text\n2 CONT first\n3 CONT second\n0 TRLR\n");
     data
 }
 
@@ -735,7 +951,7 @@ fn diagnostics_and_edits_agree_under_every_config() {
     };
     assert_eq!(
         codes(&configs[1].1),
-        ["E001", "E101", "W601", "W702", "W703", "style"]
+        ["E001", "E005", "E101", "W601", "W702", "W703", "style"]
             .into_iter()
             .collect(),
         "every ruleset on must exercise every repair"
@@ -749,7 +965,7 @@ fn diagnostics_and_edits_agree_under_every_config() {
     // The built-in config repairs exactly the core.
     assert_eq!(
         codes(&configs[0].1),
-        ["E001", "E101", "style"].into_iter().collect()
+        ["E001", "E005", "E101", "style"].into_iter().collect()
     );
     // And silence leaves only the unruled style repair.
     assert_eq!(codes(&configs[3].1), ["style"].into_iter().collect());
