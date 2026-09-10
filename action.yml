@@ -11,6 +11,14 @@ inputs:
     description: "'error' (default) or 'warning'"
     required: false
     default: "error"
+  config:
+    description: "Path to a gedlint.toml. Omitted means gedlint's own discovery (walk up from each file); use 'none' to disable config entirely"
+    required: false
+    default: ""
+  baseline:
+    description: "Path to a gedlint baseline JSON. When set, only findings absent from the baseline affect the outcome"
+    required: false
+    default: ""
   format:
     description: "Log output: 'text' (default) or 'json'. Annotations and the step summary are emitted either way"
     required: false
@@ -64,6 +72,8 @@ runs:
         GEDLINT_MAX_ANNOTATIONS: ${{ inputs.max-annotations }}
         GEDLINT_SUMMARY: ${{ inputs.summary }}
         GEDLINT_REQUIRE_CHECKSUM: ${{ inputs.require-checksum }}
+        GEDLINT_CONFIG: ${{ inputs.config }}
+        GEDLINT_BASELINE: ${{ inputs.baseline }}
         GEDLINT_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
@@ -159,13 +169,30 @@ runs:
         REPORTS="$(mktemp -d -t gedlint.XXXXXX)"
         trap 'rm -rf "$REPORTS"' EXIT
 
+        # Config and baseline are optional; an empty input must not become an
+        # empty argv entry, which gedlint would read as a filename.
+        # Expanded as ${EXTRA[@]+"${EXTRA[@]}"} below: under `set -u`, bash 3.2
+        # (still the system bash on macOS runners) treats "${EXTRA[@]}" on an
+        # empty array as an unbound variable.
+        EXTRA=()
+        if [ "$GEDLINT_CONFIG" = "none" ]; then
+          EXTRA+=(--no-config)
+        elif [ -n "$GEDLINT_CONFIG" ]; then
+          [ -f "$GEDLINT_CONFIG" ] || { echo "::error::config not found: $GEDLINT_CONFIG"; exit 2; }
+          EXTRA+=(--config "$GEDLINT_CONFIG")
+        fi
+        if [ -n "$GEDLINT_BASELINE" ]; then
+          [ -f "$GEDLINT_BASELINE" ] || { echo "::error::baseline not found: $GEDLINT_BASELINE"; exit 2; }
+          EXTRA+=(--baseline "$GEDLINT_BASELINE")
+        fi
+
         WORST=0
         INDEX=0
         for FILE in "${FILES[@]}"; do
           SLOT="$REPORTS/$(printf '%04d' "$INDEX")"
           INDEX=$((INDEX + 1))
           printf '%s' "$FILE" > "$SLOT.path"
-          if "$BIN" --format json "$FILE" > "$SLOT.json" 2> "$SLOT.err"; then
+          if "$BIN" --format json ${EXTRA[@]+"${EXTRA[@]}"} "$FILE" > "$SLOT.json" 2> "$SLOT.err"; then
             CODE=0
           else
             CODE=$?
