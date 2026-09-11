@@ -132,11 +132,10 @@ jobs:
         shell: bash
         # A crash once reported outcome=success, so the gate stopped running
         # while the build stayed green (#60). Break the guard action.yml
-        # actually sources, the same ways a real crash would, and assert the
-        # status. Every OS in the matrix: the hardest case is bash 3.2 on the
-        # macOS runner, which enters the EXIT trap with $? == 0.
+        # actually sources and assert the status it produces.
         run: |
           set -euo pipefail
+          # Run a fault with the guard, the way the action does.
           probe() {
             bash -c '
               set -euo pipefail
@@ -148,17 +147,40 @@ jobs:
             ' _ "$1" "$2" >/dev/null 2>&1 && STATUS=0 || STATUS=$?
             echo "$STATUS"
           }
-          crashes() { [ "$2" != 0 ] || { echo "FAIL $1: a crash reported success"; exit 1; }; }
+          # Run the same fault with no guard at all, to learn whether this
+          # bash considers it fatal in the first place.
+          fatal() { bash -c "set -euo pipefail; $1; exit 0" >/dev/null 2>&1 && return 1 || return 0; }
+          crashes() { [ "$2" != 0 ] || { echo "FAIL [$1]: a crash reported success"; exit 1; }; }
           assert()  { [ "$2" = "$3" ] || { echo "FAIL $1: expected $3, got $2"; exit 1; }; }
-          crashes "unbound array"        "$(probe 'EXTRA=(); echo "${EXTRA[@]}"' 0)"
-          crashes "unbound scalar"       "$(probe 'echo "$GEDLINT_NOT_SET"' 0)"
-          crashes "missing command"      "$(probe 'gedlint_no_such_command' 0)"
+
+          # Which faults bash treats as fatal moved between versions: 4.4
+          # stopped treating "${empty[@]}" under set -u as unbound, which is
+          # exactly why #60 only ever reproduced on the macOS runner's bash
+          # 3.2. So do not hardcode the list. Ask this shell what kills it,
+          # then require the guard to turn precisely that into a failed step.
+          FAULTS=(
+            'echo "$GEDLINT_NOT_SET"'
+            'echo "${GEDLINT_NOT_SET_ARRAY[@]}"'
+            'gedlint_no_such_command'
+            'false'
+            '(exit 3)'
+            'EXTRA=(); echo "${EXTRA[@]}"'
+          )
+          CHECKED=0
+          for FAULT in "${FAULTS[@]}"; do
+            fatal "$FAULT" || continue
+            crashes "$FAULT" "$(probe "$FAULT" 0)"
+            CHECKED=$((CHECKED + 1))
+          done
+          # Never let the loop pass by testing nothing.
+          [ "$CHECKED" -ge 5 ] || { echo "FAIL: only $CHECKED faults were fatal here, the probe proves nothing"; exit 1; }
+
           # The gedlint contract still has to survive the guard.
-          assert  "clean run"            "$(probe 'true' 0)" 0
-          assert  "warnings stay 1"      "$(probe 'true' 1)" 1
-          assert  "errors stay 2"        "$(probe 'true' 2)" 2
-          assert  "validation exit 2"    "$(probe 'exit 2' 0)" 2
-          echo "a crash inside the action fails the step"
+          assert "clean run"         "$(probe 'true' 0)" 0
+          assert "warnings stay 1"   "$(probe 'true' 1)" 1
+          assert "errors stay 2"     "$(probe 'true' 2)" 2
+          assert "validation exit 2" "$(probe 'exit 2' 0)" 2
+          echo "$CHECKED fault classes fail the step; the 0/1/2 contract is intact"
   ci:
     runs-on: ubuntu-latest
     permissions:
