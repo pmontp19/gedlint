@@ -338,10 +338,19 @@ gedlint --baseline gedlint.baseline.json tree.ged   # fail only on NEW findings
 gedlint --write-baseline gedlint.baseline.json tree.ged
 ```
 
-Baseline entries are keyed by `(code, a normalized fingerprint of the message)` and a
+Baseline entries are keyed by `(code, a fingerprint of the message)` and a
 count, **never by line number**, so that inserting a line at the top of the file does not
 invalidate the whole baseline. A finding matches the baseline while the count for its key
 has not been exhausted.
+
+The fingerprint is a **digest**, not the message (issue 61): the message is normalized
+(case-folded, whitespace collapsed, digit runs collapsed to `#`, which is what survives
+line shifts) and then reduced to `h1:` plus 16 hex digits of its SHA-256. A baseline is a
+file users are told to commit, and rule messages quote surnames, note bodies and places,
+so the file must carry no content from the tree it describes; matching only needs equality
+and nothing reconstructs a message from a baseline, so nothing is lost. The reader enforces
+the digest shape, and format version 1 (readable message text) is refused with an
+instruction to regenerate rather than read.
 
 This is the mechanism that lets a genealogist adopt gedlint on an existing tree and
 ratchet down, which no amount of output formatting achieves.

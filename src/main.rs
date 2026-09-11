@@ -30,7 +30,8 @@ fn help() -> String {
          --max N               cap rule groups by default, single diagnostics with --verbose (0 = all; JSON always complete)\n  \
          --verbose             list every occurrence instead of one line per rule\n  \
          --baseline FILE       fail only on findings not already recorded in FILE (the ratchet)\n  \
-         --write-baseline      record every current finding in FILE and exit 0\n  \
+         --write-baseline      record every current finding in FILE and exit 0\n                        \
+        (rule codes and digests only, never text from your file)\n  \
          --no-color            no ANSI colors\n  \
         --quiet               summary + exit code only\n  \
         --explain [CODE]      explain a rule (no CODE: every rule by ruleset)\n  \
@@ -631,7 +632,14 @@ fn main() -> ExitCode {
                     "\nresolved (recorded in the baseline but absent from this run; --write-baseline prunes them):"
                 );
                 for e in &o.resolved {
-                    let _ = writeln!(h, "  {}x {} {}", e.count, e.code, e.fingerprint);
+                    // The fingerprint is a digest (issue 61), so the rule
+                    // name carries the meaning and the digest only tells
+                    // two entries of the same rule apart.
+                    let label = match gedlint::rule(&e.code) {
+                        Some(r) => format!("{} {}", r.name, e.fingerprint),
+                        None => e.fingerprint.clone(),
+                    };
+                    let _ = writeln!(h, "  {}x {} {}", e.count, e.code, label);
                 }
             }
         }

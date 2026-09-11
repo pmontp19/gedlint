@@ -11,9 +11,11 @@
 //! every consumer reads, `config` the pure `gedlint.toml` parser (GEDCOM has
 //! no comment syntax, so config is the only suppression mechanism), `wasm`
 //! the C ABI the web viewer drives, and `baseline` the count-based ratchet
-//! file for adopting a legacy tree (RFC 014 section 5). All file and OS
-//! access lives in `main.rs`; everything public is re-exported here, so the
-//! crate's public API is exactly what this file names.
+//! file for adopting a legacy tree (RFC 014 section 5), whose fingerprints
+//! `hash` reduces to digests so no record content reaches a committed file.
+//! All file and OS access lives in `main.rs`; everything public is
+//! re-exported here, so the crate's public API is exactly what this file
+//! names.
 
 use std::io::BufRead;
 
@@ -21,6 +23,7 @@ mod baseline;
 mod config;
 mod diag;
 mod fix;
+mod hash;
 mod parse;
 mod registry;
 mod rules;
