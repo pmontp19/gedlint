@@ -75,6 +75,8 @@ Findings land as inline annotations on the diff, plus a job summary grouped by r
 
 Outputs: `errors`, `warnings`, `infos`, `files`, `exit-code` (0 clean, 1 warnings, 2 errors, worst across all files).
 
+A gate that stops running is worse than no gate, so the step fails if the action itself crashes: only a run that reaches the end can report success, and a green step always means the tree was actually linted.
+
 ```yaml
 - run: echo "${{ steps.gedlint.outputs.errors }} errors in ${{ steps.gedlint.outputs.files }} files"
 ```
