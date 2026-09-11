@@ -154,10 +154,13 @@ jobs:
           assert()  { [ "$2" = "$3" ] || { echo "FAIL $1: expected $3, got $2"; exit 1; }; }
 
           # Which faults bash treats as fatal moved between versions: 4.4
-          # stopped treating "${empty[@]}" under set -u as unbound, which is
-          # exactly why #60 only ever reproduced on the macOS runner's bash
-          # 3.2. So do not hardcode the list. Ask this shell what kills it,
-          # then require the guard to turn precisely that into a failed step.
+          # stopped treating "${arr[@]}" under set -u as unbound, empty or
+          # unset alike, which is exactly why #60 only ever reproduced on the
+          # macOS runner's bash 3.2. So do not hardcode the list. Ask this
+          # shell what kills it, then require the guard to turn precisely
+          # that into a failed step. The last two entries are fatal only
+          # before 4.4; the first four are fatal on every bash, which is
+          # where the floor below comes from.
           FAULTS=(
             'echo "$GEDLINT_NOT_SET"'
             'echo "${GEDLINT_NOT_SET_ARRAY[@]}"'
@@ -173,7 +176,7 @@ jobs:
             CHECKED=$((CHECKED + 1))
           done
           # Never let the loop pass by testing nothing.
-          [ "$CHECKED" -ge 5 ] || { echo "FAIL: only $CHECKED faults were fatal here, the probe proves nothing"; exit 1; }
+          [ "$CHECKED" -ge 4 ] || { echo "FAIL: only $CHECKED faults were fatal here, the probe proves nothing"; exit 1; }
 
           # The gedlint contract still has to survive the guard.
           assert "clean run"         "$(probe 'true' 0)" 0
