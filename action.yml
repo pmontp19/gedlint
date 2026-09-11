@@ -77,6 +77,9 @@ runs:
         GEDLINT_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
+        # Must come before anything that can fail: it is what makes a crash
+        # in this script fail the step instead of reporting success (#60).
+        . "$GITHUB_ACTION_PATH/scripts/gedlint-guard.sh"
 
         case "$GEDLINT_FAIL_ON" in error|warning) ;; *) echo "fail-on must be error|warning"; exit 2;; esac
         case "$GEDLINT_FORMAT" in text|json) ;; *) echo "format must be text|json"; exit 2;; esac
@@ -167,7 +170,6 @@ runs:
         [ "${#FILES[@]}" -gt 0 ] || { echo "::error::path matched no files"; exit 2; }
 
         REPORTS="$(mktemp -d -t gedlint.XXXXXX)"
-        trap 'rm -rf "$REPORTS"' EXIT
 
         # Config and baseline are optional; an empty input must not become an
         # empty argv entry, which gedlint would read as a filename.
@@ -210,6 +212,8 @@ runs:
 
         node "$GITHUB_ACTION_PATH/scripts/gh-report.js" "$REPORTS"
 
+        # Past here the run is complete and every exit below is a real verdict.
+        gedlint_guard_done
         if [ "$GEDLINT_FAIL_ON" = "warning" ] && [ "$WORST" -ne 0 ]; then exit "$WORST"; fi
         if [ "$GEDLINT_FAIL_ON" = "error" ] && [ "$WORST" -eq 2 ]; then exit 2; fi
         exit 0
