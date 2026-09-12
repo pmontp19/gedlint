@@ -421,6 +421,8 @@
              <p class="hint">Save a baseline and this page will remember the ${total === 1 ? 'finding' : `<b>${total}</b> findings`} you
              have already seen. From then on only what is <em>new</em> asks for your attention, and the ones you fix
              are counted. Keep the downloaded file next to your tree and load it on your next visit.</p>
+             <p class="hint">The baseline holds rule codes, counts and digests only &mdash; no names, notes or places
+             from your file &mdash; so it is safe to commit or pass on.</p>
            </div>
            <div class="bl-actions">
              <button id="bl-save" class="btn btn-primary btn-small" type="button">Save baseline</button>

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use gedlint::{
-    apply_baseline, baseline_from_report, baseline_to_json, parse_baseline, Baseline,
+    apply_baseline, baseline_from_report, baseline_to_json, fingerprint, parse_baseline, Baseline,
     BaselineEntry, Category, Diag, Report, Severity, Version,
 };
 
@@ -68,6 +68,47 @@ const CLEAN: &str = "\
 0 TRLR
 ";
 
+/// A tree whose findings quote it back: every rule here puts a value from
+/// the file into its message (W702 the surname, W403 the note body, W306
+/// the enum value, W401 the place). Deliberately invented strings, chosen
+/// so a leak is unmistakable and so none of them is hex.
+const TALKATIVE: &str = "\
+0 HEAD
+1 GEDC
+2 VERS 5.5.1
+1 CHAR UTF-8
+0 @I1@ INDI
+1 NAME Quimeta /VILAGRASSA/
+1 RESN reservatissim
+1 NOTE <br>Quimeta remembered by Sinforosa
+1 BIRT
+2 PLAC Torderola http://example.invalid/tree
+0 @I2@ INDI
+1 NAME Nicasi /PUIGMARTORELL/
+0 TRLR
+";
+
+/// W702 lives in the opt-in "hygiene" ruleset, so TALKATIVE needs it on.
+const TALKATIVE_CFG: &str = "[lints]\npresets = [\"recommended\", \"hygiene\"]\n";
+
+/// Every string of TALKATIVE a diagnostic message quotes.
+const SECRETS: &[&str] = &[
+    "quimeta",
+    "vilagrassa",
+    "reservatissim",
+    "sinforosa",
+    "torderola",
+    "example.invalid",
+    "puigmartorell",
+];
+
+/// The shape `fingerprint` writes: "h1:" and 16 lowercase hex digits.
+fn is_digest(fp: &str) -> bool {
+    fp.len() == 19
+        && fp.starts_with("h1:")
+        && fp[3..].chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+}
+
 fn messy_plus(extra: &str) -> String {
     let mut g = MESSY.to_string();
     let cut = g.find("0 TRLR").unwrap();
@@ -102,11 +143,11 @@ fn write_baseline_exits_0_and_records_every_finding() {
             b.entries
         );
     }
-    // Entries carry counts, not line numbers.
+    // Entries carry counts and digests: no line numbers, no message text.
     assert!(
         b.entries
             .iter()
-            .all(|e| e.count == 1 && !e.fingerprint.contains("line")),
+            .all(|e| e.count == 1 && is_digest(&e.fingerprint)),
         "{:?}",
         b.entries
     );
@@ -235,6 +276,200 @@ fn inserting_10_lines_does_not_invalidate_the_baseline() {
     );
     assert!(out.contains("0 new diagnostics"), "{}", out);
     assert!(out.contains("3 baselined"), "{}", out);
+}
+
+// ---------------------------------------------------------------------------
+// Issue 61: a baseline is a file users are told to commit, so it must carry
+// no text from the tree it was generated on.
+// ---------------------------------------------------------------------------
+
+/// Acceptance: no substring of a name, note body or place survives into the
+/// file, and the run that produced it really did quote them.
+#[test]
+fn baseline_carries_no_text_from_the_tree() {
+    let d = tmpdir("privacy");
+    let f = write(&d, "t.ged", TALKATIVE);
+    let cfg = write(&d, "gedlint.toml", TALKATIVE_CFG);
+    let cfg = cfg.to_str().unwrap().to_string();
+    let base = d.join("g.baseline.json");
+
+    // The messages quote the file: without that this test proves nothing.
+    let (_, report, _) = run(&[
+        f.to_str().unwrap(),
+        "--config",
+        &cfg,
+        "--verbose",
+        "--no-color",
+    ]);
+    let report = report.to_lowercase();
+    for secret in SECRETS {
+        assert!(
+            report.contains(secret),
+            "the fixture must make a rule quote {}: {}",
+            secret,
+            report
+        );
+    }
+
+    let (code, _, _) = run(&[
+        f.to_str().unwrap(),
+        "--config",
+        &cfg,
+        "--write-baseline",
+        base.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    let text = fs::read_to_string(&base).unwrap();
+    let lower = text.to_lowercase();
+    for secret in SECRETS {
+        assert!(
+            !lower.contains(secret),
+            "the baseline leaked {}:\n{}",
+            secret,
+            text
+        );
+    }
+    // And not just those: every fingerprint is a digest, so there is no
+    // room in the file for text of any kind.
+    let b = gedlint::parse_baseline(&text).unwrap();
+    assert!(!b.entries.is_empty());
+    assert!(
+        b.entries.iter().all(|e| is_digest(&e.fingerprint)),
+        "{:?}",
+        b.entries
+    );
+}
+
+/// Acceptance: digests do not break the ratchet. Round trip on an unchanged
+/// file reports zero new findings.
+#[test]
+fn digest_baseline_round_trips() {
+    let d = tmpdir("privacy-match");
+    let f = write(&d, "t.ged", TALKATIVE);
+    let cfg = write(&d, "gedlint.toml", TALKATIVE_CFG);
+    let cfg = cfg.to_str().unwrap().to_string();
+    let base = d.join("g.baseline.json");
+    let _ = run(&[
+        f.to_str().unwrap(),
+        "--config",
+        &cfg,
+        "--write-baseline",
+        base.to_str().unwrap(),
+    ]);
+    let (code, out, _) = run(&[
+        f.to_str().unwrap(),
+        "--config",
+        &cfg,
+        "--baseline",
+        base.to_str().unwrap(),
+        "--no-color",
+    ]);
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("0 new diagnostics"), "{}", out);
+    assert!(out.contains("0 resolved"), "{}", out);
+}
+
+/// Acceptance: two findings of one rule that differ only in the text they
+/// quote stay two entries, so counts cannot collapse into one.
+#[test]
+fn distinct_findings_of_one_rule_keep_distinct_entries() {
+    let d = tmpdir("privacy-distinct");
+    let f = write(&d, "t.ged", TALKATIVE);
+    let cfg = write(&d, "gedlint.toml", TALKATIVE_CFG);
+    let cfg = cfg.to_str().unwrap().to_string();
+    let base = d.join("g.baseline.json");
+    let _ = run(&[
+        f.to_str().unwrap(),
+        "--config",
+        &cfg,
+        "--write-baseline",
+        base.to_str().unwrap(),
+    ]);
+    let b = gedlint::parse_baseline(&fs::read_to_string(&base).unwrap()).unwrap();
+    let caps: Vec<&gedlint::BaselineEntry> =
+        b.entries.iter().filter(|e| e.code == "W702").collect();
+    assert_eq!(
+        caps.len(),
+        2,
+        "two all-caps surnames are two shapes: {:?}",
+        b.entries
+    );
+    assert!(caps.iter().all(|e| e.count == 1), "{:?}", caps);
+    assert_ne!(caps[0].fingerprint, caps[1].fingerprint);
+
+    // Fixing one of them leaves the other baselined, which is the whole
+    // point of keeping them apart.
+    let f2 = write(
+        &d,
+        "t2.ged",
+        &TALKATIVE.replace("/PUIGMARTORELL/", "/Puigmartorell/"),
+    );
+    let (code, out, _) = run(&[
+        f2.to_str().unwrap(),
+        "--config",
+        &cfg,
+        "--baseline",
+        base.to_str().unwrap(),
+        "--no-color",
+    ]);
+    assert_eq!(code, 0, "{}", out);
+    assert!(out.contains("0 new diagnostics"), "{}", out);
+    assert!(out.contains("1 resolved"), "{}", out);
+}
+
+/// Acceptance: a baseline in the old readable format fails loudly, naming
+/// the way out, rather than quietly matching nothing.
+#[test]
+fn a_version_1_baseline_fails_loudly() {
+    let d = tmpdir("privacy-old");
+    let f = write(&d, "t.ged", MESSY);
+    let base = write(
+        &d,
+        "old.baseline.json",
+        "{\"gedlint-baseline\": 1,\n  \"entries\": [\n    {\"code\": \"W305\", \
+\"fingerprint\": \"@i#@: invalid sex value q\", \"count\": 1}\n  ]\n}\n",
+    );
+    let (code, _, err) = run(&[
+        f.to_str().unwrap(),
+        "--baseline",
+        base.to_str().unwrap(),
+        "--no-color",
+    ]);
+    assert_eq!(code, 2, "an unreadable baseline must not pass: {}", err);
+    assert!(err.contains("unsupported baseline version 1"), "{}", err);
+    assert!(
+        err.contains("regenerate it with --write-baseline"),
+        "the error must say what to do: {}",
+        err
+    );
+}
+
+/// The resolved appendix names the rule, since the digest alone says
+/// nothing to a reader.
+#[test]
+fn resolved_appendix_names_the_rule() {
+    let d = tmpdir("privacy-resolved");
+    let f = write(&d, "t.ged", MESSY);
+    let base = d.join("g.baseline.json");
+    let _ = run(&[
+        f.to_str().unwrap(),
+        "--write-baseline",
+        base.to_str().unwrap(),
+    ]);
+    let f2 = write(&d, "t2.ged", CLEAN);
+    let (_, out, _) = run(&[
+        f2.to_str().unwrap(),
+        "--baseline",
+        base.to_str().unwrap(),
+        "--no-color",
+    ]);
+    let name = gedlint::rule("W305").unwrap().name;
+    assert!(out.contains(name), "{} missing from: {}", name, out);
+    assert!(
+        out.contains("h1:"),
+        "the digest identifies the entry: {}",
+        out
+    );
 }
 
 #[test]
@@ -433,7 +668,7 @@ fn counts_absorb_and_surplus_is_new() {
     let b = Baseline {
         entries: vec![BaselineEntry {
             code: "E201".to_string(),
-            fingerprint: "famc @f#@ points nowhere".to_string(),
+            fingerprint: fingerprint("FAMC @F9@ points nowhere"),
             count: 2,
         }],
     };

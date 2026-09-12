@@ -1,9 +1,16 @@
 //! Baseline (RFC 014 section 5): adopt gedlint on a legacy tree and ratchet
 //! down. A baseline records the findings of a first run keyed by
-//! `(code, normalized message fingerprint)` plus a COUNT, never by line
+//! `(code, message fingerprint)` plus a COUNT, never by line
 //! number, so inserting lines cannot invalidate it. A run fails only on
 //! findings beyond the recorded counts; recorded findings that disappeared
 //! are "resolved" and `--write-baseline` prunes them.
+//!
+//! A baseline carries **no text from the file it was generated on** (issue
+//! 61). The fingerprint is a digest, not the message: a baseline is a file
+//! users are told to commit, and rule messages quote surnames, note bodies
+//! and places. Matching only ever needs equality, and nothing reconstructs a
+//! message from a baseline, so a digest costs nothing and closes the leak
+//! for every rule at once, including rules not written yet.
 //!
 //! Everything here is pure: text in, structures out. All file I/O lives in
 //! `src/main.rs`. The JSON reader is hand-rolled and accepts exactly the
@@ -12,9 +19,29 @@
 use std::collections::HashMap;
 
 use crate::diag::{escape_json, Diag, Report};
+use crate::hash::sha256_hex;
 
-/// The file format version this module reads and writes.
-const FORMAT_VERSION: u32 = 1;
+/// The file format version this module reads and writes. Version 2 is the
+/// digest fingerprint; version 1 stored the normalized message text, so it
+/// is refused rather than read, with a message saying to regenerate.
+const FORMAT_VERSION: u32 = 2;
+
+/// Digest algorithm tag on every fingerprint. Versioned separately from the
+/// file format so a future algorithm is recognizable inside a file that has
+/// not otherwise changed shape.
+const FP_ALG: &str = "h1:";
+
+/// Digest bytes kept, rendered as `2 * FP_BYTES` hex characters. 64 bits
+/// puts the collision risk for a tree with a few thousand distinct findings
+/// far below the odds of anything else in this program going wrong, and a
+/// collision only ever merges two counters, which the surplus check still
+/// reports.
+const FP_BYTES: usize = 8;
+
+/// Domain separation: what is hashed is this tag plus the normalized
+/// message, so a fingerprint cannot be compared against a bare SHA-256 of
+/// some candidate string computed elsewhere without knowing the recipe.
+const FP_DOMAIN: &str = "gedlint-baseline-fingerprint-v1\u{1f}";
 
 /// One recorded finding shape: rule code plus normalized message
 /// fingerprint, and how many times it occurred when the baseline was
@@ -50,13 +77,41 @@ pub struct BaselineOutcome {
     pub known_flags: Vec<bool>,
 }
 
-/// Normalized message fingerprint: case-folded, whitespace collapsed, every
-/// digit run collapsed to `#`. Digit collapsing is what keeps messages that
-/// embed line references ("duplicate xref @F1@ (first at line 42)") stable
-/// when lines shift; counts do the per-finding work, so collapsing two
-/// digit-variants of a message into one key only ever merges counters, and
-/// a surplus is still reported.
+/// The fingerprint recorded for a message: `h1:` plus a truncated SHA-256
+/// of its normalized form.
+///
+/// Two findings share a fingerprint exactly when [`normalize`] maps their
+/// messages to the same string, which is what makes the baseline survive
+/// line shifts. The digest is what keeps record content out of the file:
+/// the input to it is built from the message, the output is not.
 pub fn fingerprint(msg: &str) -> String {
+    let mut input = String::with_capacity(FP_DOMAIN.len() + msg.len());
+    input.push_str(FP_DOMAIN);
+    input.push_str(&normalize(msg));
+    let mut out = String::with_capacity(FP_ALG.len() + FP_BYTES * 2);
+    out.push_str(FP_ALG);
+    out.push_str(&sha256_hex(input.as_bytes(), FP_BYTES));
+    out
+}
+
+/// True for a string shaped like a fingerprint this module writes. The
+/// reader enforces it so a file carrying readable message text cannot be
+/// passed off as a baseline, whatever wrote it.
+fn is_fingerprint(fp: &str) -> bool {
+    fp.len() == FP_ALG.len() + FP_BYTES * 2
+        && fp.starts_with(FP_ALG)
+        && fp[FP_ALG.len()..]
+            .bytes()
+            .all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Message normalization, the input to the digest: case-folded, whitespace
+/// collapsed, every digit run collapsed to `#`. Digit collapsing is what
+/// keeps messages that embed line references ("duplicate xref @F1@ (first
+/// at line 42)") stable when lines shift; counts do the per-finding work,
+/// so collapsing two digit-variants of a message into one key only ever
+/// merges counters, and a surplus is still reported.
+fn normalize(msg: &str) -> String {
     let mut out = String::with_capacity(msg.len());
     let mut in_digits = false;
     let mut in_space = false;
@@ -199,9 +254,18 @@ pub fn parse_baseline(text: &str) -> Result<Baseline, String> {
                     }
                     let v = p.uint()?;
                     if v != FORMAT_VERSION {
+                        // Version 1 recorded message text; it is not read,
+                        // both because the keys differ and because the file
+                        // it describes is one the user should replace.
+                        let advice = if v < FORMAT_VERSION {
+                            "regenerate it with --write-baseline (\"Save baseline\" in the \
+                             web viewer)"
+                        } else {
+                            "it was written by a newer gedlint; upgrade gedlint"
+                        };
                         return Err(p.err(&format!(
-                            "unsupported baseline version {} (this build reads {})",
-                            v, FORMAT_VERSION
+                            "unsupported baseline version {} (this build reads {}): {}",
+                            v, FORMAT_VERSION, advice
                         )));
                     }
                     got_version = true;
@@ -432,6 +496,11 @@ impl<'a> Parser<'a> {
             if fp.is_empty() {
                 return Err(self.err("baseline entry has an empty \"fingerprint\""));
             }
+            if !is_fingerprint(&fp) {
+                return Err(self.err(
+                    "baseline entry \"fingerprint\" is not a digest (expected \"h1:\" and 16 hex digits): regenerate the baseline with --write-baseline",
+                ));
+            }
             if count == 0 {
                 return Err(self.err("baseline entry \"count\" must be at least 1"));
             }
@@ -464,21 +533,90 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
 
+    // ----- normalization -----
+
+    #[test]
+    fn normalize_folds_case_whitespace_and_digits() {
+        assert_eq!(normalize("Duplicate XREF @F1@"), "duplicate xref @f#@");
+        assert_eq!(normalize("  a   b\t\tc\n"), "a b c");
+        // Line references collapse away: shifting lines cannot change it.
+        assert_eq!(
+            normalize("first at line 42"),
+            normalize("first at line 108")
+        );
+        assert_eq!(normalize("5.5.1"), "#.#.#");
+        assert_eq!(normalize(""), "");
+        // Non-ASCII survives (Catalan fixtures are real data).
+        assert_eq!(normalize("Giron\u{e8} 2"), "giron\u{e8} #");
+    }
+
     // ----- fingerprint -----
 
     #[test]
-    fn fingerprint_normalizes_case_whitespace_and_digits() {
-        assert_eq!(fingerprint("Duplicate XREF @F1@"), "duplicate xref @f#@");
-        assert_eq!(fingerprint("  a   b\t\tc\n"), "a b c");
-        // Line references collapse away: shifting lines cannot change it.
+    fn fingerprint_is_a_digest_of_the_normalized_message() {
+        let fp = fingerprint("all-caps surname: FERRER");
+        assert!(is_fingerprint(&fp), "{}", fp);
+        assert_eq!(fp.len(), "h1:".len() + 16);
+        // Same normalization, same fingerprint: case, spacing and the line
+        // numbers a message embeds cannot break a match.
+        assert_eq!(fingerprint("SEX value Q"), fingerprint("sex   value  q"));
         assert_eq!(
-            fingerprint("first at line 42"),
-            fingerprint("first at line 108")
+            fingerprint("duplicate xref @F1@ (first at line 42)"),
+            fingerprint("duplicate xref @F1@ (first at line 108)")
         );
-        assert_eq!(fingerprint("5.5.1"), "#.#.#");
-        assert_eq!(fingerprint(""), "");
-        // Non-ASCII survives (Catalan fixtures are real data).
-        assert_eq!(fingerprint("Giron\u{e8} 2"), "giron\u{e8} #");
+        // Distinct findings keep distinct entries, so counts never collapse.
+        assert_ne!(
+            fingerprint("all-caps surname: FERRER"),
+            fingerprint("all-caps surname: FERRES")
+        );
+        assert_ne!(fingerprint(""), fingerprint("a"));
+        // Stable across runs: the file is committed and must not churn.
+        assert_eq!(fingerprint("SEX value Q"), fingerprint("SEX value Q"));
+    }
+
+    /// Issue 61: rule messages quote surnames, note bodies and places, and a
+    /// baseline is a file users commit. Nothing recognizable may survive.
+    #[test]
+    fn fingerprint_keeps_no_message_text() {
+        for (msg, secret) in [
+            ("all-caps surname: FERRER I PUIG", "ferrer"),
+            (
+                "NOTE with HTML (exporter quirk): <br>Maria was born in Olot",
+                "maria",
+            ),
+            ("@I7@: invalid SEX value \"home\"", "home"),
+            ("PLAC with URL (MyHeritage quirk): Sant Feliu", "feliu"),
+        ] {
+            let fp = fingerprint(msg).to_lowercase();
+            assert!(
+                !fp.contains(secret),
+                "{} leaked {} into {}",
+                msg,
+                secret,
+                fp
+            );
+            // Not a weaker claim than it looks: the digest is hex, so any
+            // run of letters from the message would have to survive whole.
+            assert!(is_fingerprint(&fp), "{}", fp);
+        }
+    }
+
+    #[test]
+    fn is_fingerprint_rejects_message_text() {
+        assert!(is_fingerprint("h1:0123456789abcdef"));
+        for bad in [
+            "",
+            "famc @f#@ points nowhere",
+            "h1:",
+            "h1:0123456789abcde",   // one hex digit short
+            "h1:0123456789abcdef0", // one too many
+            "h1:0123456789ABCDEF",  // uppercase hex is not what we write
+            "h1:0123456789abcdeg",  // not hex
+            "h2:0123456789abcdef",  // unknown algorithm
+            "0123456789abcdef",     // no algorithm tag
+        ] {
+            assert!(!is_fingerprint(bad), "{} accepted", bad);
+        }
     }
 
     // ----- JSON writer + reader -----
@@ -494,12 +632,12 @@ mod tests {
             entries: vec![
                 BaselineEntry {
                     code: "E201".into(),
-                    fingerprint: "famc @f#@ points nowhere".into(),
+                    fingerprint: fingerprint("FAMC @F9@ points nowhere"),
                     count: 2,
                 },
                 BaselineEntry {
                     code: "W302".into(),
-                    fingerprint: "possible duplicate: \"joan\" (b. #) vs \"joan\" (b. #)".into(),
+                    fingerprint: fingerprint("possible duplicate (b. 1899)"),
                     count: 1,
                 },
             ],
@@ -521,22 +659,21 @@ mod tests {
         assert!(baseline_to_json(&b).contains("\"entries\": []"));
     }
 
+    // Escapes are exercised on "code", the one field with no shape rule:
+    // a fingerprint is hex, so it can only carry \u escapes.
     #[test]
     fn json_reader_accepts_whitespace_and_escapes() {
-        let text = "{\n  \"gedlint-baseline\" : 1 ,\n  \"entries\" : [\n    { \"code\" : \"W402\" , \"fingerprint\" : \"quote \\\" back\\\\slash tab \\t \\u00e8\" , \"count\" : 3 }\n  ]\n}\n";
+        let text = "{\n  \"gedlint-baseline\" : 2 ,\n  \"entries\" : [\n    { \"code\" : \"quote \\\" back\\\\slash tab \\t \\u00e8\" , \"fingerprint\" : \"\\u0068\\u0031:0123456789abcdef\" , \"count\" : 3 }\n  ]\n}\n";
         let b = parse_baseline(text).unwrap();
         assert_eq!(b.entries.len(), 1);
-        assert_eq!(b.entries[0].code, "W402");
-        assert_eq!(
-            b.entries[0].fingerprint,
-            "quote \" back\\slash tab \t \u{e8}"
-        );
+        assert_eq!(b.entries[0].code, "quote \" back\\slash tab \t \u{e8}");
+        assert_eq!(b.entries[0].fingerprint, "h1:0123456789abcdef");
         assert_eq!(b.entries[0].count, 3);
     }
 
     #[test]
     fn json_reader_merges_duplicate_entries() {
-        let text = "{\"gedlint-baseline\":1,\"entries\":[{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":2},{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":3}]}";
+        let text = "{\"gedlint-baseline\":2,\"entries\":[{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":2},{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":3}]}";
         let b = parse_baseline(text).unwrap();
         assert_eq!(b.entries.len(), 1);
         assert_eq!(b.entries[0].count, 5);
@@ -544,17 +681,33 @@ mod tests {
 
     #[test]
     fn json_reader_surrogate_pair() {
-        let text = "{\"gedlint-baseline\":1,\"entries\":[{\"code\":\"E001\",\"fingerprint\":\"a \\ud83d\\ude00 b\",\"count\":1}]}";
+        let text = "{\"gedlint-baseline\":2,\"entries\":[{\"code\":\"a \\ud83d\\ude00 b\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":1}]}";
         let b = parse_baseline(text).unwrap();
-        assert_eq!(b.entries[0].fingerprint, "a \u{1f600} b");
+        assert_eq!(b.entries[0].code, "a \u{1f600} b");
+    }
+
+    /// Issue 61, acceptance: a version 1 file (readable message text) is
+    /// refused with an instruction, never silently mismatched.
+    #[test]
+    fn json_reader_refuses_the_old_readable_format() {
+        let v1 = "{\"gedlint-baseline\":1,\"entries\":[{\"code\":\"W702\",\"fingerprint\":\"all-caps surname: ferrer\",\"count\":1}]}";
+        let err = parse_baseline(v1).unwrap_err();
+        assert!(err.contains("unsupported baseline version 1"), "{}", err);
+        assert!(err.contains("--write-baseline"), "{}", err);
+        // A version 2 file carrying message text is refused too: the digest
+        // shape is what the format promises, not just the version number.
+        let faked = v1.replace("\"gedlint-baseline\":1", "\"gedlint-baseline\":2");
+        let err = parse_baseline(&faked).unwrap_err();
+        assert!(err.contains("is not a digest"), "{}", err);
+        assert!(err.contains("--write-baseline"), "{}", err);
     }
 
     #[test]
     fn json_reader_rejects_garbage() {
-        let good = |entries: &str| format!("{{\"gedlint-baseline\":1,\"entries\":[{}]}}", entries);
+        let good = |entries: &str| format!("{{\"gedlint-baseline\":2,\"entries\":[{}]}}", entries);
         let entry = |body: &str| {
             format!(
-                "{{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":1,{}}}",
+                "{{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":1,{}}}",
                 body
             )
         };
@@ -564,26 +717,28 @@ mod tests {
             ("[]".into(), "expected '{'"),
             ("{}".into(), "missing key"),
             ("{\"entries\":[]}".into(), "missing key"),
-            ("{\"gedlint-baseline\":2,\"entries\":[]}".into(), "unsupported baseline version"),
-            ("{\"gedlint-baseline\":1}".into(), "missing key"),
-            ("{\"gedlint-baseline\":1,\"entries\":{}}".into(), "expected '['"),
+            ("{\"gedlint-baseline\":1,\"entries\":[]}".into(), "unsupported baseline version"),
+            ("{\"gedlint-baseline\":3,\"entries\":[]}".into(), "upgrade gedlint"),
+            ("{\"gedlint-baseline\":2}".into(), "missing key"),
+            ("{\"gedlint-baseline\":2,\"entries\":{}}".into(), "expected '['"),
             (good("[1]"), "expected '{'"),
             (good("{\"code\":\"E001\"}"), "missing"),
-            (good("{\"fingerprint\":\"x\",\"count\":1}"), "missing \"code\""),
+            (good("{\"fingerprint\":\"h1:0123456789abcdef\",\"count\":1}"), "missing \"code\""),
             (good("{\"code\":\"E001\",\"count\":1}"), "missing \"fingerprint\""),
-            (good("{\"code\":\"E001\",\"fingerprint\":\"x\"}"), "missing \"count\""),
-            (good("{\"code\":\"\",\"fingerprint\":\"x\",\"count\":1}"), "empty"),
+            (good("{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\"}"), "missing \"count\""),
+            (good("{\"code\":\"\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":1}"), "empty"),
             (good("{\"code\":\"E001\",\"fingerprint\":\"\",\"count\":1}"), "empty"),
-            (good("{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":0}"), "at least 1"),
-            (good("{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":-1}"), "expected a number"),
-            (good("{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":\"1\"}"), "expected a number"),
-            (good("{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":1,\"nope\":2}"), "unexpected key"),
+            (good("{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":1}"), "is not a digest"),
+            (good("{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":0}"), "at least 1"),
+            (good("{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":-1}"), "expected a number"),
+            (good("{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":\"1\"}"), "expected a number"),
+            (good("{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":1,\"nope\":2}"), "unexpected key"),
             (good(&entry("\"zzz\":1")), "unexpected key"),
             (good(&entry("\"count\":2")), "duplicate key"),
-            ("{\"gedlint-baseline\":1,\"gedlint-baseline\":1,\"entries\":[]}".to_string(), "duplicate key"),
-            ("{\"gedlint-baseline\":1,\"entries\":[]} trailing".to_string(), "trailing content"),
-            ("{\"gedlint-baseline\":1,\"entries\":[{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":1}".into(), "expected ']'"),
-            ("{\"gedlint-baseline\":1,\"entries\":[[{\"code\":\"E001\",\"fingerprint\":\"x\",\"count\":1}]}".into(), "expected '{'"),
+            ("{\"gedlint-baseline\":2,\"gedlint-baseline\":2,\"entries\":[]}".to_string(), "duplicate key"),
+            ("{\"gedlint-baseline\":2,\"entries\":[]} trailing".to_string(), "trailing content"),
+            ("{\"gedlint-baseline\":2,\"entries\":[{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":1}".into(), "expected ']'"),
+            ("{\"gedlint-baseline\":2,\"entries\":[[{\"code\":\"E001\",\"fingerprint\":\"h1:0123456789abcdef\",\"count\":1}]}".into(), "expected '{'"),
         ];
         for (text, needle) in cases {
             let err = parse_baseline(&text).unwrap_err();
@@ -601,12 +756,12 @@ mod tests {
     #[test]
     fn json_reader_rejects_broken_strings() {
         for text in [
-            "{\"gedlint-baseline\":1,\"entries\":[{\"code\":E001,\"fingerprint\":\"x\",\"count\":1}]}",
-            "{\"gedlint-baseline\":1,\"entries\":[{\"code\":\"E001,\"fingerprint\":\"x\",\"count\":1}]}",
-            "{\"gedlint-baseline\":1,\"entries\":[{\"code\":\"a\\q\",\"fingerprint\":\"x\",\"count\":1}]}",
-            "{\"gedlint-baseline\":1,\"entries\":[{\"code\":\"\\u00\",\"fingerprint\":\"x\",\"count\":1}]}",
-            "{\"gedlint-baseline\":1,\"entries\":[{\"code\":\"\\ud83d\",\"fingerprint\":\"x\",\"count\":1}]}",
-            "{\"gedlint-baseline\":1,\"entries\":[{\"code\":\"\\ude00\\ud83d\",\"fingerprint\":\"x\",\"count\":1}]}",
+            "{\"gedlint-baseline\":2,\"entries\":[{\"code\":E001,\"fingerprint\":\"x\",\"count\":1}]}",
+            "{\"gedlint-baseline\":2,\"entries\":[{\"code\":\"E001,\"fingerprint\":\"x\",\"count\":1}]}",
+            "{\"gedlint-baseline\":2,\"entries\":[{\"code\":\"a\\q\",\"fingerprint\":\"x\",\"count\":1}]}",
+            "{\"gedlint-baseline\":2,\"entries\":[{\"code\":\"\\u00\",\"fingerprint\":\"x\",\"count\":1}]}",
+            "{\"gedlint-baseline\":2,\"entries\":[{\"code\":\"\\ud83d\",\"fingerprint\":\"x\",\"count\":1}]}",
+            "{\"gedlint-baseline\":2,\"entries\":[{\"code\":\"\\ude00\\ud83d\",\"fingerprint\":\"x\",\"count\":1}]}",
         ] {
             let err = parse_baseline(text).unwrap_err();
             assert!(err.contains("baseline file:"), "{} -> {}", text, err);
