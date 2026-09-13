@@ -388,7 +388,20 @@ fn baseline_round_trip_through_the_abi() {
         let ret = with_bufs(tree, b"", gedlint_baseline);
         String::from_utf8(take(ret)).unwrap()
     };
-    assert!(text.contains("\"gedlint-baseline\": 1"), "{}", text);
+    assert!(text.contains("\"gedlint-baseline\": 2"), "{}", text);
+    // The page's download carries no text from the file either (issue 61):
+    // it is the same writer the CLI uses, and this is where it matters
+    // most, since that copy is the one users hand around.
+    assert!(!text.contains("Anna"), "{}", text);
+    assert!(
+        parse_baseline(&text)
+            .unwrap()
+            .entries
+            .iter()
+            .all(|e| e.fingerprint.starts_with("h1:") && e.fingerprint.len() == 19),
+        "{}",
+        text
+    );
     let parsed = parse_baseline(&text).unwrap();
     assert_eq!(parsed.entries.len(), 3, "{}", text);
     for code in ["E201", "E003", "W305"] {
