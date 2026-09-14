@@ -74,11 +74,18 @@ jobs:
               tar czf "$DIR.tar.gz" "$DIR"
               ;;
           esac
-          if command -v sha256sum > /dev/null; then
-            sha256sum "$DIR".* > "$DIR.sha256"
-          else
-            shasum -a 256 "$DIR".* > "$DIR.sha256"
-          fi
+          # Checksums ride next to their archive carrying the archive's
+          # full name: gedlint-<tag>-<target>.tar.gz.sha256. That is the
+          # spelling every release has shipped and the one action.yml
+          # resolves when it verifies a pinned download.
+          for f in "$DIR".tar.gz "$DIR.zip"; do
+            [ -f "$f" ] || continue
+            if command -v sha256sum > /dev/null; then
+              sha256sum "$f" > "$f.sha256"
+            else
+              shasum -a 256 "$f" > "$f.sha256"
+            fi
+          done
           rm -rf "$DIR"
           ls -la
       - uses: actions/upload-artifact@v4
