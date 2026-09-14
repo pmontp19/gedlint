@@ -91,6 +91,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        # gh resolves the repository from the checkout; without it,
+        # `gh release create --verify-tag` dies on "not a git repository".
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
