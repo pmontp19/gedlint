@@ -713,6 +713,56 @@ fn month_token_present(val: &str) -> bool {
         .any(|t| MONTHS.contains(&t.to_ascii_uppercase().as_str()))
 }
 
+/// GEDCOM date keywords that mark a year token as a date, not a number.
+const DATE_KEYWORDS: &[&str] = &[
+    "ABT", "CAL", "EST", "BEF", "AFT", "BET", "AND", "FROM", "TO", "INT",
+];
+
+/// A standalone year token, allowing a leading approximation mark
+/// ("~1950", "c.1950"): everything up to the first digit must be gone,
+/// the rest all digits, and the digits a plausible year. "45th" and
+/// "12-14" are not years.
+fn year_token(t: &str) -> bool {
+    let digits = t.trim_start_matches(|c: char| !c.is_ascii_digit());
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && year_of(digits).is_some()
+}
+
+/// A numeric day/month/year token ("3/4/1950", "1950-04-01"): only
+/// digits and two separators, with a year inside.
+fn numeric_dmy_token(t: &str) -> bool {
+    t.chars()
+        .all(|c| c.is_ascii_digit() || c == '/' || c == '-')
+        && t.matches(['/', '-']).count() == 2
+        && t.split(['/', '-']).any(year_token)
+}
+
+/// True when a PLAC value actually parses as a date instead of merely
+/// containing a number: a month name ("12 JAN 1900"), a numeric D/M/Y
+/// token ("3/4/1950"), a GEDCOM keyword in front of a year ("ABT 1900",
+/// "BET 1900 AND 1910"), or a bare year with at most one trailing word
+/// and no comma ("~1950", "1900", "1950 Reus"). US street addresses
+/// that merely lead with a house number ("410 North Robinson Street,
+/// ...") carry several words after the number and stay silent.
+fn place_looks_like_date(val: &str) -> bool {
+    if month_token_present(val) {
+        return true;
+    }
+    let toks: Vec<&str> = val.split_whitespace().collect();
+    if toks.iter().any(|t| numeric_dmy_token(t)) {
+        return true;
+    }
+    let Some(y) = toks.iter().position(|t| year_token(t)) else {
+        return false;
+    };
+    if toks[..y]
+        .iter()
+        .any(|t| DATE_KEYWORDS.contains(&t.trim_end_matches('.').to_ascii_uppercase().as_str()))
+    {
+        return true;
+    }
+    y == 0 && toks.len() <= 2 && !val.contains(',')
+}
+
 /// W712: a PLAC that names a cause of death (`Holocaust` in the death
 /// place belongs in CAUS) or that looks like a date (a birth year typed
 /// into the place field). Never repaired: only a human knows which field
@@ -740,7 +790,7 @@ fn finish_place_content(diags: &mut Vec<Diag>, st: &Consistency) {
             );
             continue;
         }
-        if month_token_present(val) || year_of(val).is_some() {
+        if place_looks_like_date(val) {
             diags.push(
                 Diag::new(
                     "W712",

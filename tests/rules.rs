@@ -2391,3 +2391,28 @@ fn w712_place_resembles_cause_or_date() {
     let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC Reus, Tarragona\n");
     assert!(!has_with(&ok, "W712", "hygiene"));
 }
+
+#[test]
+fn w712_street_address_leading_house_number_stays_silent() {
+    let street = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 CENS\n2 DATE 1 APR 1950\n\
+         2 PLAC 410 North Robinson Street, Filadèlfia, Pennsilvània, Estats Units\n",
+    );
+    assert!(
+        !has_with(&street, "W712", "hygiene"),
+        "{:?}",
+        codes_with(&street, "hygiene")
+    );
+    // Real cases must keep firing: a bare year, a year with one place
+    // word, a GEDCOM keyword and a numeric D/M/Y token.
+    let bare = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC 1900\n");
+    assert!(has_with(&bare, "W712", "hygiene"));
+    let year_place = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC 1950 Reus\n");
+    assert!(has_with(&year_place, "W712", "hygiene"));
+    let abt = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC ABT 1900\n");
+    assert!(has_with(&abt, "W712", "hygiene"));
+    let tilde = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC ~1950\n");
+    assert!(has_with(&tilde, "W712", "hygiene"));
+    let dmy = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC 3/4/1950\n");
+    assert!(has_with(&dmy, "W712", "hygiene"));
+}
