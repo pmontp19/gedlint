@@ -9,7 +9,7 @@ Full spec: pmontp19/gedcom-family-tree issue #2 (revising #1).
 ## Install
 
 - Web: <https://pmontp19.github.io/gedlint> (see "Web viewer" below).
-- Prebuilt binaries (linux x86_64/arm64, macOS ARM, Windows x86_64), with a `.sha256` next to each archive: GitHub Releases. Intel Macs: build from source.
+- Prebuilt binaries (linux x86_64/arm64, macOS ARM, Windows x86_64), with a `.sha256` next to each archive: GitHub Releases. Intel Macs: build from source. Every release is built by `.github/workflows/release.yml` when its tag is pushed; the floating `v1` tag the GitHub Action pins is moved onto the same commit.
 - From source: `cargo install --git github.com/pmontp19/gedlint` or `cargo build --release`.
 
 ## Status
