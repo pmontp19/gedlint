@@ -426,3 +426,84 @@ fn enables_reports_the_state_the_fix_gate_reads() {
     // no configuration can name it.
     assert!(d.enables("style"));
 }
+
+#[test]
+fn thresholds_default_to_historical_values() {
+    // No [lints.thresholds]: every rule keeps its historical literal.
+    let d = parse_ok("[lints]\npresets = [\"recommended\"]\n");
+    assert_eq!(d.thresholds(), &gedlint::Thresholds::default());
+    let t = d.thresholds();
+    assert_eq!(
+        (
+            t.max_lifespan,
+            t.min_parent_age,
+            t.max_mother_age,
+            t.max_father_age,
+            t.duplicate_window,
+            t.sibling_max_gap,
+            t.max_alive_years,
+            t.max_spouse_gap,
+            t.min_marriage_age,
+        ),
+        (105, 13, 50, 70, 2, 240, 110, 25, 16)
+    );
+}
+
+#[test]
+fn thresholds_parse_and_drive_rules() {
+    // A raised max-lifespan silences the 112-year W301 the default flags.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1 JAN 1800\n1 DEAT\n2 DATE 1 JAN 1912\n0 TRLR\n";
+    assert!(codes(g, &Config::default()).contains(&"W301".to_string()));
+    let cfg = parse_ok(
+        "[lints]\npresets = [\"recommended\"]\n\n[lints.thresholds]\nmax-lifespan = 120\n",
+    );
+    assert_eq!(cfg.thresholds().max_lifespan, 120);
+    assert!(!codes(g, &cfg).contains(&"W301".to_string()));
+    // Partial sections compose: rules and thresholds side by side.
+    let both = parse_ok(
+        "[lints]\npresets = [\"recommended\"]\n\n[lints.rules]\n\"U502\" = \"off\"\n\n[lints.thresholds]\nmin-parent-age = 10\n",
+    );
+    assert_eq!(both.thresholds().min_parent_age, 10);
+}
+
+#[test]
+fn thresholds_reject_bad_keys_values_and_ranges() {
+    for (text, why) in [
+        (
+            "[lints]\npresets = []\n\n[lints.thresholds]\n\"bogus\" = 5\n",
+            "unknown threshold",
+        ),
+        (
+            "[lints]\npresets = []\n\n[lints.thresholds]\nmax-lifespan = 100\nmax-lifespan = 101\n",
+            "configured twice",
+        ),
+        (
+            "[lints]\npresets = []\n\n[lints.thresholds]\nmax-lifespan = \"105\"\n",
+            "bare integers",
+        ),
+        (
+            "[lints]\npresets = []\n\n[lints.thresholds]\nmax-lifespan = old\n",
+            "bare integers",
+        ),
+        (
+            "[lints]\npresets = []\n\n[lints.thresholds]\nmax-lifespan = 1000\n",
+            "between 50 and 150",
+        ),
+        (
+            "[lints]\npresets = []\n\n[lints.thresholds]\nmin-marriage-age = -1\n",
+            "bare integers",
+        ),
+        (
+            "[lints]\npresets = []\n\n[lints.thresholds]\nmax-spouse-gap = 101\n",
+            "between 0 and 100",
+        ),
+    ] {
+        let e = parse_config(text).expect_err(why);
+        let msg = e.to_string();
+        assert!(msg.contains(why), "{text}: {msg}");
+    }
+    // The section itself cannot repeat, and an unknown section still fails.
+    parse_config("[lints.thresholds]\nmax-lifespan = 105\n[lints.thresholds]\n")
+        .expect_err("appears twice");
+    parse_config("[lints.limits]\nmax-lifespan = 105\n").expect_err("unknown section");
+}

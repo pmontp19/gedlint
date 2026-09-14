@@ -3,7 +3,9 @@
 //! heuristic (W302).
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
+use crate::config::Thresholds;
 use crate::diag::{Category, Diag, Severity};
 use crate::parse::{is_aft, is_bef, norm_name, year_of, Line, Version};
 use crate::rules::graph::Graph;
@@ -29,6 +31,10 @@ pub(crate) struct People {
     pub(crate) birth_is_aft: HashMap<String, bool>,
     /// Death DATE was `AFT`-qualified: the real death can be later.
     pub(crate) death_is_aft: HashMap<String, bool>,
+    /// Individuals with a `1 DEAT` event, whatever its DATE says. `DEAT Y`
+    /// (dead, date unknown) records no year, but the person is still known
+    /// dead, which is what `W705` needs to tell apart from the living.
+    pub(crate) indi_died: HashSet<String>,
 }
 
 /// INDI.SEX: E008 on the {0:1} slot; the value itself is checked at the end.
@@ -51,6 +57,9 @@ pub(crate) fn record_sex(diags: &mut Vec<Diag>, st: &mut People, l: &Line, xref:
 /// FAM.MARR / INDI.BIRT / INDI.DEAT at level 1: the year carried on the event
 /// line itself, plus "DEAT Y" (dead, date unknown).
 pub(crate) fn record_event_year(st: &mut People, l: &Line, xref: &str, kind: &str) {
+    if kind == "INDI" && l.tag == "DEAT" {
+        st.indi_died.insert(xref.to_string());
+    }
     if let Some(y) = year_of(&l.value) {
         match l.tag.as_str() {
             "BIRT" => {
@@ -146,6 +155,7 @@ pub(crate) fn flush_person(
     b: Option<i64>,
     d: Option<i64>,
     line: usize,
+    max_lifespan: i64,
 ) {
     if let (Some(bb), Some(dd)) = (b, d) {
         if dd < 10000 && bb < 10000 && dd < bb {
@@ -157,7 +167,7 @@ pub(crate) fn flush_person(
                 format!("{}: died ({}) before being born ({})", xref, dd, bb),
             ));
         }
-        if dd < 10000 && dd - bb > 105 {
+        if dd < 10000 && dd - bb > max_lifespan {
             diags.push(Diag::new(
                 "W301",
                 Category::Suspicious,
@@ -176,7 +186,12 @@ pub(crate) fn flush_person(
 }
 
 /// End of run: W301 death before birth + longevity, per individual.
-pub(crate) fn finish_lifespans(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
+pub(crate) fn finish_lifespans(
+    diags: &mut Vec<Diag>,
+    st: &People,
+    graph: &Graph,
+    thr: &Thresholds,
+) {
     // W301: death before birth + longevity, per individual.
     for (xref, b) in &st.indi_birth {
         let d = st.indi_death.get(xref).copied().flatten();
@@ -188,6 +203,7 @@ pub(crate) fn finish_lifespans(diags: &mut Vec<Diag>, st: &People, graph: &Graph
                     Some(bb),
                     Some(dd),
                     graph.records.get(xref).map(|r| r.1).unwrap_or(0),
+                    thr.max_lifespan,
                 );
             }
         }
@@ -198,7 +214,12 @@ pub(crate) fn finish_lifespans(diags: &mut Vec<Diag>, st: &People, graph: &Graph
 /// before the marriage. Both report at the child's record line (issue 30):
 /// the child's birth is what triggers them, and a real line makes the
 /// whole-file graph findings deterministic.
-pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
+pub(crate) fn finish_parent_ages(
+    diags: &mut Vec<Diag>,
+    st: &People,
+    graph: &Graph,
+    thr: &Thresholds,
+) {
     // W303: parent age at the child's birth.
     for (fam, chils) in &graph.fam_chil {
         for (c, _) in chils {
@@ -216,8 +237,12 @@ pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Gra
                 if let Some((px, _)) = parent {
                     if let Some(Some(pb)) = st.indi_birth.get(px) {
                         let age = cb - pb;
-                        let max = if rol == "mother" { 50 } else { 70 };
-                        if age < 13 || age > max {
+                        let max = if rol == "mother" {
+                            thr.max_mother_age
+                        } else {
+                            thr.max_father_age
+                        };
+                        if age < thr.min_parent_age || age > max {
                             diags.push(Diag::new(
                                 "W303",
                                 Category::Suspicious,
@@ -457,8 +482,14 @@ pub(crate) fn finish_sex(diags: &mut Vec<Diag>, st: &People, version: Version) {
     }
 }
 
-/// End of run: W302 duplicates (same normalized name + birth within +-2 years).
-pub(crate) fn finish_duplicates(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
+/// End of run: W302 duplicates (same normalized name + birth within the
+/// configured window).
+pub(crate) fn finish_duplicates(
+    diags: &mut Vec<Diag>,
+    st: &People,
+    graph: &Graph,
+    thr: &Thresholds,
+) {
     // W302: duplicates (same normalized name + birth within ±2 years).
     let mut by_name: HashMap<String, Vec<(String, i64)>> = HashMap::new();
     for (xref, b) in &st.indi_birth {
@@ -480,7 +511,7 @@ pub(crate) fn finish_duplicates(diags: &mut Vec<Diag>, st: &People, graph: &Grap
         v.sort();
         for a in 0..v.len() {
             for b in a + 1..v.len() {
-                if (v[a].1 - v[b].1).abs() <= 2 {
+                if (v[a].1 - v[b].1).abs() <= thr.duplicate_window {
                     diags.push(Diag::new(
                         "W302",
                         Category::Suspicious,
