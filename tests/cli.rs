@@ -635,3 +635,72 @@ fn w702_produces_no_edit_under_bare_fix() {
     assert!(!applied.iter().any(|a| a.contains("W702")));
     assert_eq!(fixed, input.as_bytes());
 }
+
+#[test]
+fn rules_html_page_prints_the_whole_registry() {
+    let o = Command::new(bin()).arg("--rules-html").output().unwrap();
+    assert_eq!(o.status.code(), Some(0));
+    let html = String::from_utf8_lossy(&o.stdout);
+    assert!(html.starts_with("<!DOCTYPE html>"));
+    assert!(html.contains("rules.css"));
+    assert!(html.contains("id=\"usage\""));
+    for code in ["E001", "E101", "W401", "U502"] {
+        assert!(html.contains(&format!("id=\"{code}\"")), "{code} missing");
+    }
+    // No rule prose is invented here: the page quotes the registry, so an
+    // --explain line and the page entry for the same code agree.
+    let e = Command::new(bin())
+        .arg("--explain")
+        .arg("E002")
+        .output()
+        .unwrap();
+    let explain = String::from_utf8_lossy(&e.stdout);
+    let title = explain.lines().next().unwrap().split("  ").nth(1).unwrap();
+    assert!(
+        html.contains(title),
+        "page lacks the --explain title: {title}"
+    );
+}
+
+#[test]
+fn rules_html_styles_are_selectable_and_validated() {
+    let handbook = Command::new(bin())
+        .arg("--rules-html")
+        .arg("handbook")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&handbook.stdout).contains("style-handbook"));
+
+    let cards = Command::new(bin())
+        .arg("--rules-html")
+        .arg("cards")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&cards.stdout).contains("style-cards"));
+
+    let bad = Command::new(bin())
+        .arg("--rules-html")
+        .arg("nope")
+        .output()
+        .unwrap();
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("reference|handbook|cards"));
+}
+
+#[test]
+fn explain_links_the_reference_page() {
+    let one = Command::new(bin())
+        .arg("--explain")
+        .arg("W401")
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&one.stdout);
+    assert!(
+        out.contains("https://pmontp19.github.io/gedlint/rules.html#W401"),
+        "no deep link: {out}"
+    );
+
+    let all = Command::new(bin()).arg("--explain").output().unwrap();
+    let out = String::from_utf8_lossy(&all.stdout);
+    assert!(out.contains("https://pmontp19.github.io/gedlint/rules.html"));
+}

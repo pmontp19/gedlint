@@ -25,13 +25,16 @@ Validated against a real 544-individual MyHeritage tree kept outside this repo. 
 ```
 gedlint [--fix [--only CODE] [--unsafe]] [--config PATH | --no-config] [--baseline FILE | --write-baseline FILE] [--format text|json] [--severity error|warning|info] [--max N] [--verbose] [--no-color] [--quiet] <file.ged>
 gedlint --explain [CODE]
+gedlint --rules-html [reference|handbook|cards]
 ```
 
 Exit codes: 0 clean, 1 warnings, 2 errors.
 
 The default text output groups diagnostics by rule code (worst severity and most occurrences first, one line per code, `N occurrences (--verbose to list all)`) and ends with a `Categories:`/`Rules:` footer; `--verbose` lists every occurrence in the classic per-line format. The same grouping lives in the engine (`Report::grouped()`) and is shared with the GitHub Action's job summary and the web viewer, so the three cannot drift.
 
-`--explain W202` prints what the rule is about, what breaks in other genealogy programs when a file violates it and what to do instead; `--explain` alone lists every rule grouped by ruleset. A rule is addressable by code (`W202`) or by `<ruleset>/<name>` (`core/asymmetric-famc-chil`), the same two spellings the configuration accepts. Unknown rule: exit 2.
+`--explain W202` prints what the rule is about, what breaks in other genealogy programs when a file violates it and what to do instead; `--explain` alone lists every rule grouped by ruleset. A rule is addressable by code (`W202`) or by `<ruleset>/<name>` (`core/asymmetric-famc-chil`), the same two spellings the configuration accepts. Every `--explain` output ends with a deep link into the [rules reference page](https://pmontp19.github.io/gedlint/rules.html), the way ShellCheck links its wiki. Unknown rule: exit 2.
+
+`--rules-html` renders the whole registry as the static [rules reference page](https://pmontp19.github.io/gedlint/rules.html) (a `details`-per-rule lookup; `handbook` prints everything expanded behind a table of contents, `cards` as a badge-first grid). The GitHub Pages deploy regenerates it on every release via `scripts/build-web.sh`, so the page, the CLI and the web viewer all read one registry and cannot disagree.
 
 Configuration is a `gedlint.toml` looked up next to the linted file and in every parent directory: it sets presets and per-rule severities, addressed by code or `<ruleset>/<name>`. An unknown rule, preset or spelling is an error, never a silent no-op. `--config PATH` names the file explicitly; `--no-config` skips discovery and runs the built-ins only.
 
@@ -90,7 +93,7 @@ GitHub renders at most 10 annotations per severity per step; the job summary alw
 - **Linter, not just a validator**: categories (correctness / suspicious / style / upgrade), configurable severities, `--fix`. clippy/eslint model.
 - **Engine layout**: `src/lib.rs` is only the public API surface: re-exports plus the thin `lint_str` / `lint_bytes` / `lint_reader` entry points over the modules beside it (`diag` for the report, grouping and JSON, `parse` for the line grammar, `registry` for rule metadata, `rules` for the one streaming pass driving one module per domain, `fix` for structured safe repairs, `config` for `gedlint.toml`, `baseline` for the ratchet file). Nothing under `src/` except `main.rs` touches fs, process, env or net, so the engine compiles to WASM unchanged.
 - **`src/main.rs`**: thin CLI layer (hand-rolled args, zero dependencies, manual ANSI colors).
-- **`src/registry.rs`**: `RULES`, one `RuleMeta` per rule (code, name, ruleset, category, default severity, `fixable: Option<Applicability>`, title, why, remedy). Single source of truth for `--explain`, and for the config validator, the generated docs and the web viewer's finding card as they land. `tests/registry.rs` fails the build if a code the engine emits has no entry, or an entry names a code the engine never emits.
+- **`src/registry.rs`**: `RULES`, one `RuleMeta` per rule (code, name, ruleset, category, default severity, `fixable: Option<Applicability>`, title, why, remedy, `example: Option<(&str, &str)>` reserved for before/after snippets). Single source of truth for `--explain`, and for the config validator, the generated docs and the web viewer's finding card as they land. `tests/registry.rs` fails the build if a code the engine emits has no entry, or an entry names a code the engine never emits.
 - **Version**: detected via `HEAD.GEDC.VERS`; the rule set applies per version. `U5xx` rules flag the 5.5.1 to 7.0 upgrade path (see https://gedcom.io/migrate/).
 - **No global diagnostic cap**: every diagnostic is collected (a real file with 516 `_UPD` infos once hid errors behind a 200-item cap); output limiting is opt-in via `--max`.
 - **Tests**: one integration suite per area, no shared state: `tests/rules.rs` (minimal fixture per rule plus version behavior), `tests/cli.rs` and `tests/cli_fix.rs` (end-to-end: formats, exit codes, `--fix`/`.bak`, `--severity`, `--max`), `tests/config.rs`, `tests/fixes.rs`, `tests/baseline.rs`, `tests/registry.rs` and `tests/golden.rs` (vendored official corpora pinned: minimal/maximal 7.0, remarriage, same-sex, escapes, TGC551 CR/LF twins; provenance in `tests/fixtures/golden/README.md`).
@@ -110,7 +113,7 @@ The rule code's number block says what domain a rule belongs to, and the block i
 
 The registry (`RULES` in `src/registry.rs`) is the single source of truth for what each rule does, why it matters to consumer software and how to fix a finding; the tests keep the engine and the registry from drifting apart, and this README no longer duplicates them.
 
-Full entry for any code, in plain language: `gedlint --explain <CODE>` (`--explain` alone lists every rule by ruleset).
+Full entry for any code, in plain language: `gedlint --explain <CODE>` (`--explain` alone lists every rule by ruleset), or browse the [rules reference page](https://pmontp19.github.io/gedlint/rules.html).
 
 ## State of the art (research summary, Sep 2026)
 

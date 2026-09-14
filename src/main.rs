@@ -5,13 +5,17 @@ use std::process::ExitCode;
 
 use gedlint::{
     apply_baseline, baseline_from_report, baseline_to_json, fix_bytes_with, lint_reader_with,
-    parse_baseline, parse_config, Applicability, Category, Config, Diag, DiagGroup, FixSelection,
-    Report, RuleMeta, Severity,
+    parse_baseline, parse_config, rules_html, Applicability, Category, Config, Diag, DiagGroup,
+    DocStyle, FixSelection, Report, RuleMeta, Severity,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The file discovery looks for, walking up from the linted file.
 const CONFIG_FILE: &str = "gedlint.toml";
+/// The generated rules-reference page on GitHub Pages. `--explain` prints a
+/// deep link into it (anchor = rule code), the way ShellCheck's output links
+/// its wiki: the docs page and the terminal stay the same registry.
+const DOCS_URL: &str = "https://pmontp19.github.io/gedlint/rules.html";
 
 fn help() -> String {
     format!(
@@ -35,6 +39,8 @@ fn help() -> String {
          --no-color            no ANSI colors\n  \
         --quiet               summary + exit code only\n  \
         --explain [CODE]      explain a rule (no CODE: every rule by ruleset)\n  \
+        --rules-html [STYLE]  print the rules reference page to stdout\n                        \
+        (reference|handbook|cards; default reference)\n  \
         -h, --help            this help\n  \
         -V, --version         version\n\
         \n\
@@ -91,6 +97,7 @@ fn explain(what: Option<&str>) -> ExitCode {
             h,
             "gedlint --explain <CODE> prints why one rule exists and how to satisfy it."
         );
+        let _ = writeln!(h, "full reference: {DOCS_URL}");
         return ExitCode::from(0);
     };
     let found = match what.split_once('/') {
@@ -125,6 +132,7 @@ fn explain(what: Option<&str>) -> ExitCode {
     wrapped(&mut h, r.why);
     let _ = writeln!(h, "\nREMEDY");
     wrapped(&mut h, r.remedy);
+    let _ = writeln!(h, "\nreference: {DOCS_URL}#{}", r.code);
     ExitCode::from(0)
 }
 
@@ -248,6 +256,21 @@ fn main() -> ExitCode {
                     }
                     what => return explain(what.map(String::as_str)),
                 }
+            }
+            "--rules-html" => {
+                // The style is optional; a bare flag means the default
+                // reference layout. Anything unknown is a usage error.
+                let style = match args.get(i + 1) {
+                    None => Some(DocStyle::Reference),
+                    Some(a) if a.starts_with('-') => Some(DocStyle::Reference),
+                    Some(a) => DocStyle::parse(a),
+                };
+                let Some(style) = style else {
+                    eprintln!("--rules-html style must be reference|handbook|cards");
+                    return ExitCode::from(2);
+                };
+                print!("{}", rules_html(style));
+                return ExitCode::from(0);
             }
             "--format" => {
                 i += 1;
