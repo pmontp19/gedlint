@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/code-review.schema.json
+language: "en-US"
+tone_instructions: "Be concise, constructive, and adhere strictly to the rules in AGENTS.md."
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "src/**"
+      instructions: "Enforce zero external dependencies. The core engine must remain completely free of fs, process, env, and net I/O so it compiles to wasm32-unknown-unknown unchanged."
+    - path: "tests/**"
+      instructions: "Test names and comments must be in English. Real personal genealogy data must never be committed."
