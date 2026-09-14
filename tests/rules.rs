@@ -2166,3 +2166,228 @@ fn w704_sibling_spacing() {
     // Off by default.
     assert!(!has(&g, "W704"));
 }
+
+// ---------------------------------------------------------------------------
+// MyHeritage-style consistency checks (items 1-9).
+// ---------------------------------------------------------------------------
+
+/// Hygiene preset plus `[lints.thresholds]` overrides: the config the new
+/// consistency rules read their numeric limits from.
+fn thr_cfg(pairs: &str) -> Config {
+    parse_config(&format!(
+        "[lints]\npresets = [\"recommended\", \"hygiene\"]\n\n[lints.thresholds]\n{pairs}"
+    ))
+    .unwrap()
+}
+
+fn has_thr(input: &str, code: &str, pairs: &str) -> bool {
+    gedlint::lint_str_with(input, &thr_cfg(pairs))
+        .diags
+        .iter()
+        .any(|d| d.code == code)
+}
+
+#[test]
+fn w705_alive_but_too_old() {
+    // @I1@ born 1800, no death; the file's latest year is 1950.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Old /A/\n1 BIRT\n2 DATE 1800\n\
+          0 @I2@ INDI\n1 NAME Young /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n",
+    );
+    assert!(has_with(&g, "W705", "hygiene"));
+    // Off by default.
+    assert!(!has(&g, "W705"));
+    // A higher threshold silences it.
+    assert!(!has_thr(&g, "W705", "max-alive-years = 200\n"));
+    // DEAT Y (dead, date unknown) is known dead, never alive-too-old.
+    let y = wrap551(
+        "0 @I1@ INDI\n1 NAME Old /A/\n1 BIRT\n2 DATE 1800\n1 DEAT Y\n\
+          0 @I2@ INDI\n1 NAME Young /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n",
+    );
+    assert!(!has_with(&y, "W705", "hygiene"));
+    // Born 1900 with the same latest year: only 50, silent.
+    let young = wrap551(
+        "0 @I1@ INDI\n1 NAME Young /B/\n1 BIRT\n2 DATE 1900\n\
+          0 @I2@ INDI\n1 NAME Dead /C/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n",
+    );
+    assert!(!has_with(&young, "W705", "hygiene"));
+}
+
+#[test]
+fn w705_threshold_is_strict_and_facts_set_the_reference_year() {
+    // Exactly max-alive-years old: silent ("more than" in the docs, and
+    // the same boundary style as W301's >105).
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n",
+    );
+    assert!(!has_thr(&g, "W705", "max-alive-years = 50\n"));
+    // One year later in the file: 51, fires at the same threshold.
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1951\n",
+    );
+    assert!(has_thr(&g2, "W705", "max-alive-years = 50\n"));
+    // A dated fact pushes the file's present to 2020: the 1900-born person
+    // is then 120, flagged.
+    let modern = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 RESI\n2 DATE 2020\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n",
+    );
+    assert!(has_with(&modern, "W705", "hygiene"));
+}
+
+#[test]
+fn w310_ignores_citation_publication_dates() {
+    // A citation's publication year (RESI -> SOUR -> DATA -> DATE) is not a
+    // residence date and must not trip the generic fact check.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n\
+          1 RESI\n2 DATE 1940\n2 SOUR @S1@\n3 DATA\n4 DATE 1999\n\
+          0 @S1@ SOUR\n1 TITL T\n",
+    );
+    assert!(!has(&g, "W310"), "{:?}", codes(&g));
+    // The residence date itself is still checked: before the birth, fires.
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          1 RESI\n2 DATE 1890\n2 SOUR @S1@\n3 DATA\n4 DATE 1999\n\
+          0 @S1@ SOUR\n1 TITL T\n",
+    );
+    assert!(has(&g2, "W310"), "{:?}", codes(&g2));
+}
+
+#[test]
+fn w706_large_spouse_age_difference() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1950\n\
+          0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n",
+    );
+    assert!(has_with(&g, "W706", "hygiene"));
+    assert!(!has(&g, "W706"));
+    assert!(!has_thr(&g, "W706", "max-spouse-gap = 60\n"));
+    // Ten years apart: silent under the default 25.
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1910\n\
+          0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n",
+    );
+    assert!(!has_with(&ok, "W706", "hygiene"));
+}
+
+#[test]
+fn w707_married_too_young() {
+    // Ages 10 and 8 at the wedding.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+          0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1910\n",
+    );
+    assert!(has_with(&g, "W707", "hygiene"));
+    assert!(!has(&g, "W707"));
+    assert!(!has_thr(&g, "W707", "min-marriage-age = 5\n"));
+    // Adults: silent.
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+          0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1930\n",
+    );
+    assert!(!has_with(&ok, "W707", "hygiene"));
+}
+
+#[test]
+fn w310_generic_fact_before_birth_and_after_death() {
+    // Core rule, on by default: an occupation after the death ...
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n1 OCCU Baker\n2 DATE 1960\n",
+    );
+    assert!(has(&g, "W310"));
+    // ... and a residence before the birth.
+    let g2 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 RESI\n2 DATE 1890\n");
+    assert!(has(&g2, "W310"));
+    // Inexact dates prove nothing: silent.
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n1 OCCU Baker\n2 DATE ABT 1960\n",
+    );
+    assert!(!has(&ok, "W310"), "{:?}", codes(&ok));
+    // Inside the lifespan: silent.
+    let ok2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n1 CENS\n2 DATE 1940\n",
+    );
+    assert!(!has(&ok2, "W310"), "{:?}", codes(&ok2));
+}
+
+#[test]
+fn w708_siblings_same_first_name() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Joan /Puig/\n1 FAMC @F1@\n\
+          0 @I2@ INDI\n1 NAME Joan /Roso/\n1 FAMC @F1@\n\
+          0 @F1@ FAM\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(has_with(&g, "W708", "hygiene"));
+    assert!(!has(&g, "W708"));
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME Joan /Puig/\n1 FAMC @F1@\n\
+          0 @I2@ INDI\n1 NAME Pere /Roso/\n1 FAMC @F1@\n\
+          0 @F1@ FAM\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(!has_with(&ok, "W708", "hygiene"));
+}
+
+#[test]
+fn w709_disconnected_individual() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n");
+    assert!(has_with(&g, "W709", "hygiene"));
+    assert!(!has(&g, "W709"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n0 @F1@ FAM\n1 CHIL @I1@\n");
+    assert!(!has_with(&ok, "W709", "hygiene"));
+}
+
+#[test]
+fn w710_name_spacing_affixes_short_years_and_missing_sex() {
+    let dbl = wrap551("0 @I1@ INDI\n1 NAME Joan  /Puig/\n1 SEX M\n");
+    assert!(has_with(&dbl, "W710", "hygiene"));
+    let pre = wrap551("0 @I1@ INDI\n1 NAME Dr. Joan /Puig/\n1 SEX M\n");
+    assert!(has_with(&pre, "W710", "hygiene"));
+    let suf = wrap551("0 @I1@ INDI\n1 NAME Joan /Puig Jr/\n1 SEX M\n");
+    assert!(has_with(&suf, "W710", "hygiene"));
+    let yr = wrap551("0 @I1@ INDI\n1 NAME Joan /Puig/\n1 SEX M\n1 BIRT\n2 DATE 12 JAN 22\n");
+    assert!(has_with(&yr, "W710", "hygiene"));
+    let nosex = wrap551("0 @I1@ INDI\n1 NAME Joan /Puig/\n");
+    assert!(has_with(&nosex, "W710", "hygiene"));
+    // Clean record: silent.
+    let ok = wrap551("0 @I1@ INDI\n1 NAME Joan /Puig/\n1 SEX M\n1 BIRT\n2 DATE 12 JAN 1922\n");
+    assert!(
+        !has_with(&ok, "W710", "hygiene"),
+        "{:?}",
+        codes_with(&ok, "hygiene")
+    );
+}
+
+#[test]
+fn w711_children_different_surnames() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /Puig/\n1 FAMC @F1@\n\
+          0 @I2@ INDI\n1 NAME B /Roso/\n1 FAMC @F1@\n\
+          0 @F1@ FAM\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(has_with(&g, "W711", "hygiene"));
+    assert!(!has(&g, "W711"));
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME A /Puig/\n1 FAMC @F1@\n\
+          0 @I2@ INDI\n1 NAME B /Puig/\n1 FAMC @F1@\n\
+          0 @F1@ FAM\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(!has_with(&ok, "W711", "hygiene"));
+}
+
+#[test]
+fn w712_place_resembles_cause_or_date() {
+    let cause = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 DATE 1940\n2 PLAC Holocaust\n");
+    assert!(has_with(&cause, "W712", "hygiene"));
+    let date = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC 12 JAN 1900\n");
+    assert!(has_with(&date, "W712", "hygiene"));
+    assert!(!has(&date, "W712"));
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC Reus, Tarragona\n");
+    assert!(!has_with(&ok, "W712", "hygiene"));
+}

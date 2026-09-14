@@ -33,7 +33,7 @@ The default text output groups diagnostics by rule code (worst severity and most
 
 `--explain W202` prints what the rule is about, what breaks in other genealogy programs when a file violates it and what to do instead; `--explain` alone lists every rule grouped by ruleset. A rule is addressable by code (`W202`) or by `<ruleset>/<name>` (`core/asymmetric-famc-chil`), the same two spellings the configuration accepts. Unknown rule: exit 2.
 
-Configuration is a `gedlint.toml` looked up next to the linted file and in every parent directory: it sets presets and per-rule severities, addressed by code or `<ruleset>/<name>`. An unknown rule, preset or spelling is an error, never a silent no-op. `--config PATH` names the file explicitly; `--no-config` skips discovery and runs the built-ins only.
+Configuration is a `gedlint.toml` looked up next to the linted file and in every parent directory: it sets presets, per-rule severities (addressed by code or `<ruleset>/<name>`) and numeric consistency limits under `[lints.thresholds]` (`max-lifespan`, `min-parent-age`, `max-mother-age`, `max-father-age`, `duplicate-window`, `sibling-max-gap`, `max-alive-years`, `max-spouse-gap`, `min-marriage-age`). An unknown rule, preset, threshold or spelling is an error, never a silent no-op. `--config PATH` names the file explicitly; `--no-config` skips discovery and runs the built-ins only.
 
 For adopting gedlint on a legacy tree: `--write-baseline FILE` records every current finding (keyed by rule code plus a line-independent message fingerprint, with counts) and exits 0; `--baseline FILE` then fails only on findings beyond the recorded counts. Findings fixed later show up as ratchet progress, and re-running `--write-baseline` prunes them.
 
