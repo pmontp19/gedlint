@@ -2053,6 +2053,19 @@ fn w311_checks_every_union_and_honors_qualifiers() {
          0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE AFT 1890\n",
     );
     assert!(!has(&aft, "W311"), "{:?}", codes(&aft));
+    // Spouse-side uncertainty also suppresses: BEF birth, AFT death.
+    let sbef = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BEF 1900\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1880\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1890\n",
+    );
+    assert!(!has(&sbef, "W311"), "{:?}", codes(&sbef));
+    let sdaft = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE AFT 1940\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1950\n",
+    );
+    assert!(!has(&sdaft, "W311"), "{:?}", codes(&sdaft));
 }
 
 #[test]
@@ -2142,6 +2155,14 @@ fn w704_sibling_spacing() {
          0 @F1@ FAM\n1 WIFE @I0@\n1 CHIL @I1@\n1 CHIL @I2@\n",
     );
     assert!(!has_with(&yearly, "W704", "hygiene"));
+    // Surplus tokens are not exact dates: unmeasurable, silent.
+    let noisy = wrap551(
+        "0 @I0@ INDI\n1 NAME Mare /Y/\n\
+         0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1 JAN 1900\n1 FAMC @F1@\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE NOTE 1 JUN 1900\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 WIFE @I0@\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(!has_with(&noisy, "W704", "hygiene"));
     // Off by default.
     assert!(!has(&g, "W704"));
 }

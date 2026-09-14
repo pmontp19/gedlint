@@ -229,8 +229,11 @@ pub(crate) fn finish_cycles(diags: &mut Vec<Diag>, st: &Graph) {
         }
     }
     for v in parents.values_mut() {
+        // One edge per parent: the same father across two families shares
+        // one DFS edge (kept smallest line via sort), so a cycle reports
+        // once per back edge instead of once per family row.
         v.sort();
-        v.dedup();
+        v.dedup_by(|a, b| a.0 == b.0);
     }
     let mut nodes: Vec<String> = parents.keys().cloned().collect();
     nodes.sort();

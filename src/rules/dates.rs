@@ -143,10 +143,12 @@ pub(crate) fn date_ordinal(s: &str) -> Option<i64> {
         }
     }
     let toks: Vec<&str> = s.split_whitespace().collect();
-    let mi = toks.iter().position(|t| month_num(t).is_some())?;
-    let m = month_num(toks[mi])?;
-    let d: i64 = toks.get(mi.wrapping_sub(1)).and_then(|t| t.parse().ok())?;
-    let y: i64 = toks.get(mi + 1).and_then(|t| t.parse().ok())?;
+    if toks.len() != 3 {
+        return None;
+    }
+    let d: i64 = toks[0].parse().ok()?;
+    let m = month_num(toks[1])?;
+    let y: i64 = toks[2].parse().ok()?;
     if !(100..=2100).contains(&y) || !(1..=31).contains(&d) {
         return None;
     }

@@ -358,7 +358,8 @@ pub(crate) fn finish_marriage_sequence(diags: &mut Vec<Diag>, st: &People, graph
             ] {
                 if let Some((px, _)) = parent {
                     if let Some(Some(pb)) = st.indi_birth.get(px) {
-                        if *pb < 10000 && *mm < *pb && !marr_aft {
+                        let birth_bef = st.birth_is_bef.get(px).copied().unwrap_or(false);
+                        if *pb < 10000 && *mm < *pb && !marr_aft && !birth_bef {
                             diags.push(Diag::new(
                                 "W311",
                                 Category::Suspicious,
@@ -372,7 +373,8 @@ pub(crate) fn finish_marriage_sequence(diags: &mut Vec<Diag>, st: &People, graph
                         }
                     }
                     if let Some(Some(pd)) = st.indi_death.get(px) {
-                        if *pd < 10000 && *mm > *pd && !marr_bef {
+                        let death_aft = st.death_is_aft.get(px).copied().unwrap_or(false);
+                        if *pd < 10000 && *mm > *pd && !marr_bef && !death_aft {
                             diags.push(Diag::new(
                                 "W311",
                                 Category::Suspicious,
@@ -404,12 +406,12 @@ pub(crate) fn finish_spouse_sex(diags: &mut Vec<Diag>, st: &People, graph: &Grap
         let husb_f = st
             .indi_sex
             .get(husb)
-            .map(|(s, _)| s.trim() == "F")
+            .map(|(s, _)| s.trim().eq_ignore_ascii_case("F"))
             .unwrap_or(false);
         let wife_m = st
             .indi_sex
             .get(wife)
-            .map(|(s, _)| s.trim() == "M")
+            .map(|(s, _)| s.trim().eq_ignore_ascii_case("M"))
             .unwrap_or(false);
         if husb_f && wife_m {
             diags.push(Diag::new(
