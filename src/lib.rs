@@ -8,7 +8,8 @@
 //! Layout: `diag` holds the output types, `parse` the line grammar, `rules`
 //! the single streaming pass and the rule groups it drives, `fix` the safe
 //! `--fix` repairs as selectable `Edit`s, `registry` the rule metadata table
-//! every consumer reads, `config` the pure `gedlint.toml` parser (GEDCOM has
+//! every consumer reads, `rulesdoc` the static rules-reference page rendered
+//! from that table, `config` the pure `gedlint.toml` parser (GEDCOM has
 //! no comment syntax, so config is the only suppression mechanism), `wasm`
 //! the C ABI the web viewer drives, and `baseline` the count-based ratchet
 //! file for adopting a legacy tree (RFC 014 section 5), whose fingerprints
@@ -27,6 +28,7 @@ mod hash;
 mod parse;
 mod registry;
 mod rules;
+mod rulesdoc;
 pub mod wasm;
 
 pub use baseline::{
@@ -40,7 +42,10 @@ pub use fix::{
     Applicability, Edit, FixSelection,
 };
 pub use parse::Version;
-pub use registry::{rule, rule_by_name, rules_to_json, rulesets, RuleMeta, RULES};
+pub use registry::{
+    rule, rule_by_name, rules_to_json, rules_to_json_for, rulesets, RuleMeta, RULES,
+};
+pub use rulesdoc::{rules_html, DocStyle};
 
 use parse::{normalize_newlines, scan_head};
 use rules::encoding::encoding_diags;

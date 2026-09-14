@@ -465,3 +465,21 @@ fn fixable_matches_the_repairs_fix_really_carries() {
         applied
     );
 }
+
+#[test]
+fn rules_json_carries_the_example_field() {
+    // All None today: the field is reserved for the before/after snippets
+    // the documentation page and finding card will render. The JSON must
+    // already be valid for both shapes, or filling one in breaks consumers.
+    for r in gedlint::RULES {
+        assert!(r.example.is_none(), "{} already has an example", r.code);
+    }
+    let none_shape = "\"example\":null";
+    assert!(gedlint::rules_to_json().contains(none_shape));
+
+    let mut rules = gedlint::RULES.to_vec();
+    rules[0].example = Some(("0 HEAD", "0 HEAD"));
+    let json = gedlint::rules_to_json_for(&rules);
+    let expected = format!("{{\"before\":\"{}\",\"after\":\"{}\"}}", "0 HEAD", "0 HEAD");
+    assert!(json.contains(&expected), "json: {json}");
+}

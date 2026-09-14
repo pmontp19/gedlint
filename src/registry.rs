@@ -37,6 +37,10 @@ pub struct RuleMeta {
     pub why: &'static str,
     /// What the user should do about it.
     pub remedy: &'static str,
+    /// Optional (before, after) GEDCOM snippet pair for the documentation
+    /// page and the web viewer's finding card. `None` until the examples
+    /// are written, rule by rule; the renderers must handle both.
+    pub example: Option<(&'static str, &'static str)>,
 }
 
 /// Every rule the engine can emit, sorted by code.
@@ -49,6 +53,7 @@ pub const RULES: &[RuleMeta] = &[
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: Some(Applicability::Safe),
+        example: None,
         title: "Start every line with a level number, one deeper at most",
         why: "The level number at the start of a line is the only thing that says what the line belongs to. \
 A line without one (a note or a source transcription that wrapped onto its own line is the usual cause) \
@@ -67,6 +72,7 @@ For a level jump, add the missing intermediate line or lower the level so it gro
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Open the file with HEAD and close it with TRLR",
         why: "A GEDCOM file is an envelope: HEAD first, TRLR last. Readers take the version and the character \
 set from the header before anything else, so a file that starts with a record or ends without TRLR is \
@@ -84,6 +90,7 @@ into one file is the usual origin.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Give every record its own identifier",
         why: "The @I123@ identifier is how one record points at another. When two records share it, every \
 pointer that names it becomes ambiguous and importers resolve it to whichever of the two they read last: \
@@ -100,6 +107,7 @@ and export again.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Write identifiers as @XREF@, with no spaces",
         why: "An identifier must be an @...@ token with no spaces and no nesting. A malformed one matches \
 nothing, so every link into that record breaks at once: the person keeps their name but arrives in the \
@@ -116,6 +124,7 @@ where this normally comes from.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: Some(Applicability::Safe),
+        example: None,
         title: "Anchor every CONT and CONC to the line it continues",
         why: "CONT and CONC continue the value of the line directly above them, one level up, and they never \
 nest inside each other. One that hangs from nothing, or from another CONT or CONC, continues nothing: \
@@ -136,6 +145,7 @@ place, because only you know which value it was meant to continue.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Drop CONC from 7.0 files and carry long values on CONT",
         why: "GEDCOM 7 removed CONC and reserved the tag (spec 1.3), so a 7.0 reader is entitled to refuse the \
 file outright or to skip the line. Skipping it costs you the tail of the value: a long note or place name \
@@ -152,6 +162,7 @@ other valid answer if you are not migrating yet.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Keep the one-per-record fields to a single instance",
         why: "The specification allows exactly one SEX per person, one HUSB and one WIFE per family, one GEDC \
 in the header, and one of each detail such as DATE, PLAC or CAUS inside a given event block. A second copy is almost always a merge \
@@ -168,6 +179,7 @@ own block. A second marriage is a second MARR event, not a second DATE inside th
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Supply the substructures the specification requires",
         why: "Some lines are not optional. The header needs GEDC with its VERS, which is how a reader learns \
 whether the file is 5.5.1 or 7.0; in 7.0 a custom EVEN or FACT needs a TYPE and an LDS ordinance STAT \
@@ -184,6 +196,7 @@ under each custom EVEN or FACT, and a DATE under each ordinance STAT.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: Some(Applicability::Safe),
+        example: None,
         title: "Keep every character whole and the file in valid UTF-8",
         why: "MyHeritage cuts long values at a fixed byte count, and when the cut falls inside an accented \
 character its two halves end up on different CONC lines. What is left is not valid UTF-8: where \
@@ -201,6 +214,7 @@ whole file is in a legacy encoding instead, convert it to UTF-8, or declare the 
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Point only at records that exist in the same file",
         why: "A pointer such as \"1 FAMC @F12@\" promises that @F12@ is in the file. When it is not, the link \
 is simply lost on import: the child arrives without parents, the citation without its source, the person \
@@ -218,6 +232,7 @@ export, re-export the whole tree instead.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Break the loop where a person becomes their own ancestor",
         why: "A directed cycle through parent links (a child attached as their own grandparent after a bad merge or a mistyped identifier) has no valid reading: chart generators recurse forever or stop at an arbitrary depth, relationship calculators report contradictory paths, and exporters either loop or drop whole branches without warning.",
         remedy: "Follow the chain named in the message and unlink the wrong parent or child connection in your genealogy program, then export again. When two records describe the same person, merge them instead of linking them as parent and child.",
@@ -230,6 +245,7 @@ export, re-export the whole tree instead.",
         default_severity: Severity::Info,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Replace the 5.5.1 constructs that GEDCOM 7.0 dropped",
         why: "These lines are valid 5.5.1 and are not errors today: they only have no home in GEDCOM 7. RELA \
 became the enumerated ROLE, HEAD.CHAR disappeared because 7.0 is always UTF-8, PEDI values are uppercase, \
@@ -250,6 +266,7 @@ nothing has to change while you stay on 5.5.1.",
         default_severity: Severity::Info,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Declare the vendor extension tags that a 7.0 file carries",
         why: "Tags beginning with an underscore are private extensions: _MARNM for a married name, _UPD for \
 MyHeritage's last-changed stamp, _APID for an Ancestry source link. They survive into 7.0 as undocumented \
@@ -267,6 +284,7 @@ married name fits a second \"1 NAME\" with \"2 TYPE MARRIED\" under it.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Keep the bytes plain: no BOM, one line ending, no controls",
         why: "A byte-order mark in front of \"0 HEAD\" stops many 5.5.x readers from recognizing the first \
 line at all, so the file is rejected as malformed (7.0 recommends the BOM, and it is not flagged there). \
@@ -285,6 +303,7 @@ that is whole-file preprocessing, not a repair of this rule.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Keep FAMC and CHIL pointing back at each other",
         why: "A parent-child link is written twice: the child says \"1 FAMC @F1@\" and the family answers with \
 \"1 CHIL @I1@\". With only one half present, what you see depends on which half your program reads first: \
@@ -302,6 +321,7 @@ program normally restores both halves at once.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Check deaths before births and lifespans over 105 years",
         why: "A death before a birth, or a life longer than 105 years, is nearly always a mistyped year, a \
 date read from the wrong column of a parish register, or two different people merged into one. Nothing \
@@ -319,6 +339,7 @@ wrong.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Review same-name people born within two years of each other",
         why: "Two records with the same name and birth years two years apart or less are the classic result \
 of importing the same branch twice, or of a merge that matched nothing. Left alone they split one \
@@ -336,6 +357,7 @@ happens constantly, nothing needs to change.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Check parents implausibly young or old at a child's birth",
         why: "A parent under 13, a mother over 50 or a father over 70 at a child's birth usually means the \
 child is attached to the wrong generation, most often a grandparent linked as a parent. The tree then has one generation too few, and \
@@ -352,6 +374,7 @@ rather than assume the link is wrong.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Check children born before the marriage date of their family",
         why: "This is often simply true and needs no change at all. It is flagged because the other common \
 cause is a wrong marriage year, or a child of an earlier union attached to the later family, which puts \
@@ -368,6 +391,7 @@ sits where they belong.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Use the SEX values the version allows: M, F, U, and X in 7.0",
         why: "SEX carries one letter: M, F or U in 5.5.1, plus X in 7.0. Anything else, a whole word or a \
 blank value included, is not understood, so importers store U instead. The person then shows up with a \
@@ -383,6 +407,7 @@ you want to say in words about a person's gender belongs in a NOTE, not in this 
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Spell enumerated values the way the specification lists them",
         why: "Fields such as PEDI, ROLE, QUAY, RESN, NAME.TYPE, FAMC.STAT, an ordinance STAT, HEAD.CHAR and \
 the media type of a FILE take their value from a fixed list. A value outside the list is dropped rather \
@@ -400,6 +425,7 @@ wording in a PHRASE beside it.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Reconcile single events recorded twice with different dates",
         why: "A person is born, christened, baptized, confirmed and buried once each, and a given marriage \
 or divorce happens on a single date, so one of those events twice with two different dates is the \
@@ -418,6 +444,7 @@ own event block with its own PLAC and SOUR.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Check children born after a parent died",
         why: "A birth after the mother's death, or more than a year after the father's death, usually means the child is attached to the wrong parents or a death year lost a digit. Nothing breaks on import, but every descendant timeline and relationship path drawn below that link inherits the wrong household.",
         remedy: "Compare the child's birth date against both parents' death dates in the sources. Fathers allow one year of slack for a posthumous birth; anything beyond that, or any birth after the mother's death, belongs to another family or needs a corrected year.",
@@ -430,6 +457,7 @@ own event block with its own PLAC and SOUR.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Flag children older than their own parents",
         why: "A child born in the same year as a parent or earlier cannot be that couple's child: the link almost always joins two generations, typically a grandparent recorded as a parent. Charts built from it lose a generation and every relationship below that point is computed one step wrong.",
         remedy: "Move the child to the family where they belong, usually one generation down, or correct the birth year that carries the transposed digit. W303 already warns on wide gaps; this error marks the gap that cannot happen.",
@@ -442,6 +470,7 @@ own event block with its own PLAC and SOUR.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Keep baptism, burial and death in chronological order",
         why: "A christening or baptism before the birth, a burial before the death, or a baptism after the death is nearly always a date attached to the wrong event or the wrong person after a merge. Timelines and age calculations built from these dates place the person's whole life in the wrong order.",
         remedy: "Open the person and compare each event date against its source, moving the stray date to the event it belongs to. Approximate, ranged, BEF and AFT qualified dates are not flagged, because an inexact date near a boundary proves nothing.",
@@ -454,6 +483,7 @@ own event block with its own PLAC and SOUR.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Keep marriages inside both spouses' lifetimes",
         why: "A marriage dated before either spouse was born or after either spouse died usually attaches the wrong couple to the family or carries a marriage year from a different union. Family reports then show a household that could never have existed, with children assigned to it.",
         remedy: "Verify the marriage date and that the two spouses are the right pair. When the date belongs to an earlier or later union, record that union as its own family instead of reusing this one. Each marriage in the family is checked, and BEF or AFT qualified dates are not flagged against the side their uncertainty covers.",
@@ -466,6 +496,7 @@ own event block with its own PLAC and SOUR.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Match HUSB and WIFE roles to the recorded sex",
         why: "A family whose HUSB is recorded female while its WIFE is recorded male is usually a swapped pair from manual editing or a bad import. Programs that list sons and daughters or draw pedigree symbols from these two fields then place the parents on the wrong sides of every chart. A single mismatched side alone is never flagged, because a same-sex marriage is legitimately recorded with two men or two women in these slots.",
         remedy: "Swap the two spouse links back, or correct the SEX value that is wrong. Records without a usable SEX value are never flagged, so only a jointly inverted pair needs review.",
@@ -478,6 +509,7 @@ own event block with its own PLAC and SOUR.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Keep URLs out of PLAC and put the link where links belong",
         why: "MyHeritage writes the address of its place catalogue into the place name itself. The place then \
 imports as the literal text \"Sabadell, https://...\", which matches nothing that anyone else wrote for \
@@ -495,6 +527,7 @@ Barcelona, Spain\".",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Write NAME and DATE values in the shape the format defines",
         why: "A surname is delimited by a pair of slashes and a date is \"DD MMM YYYY\" with an English \
 three-letter month. With a slash missing the importer reads the whole string as a given name, so the \
@@ -513,6 +546,7 @@ the original wording in a PHRASE or a NOTE when it matters.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
+        example: None,
         title: "Store notes as plain text, not as HTML",
         why: "Exporters that keep notes in a rich-text editor write the markup out exactly as it stands, so \
 <br>, &nbsp; and whole <notexml> wrappers end up inside the note. GEDCOM notes are plain text: the \
@@ -530,6 +564,7 @@ CONT line and a &nbsp; becomes an ordinary space. Delete the wrapper elements en
         default_severity: Severity::Warning,
         default_enabled: false,
         fixable: Some(Applicability::Safe),
+        example: None,
         title: "Remove the single comma separating two surnames",
         why: "Iberian surnames are space-separated; the comma is an export artifact that triggers reverse-indexing in Anglo-centric software. \
 The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and reports a record once: the same surname written wrong in both places is one defect, not two.",
@@ -543,6 +578,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Warning,
         default_enabled: false,
         fixable: None,
+        example: None,
         title: "Review married names imported into the _MARNM tag",
         why: "Women do not take a husband's surname in Iberian and Latin American naming, so its presence is almost always an import artifact from Anglo-centric software.",
         remedy: "Verify the name. If it is an artifact, delete the `_MARNM` tag. This requires manual review because deleting the tag destroys data.",
@@ -555,6 +591,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Info,
         default_enabled: false,
         fixable: None,
+        example: None,
         title: "Expand abbreviated given names",
         why: "Abbreviated given names like Mª, Ma., Fco., Jph. are ambiguous and make searching difficult in consumer software, as users rarely guess the exact abbreviation used when searching for a person in an index. \
 The rule reads the whole \"1 NAME\" value and the \"2 GIVN\" subtag, and reports a record once.",
@@ -568,6 +605,7 @@ The rule reads the whole \"1 NAME\" value and the \"2 GIVN\" subtag, and reports
         default_severity: Severity::Info,
         default_enabled: false,
         fixable: None,
+        example: None,
         title: "Remove notes, occupations or nicknames from name fields",
         why: "Consumer software indexing names cannot separate notes or occupations from actual names. A parenthetical, asterisk or digit breaks the name index. \
 The rule reads \"1 NAME\" and the \"2 SURN\" subtag, and reports a record once.",
@@ -581,6 +619,7 @@ The rule reads \"1 NAME\" and the \"2 SURN\" subtag, and reports a record once."
         default_severity: Severity::Info,
         default_enabled: false,
         fixable: Some(Applicability::MaybeIncorrect),
+        example: None,
         title: "Avoid all-caps surnames",
         why: "Fully capitalized surnames are a long-standing genealogical convention rather than a defect, and title casing is lossy for MCDONALD, O'BRIEN, DE LA O and most Iberian particles. \
 The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and reports a record once; a given name is out of scope, so the repair never title-cases one.",
@@ -594,6 +633,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Info,
         default_enabled: false,
         fixable: Some(Applicability::Safe),
+        example: None,
         title: "Remove doubled commas from place names",
         why: "Doubled commas inside PLAC break the place index in consumer software, causing near-duplicates and breaking map lookups completely.",
         remedy: "Remove the extra commas from the place name. The automatic repair `gedlint --fix` does this for you automatically.",
@@ -606,6 +646,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Warning,
         default_enabled: false,
         fixable: None,
+        example: None,
         title: "Review siblings born less than eight months apart",
         why: "Two children of the same mother born one to eight months apart, on exact dates, are in practice either one person entered twice with slightly different dates or children of two different unions merged into a single family. Left alone, the duplicate splits sources across two pages and the merged household misleads every sibling chart.",
         remedy: "Compare the two birth dates against the parish register. Merge the pair when they are one person, or split the later union into its own family when two mothers were merged. Twins sharing the same day are never flagged, and families with no recorded mother are skipped because spacing cannot be measured without her.",
@@ -618,7 +659,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Warning,
         default_enabled: false,
         fixable: None,
-        title: "Mark very old people without a death date as deceased",
+        example: None,        title: "Mark very old people without a death date as deceased",
         why: "A person born more than a century before the newest date in the file and still without a death date is almost always dead with the death missing from the record. While they stay listed as living, every search for the very old and every count of the living in your program includes people who cannot be alive, and record hints keep arriving for them.",
         remedy: "Find the death date in the parish register or the civil records and add it, or record the person as deceased when the exact date is unknown. When the person really is alive and exceptional, leave the record as it stands: this check asks for verification, not for invention. The age limit is the max-alive-years threshold.",
     },
@@ -630,7 +671,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Warning,
         default_enabled: false,
         fixable: None,
-        title: "Check spouses whose births are decades apart",
+        example: None,        title: "Check spouses whose births are decades apart",
         why: "Spouses born a generation or more apart are usually a mistyped year or a second union recorded on the first family: one birth year of 1991 instead of 1919 moves a whole household by seventy years. Programs draw the couple side by side, so the mistake hides in plain sight until a descendant chart makes the gap visible.",
         remedy: "Compare both birth years against their sources and check whether the marriage belongs to an earlier or later union of one of the spouses. Adjust the max-spouse-gap threshold in [lints.thresholds] when your tree legitimately holds wide gaps, so only the certain errors keep reporting.",
     },
@@ -642,7 +683,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Warning,
         default_enabled: false,
         fixable: None,
-        title: "Check marriages before either spouse grew up",
+        example: None,        title: "Check marriages before either spouse grew up",
         why: "A marriage dated when a spouse was still a child usually carries the wrong marriage year or attaches the wrong couple to the family: parish registers sometimes date the banns where the marriage belongs. The household your program prints from that date joins two people who could not yet have married, and any children attached to it inherit the wrong start.",
         remedy: "Verify the marriage date and that the two spouses are the right pair, moving an early union to its own family when it belongs there. A spouse who died in childhood is flagged the same way. The minimum age is the min-marriage-age threshold, so raise it or lower it to match what your sources consider marriageable.",
     },
@@ -654,7 +695,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Info,
         default_enabled: false,
         fixable: None,
-        title: "Review siblings who share a first name",
+        example: None,        title: "Review siblings who share a first name",
         why: "Two children of one family with the same first name are often the same person entered twice with slightly different dates, splitting sources and photographs across two half-empty pages. A namesake after an infant death is the legitimate counterpart, which happens constantly and is why this finding stays a notice rather than a warning.",
         remedy: "Compare the two records, including death dates: merge them in your genealogy program when they are one person, and leave them alone when the elder namesake died young. Nothing needs to change for cultural naming patterns that reuse names deliberately.",
     },
@@ -666,7 +707,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Info,
         default_enabled: false,
         fixable: None,
-        title: "Reconnect or remove people linked to no family",
+        example: None,        title: "Reconnect or remove people linked to no family",
         why: "A person with no parents, spouses or children floats outside every pedigree, descendant chart and relationship calculation your program draws: they are invisible in all of them. Detached leftovers usually arrive when a branch is deleted or moved and one record stays behind, exactly what this check collects.",
         remedy: "Attach the person to their family, or delete the leftover record when it duplicates someone already in the tree. Forests of genuinely separate trees in one file can silence this check in [lints.rules] without losing anything else.",
     },
@@ -678,7 +719,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Info,
         default_enabled: false,
         fixable: None,
-        title: "Clean spacing, affixes, short years and missing sex in names",
+        example: None,        title: "Clean spacing, affixes, short years and missing sex in names",
         why: "Double spaces, leading blanks, a Dr. inside the given name or a Jr. inside the surname break name indexes: searches miss the person unless the user guesses the exact quirk. A two-digit birth year sorts nowhere and a missing sex drops the person from every sons and daughters listing, so these small defects share one check.",
         remedy: "Remove the extra spaces, move prefixes and suffixes to their own fields, write all four year digits, and record M, F or U for every person. Each half of this check is independent: fix what is wrong in your sources and leave the rest, since house names and particles are legitimate text.",
     },
@@ -690,7 +731,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Info,
         default_enabled: false,
         fixable: None,
-        title: "Review families whose children carry different surnames",
+        example: None,        title: "Review families whose children carry different surnames",
         why: "Children of one household with different surnames often mean a child of an earlier union recorded on the later family, or a second family merged into the first: every sibling chart printed from that household then mixes two lines. Remarriage, adoption and double surnames make this common enough to stay a notice, but the split is worth one look.",
         remedy: "Check which union each child belongs to and move misplaced children to their own family, or correct the surname that carries the typo. When the mix is real, for example after a remarriage, leave it and silence the single finding in the baseline.",
     },
@@ -702,7 +743,7 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
         default_severity: Severity::Info,
         default_enabled: false,
         fixable: None,
-        title: "Move causes of death and dates out of place names",
+        example: None,        title: "Move causes of death and dates out of place names",
         why: "A death place holding Holocaust or died of pneumonia belongs in the cause field, not on the map: geocoders fail on it and place indexes fill with entries no other tree shares. A place holding a year or a month is the mirror mistake, a date typed into the wrong field that then never lands on any timeline.",
         remedy: "Move the cause into CAUS and the date into DATE, leaving the place as a person would write it. Only a human knows which field the text belongs in, so this check never repairs itself: correct the line by hand.",
     },
@@ -738,9 +779,16 @@ pub fn rulesets() -> Vec<&'static str> {
 /// `--explain` cannot drift. Same serialization conventions as
 /// `Report::to_json`: severity strings, `escape_json` for text.
 pub fn rules_to_json() -> String {
-    let mut out = String::with_capacity(RULES.len() * 640);
+    rules_to_json_for(RULES)
+}
+
+/// The registry as JSON over a given slice; `rules_to_json` is the shipped
+/// form. Parameterized so tests can pin the JSON shape of a filled-in
+/// example without inventing records in the shipped table.
+pub fn rules_to_json_for(rules: &[RuleMeta]) -> String {
+    let mut out = String::with_capacity(rules.len() * 640);
     out.push('[');
-    for (i, r) in RULES.iter().enumerate() {
+    for (i, r) in rules.iter().enumerate() {
         if i > 0 {
             out.push(',');
         }
@@ -771,7 +819,18 @@ pub fn rules_to_json() -> String {
         out.push_str(&escape_json(r.why));
         out.push_str("\",\"remedy\":\"");
         out.push_str(&escape_json(r.remedy));
-        out.push_str("\"}");
+        out.push_str("\",\"example\":");
+        match r.example {
+            None => out.push_str("null"),
+            Some((before, after)) => {
+                out.push_str("{\"before\":\"");
+                out.push_str(&escape_json(before));
+                out.push_str("\",\"after\":\"");
+                out.push_str(&escape_json(after));
+                out.push_str("\"}");
+            }
+        }
+        out.push('}');
     }
     out.push(']');
     out

@@ -8,6 +8,9 @@
 #   web/example.js       the broken sample tree, base64-embedded for the
 #                        same reason (the "Try an example" button must not
 #                        hit the network either).
+#   web/rules.html       the rules reference page (docs-rules-page),
+#                        rendered from RULES by the CLI itself, so the page
+#                        and --explain cannot drift.
 #
 # Usage: scripts/build-web.sh [path-to-gedlint.wasm]
 # Default path is the cdylib from
@@ -45,3 +48,12 @@ fi
 
 echo "web/gedlint-wasm.js: $(wc -c < web/gedlint-wasm.js) bytes"
 echo "web/example.js:      $(wc -c < web/example.js) bytes"
+
+# The rules reference page comes from the CLI, so the registry stays the
+# only place rule prose lives. The host binary is not built by the wasm
+# step above; if it is missing, build it.
+if [ ! -x target/release/gedlint ]; then
+  cargo build --release --quiet
+fi
+target/release/gedlint --rules-html > web/rules.html
+echo "web/rules.html:      $(wc -c < web/rules.html) bytes"

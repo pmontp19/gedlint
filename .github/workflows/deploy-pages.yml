@@ -3,7 +3,9 @@ name: Deploy web viewer
 # Builds the wasm engine and ships the static site in web/ to GitHub Pages
 # (issue 15). No npm, no bundler: scripts/build-web.sh embeds the .wasm and
 # the sample tree as base64 scripts so the page can keep its strict CSP
-# (connect-src 'none') without fetching anything.
+# (connect-src 'none') without fetching anything. The same script renders
+# web/rules.html from the rule registry via the CLI (docs-rules-page), so
+# the docs and --explain cannot drift.
 
 on:
   push:
@@ -43,7 +45,8 @@ jobs:
           else
             echo "wasm-opt not found; shipping the plain release build"
           fi
-      - name: Embed engine and sample tree
+      - name: Embed engine, sample tree, rules page
+        # Also builds the host CLI once to render web/rules.html from RULES.
         run: scripts/build-web.sh
       - name: Smoke-check the engine exports
         run: |
