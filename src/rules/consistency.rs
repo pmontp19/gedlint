@@ -727,13 +727,16 @@ fn year_token(t: &str) -> bool {
     !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && year_of(digits).is_some()
 }
 
-/// A numeric day/month/year token ("3/4/1950", "1950-04-01"): only
-/// digits and two separators, with a year inside.
+/// A numeric day/month/year token ("3/4/1950", "1950-04-01"): exactly
+/// three non-empty all-digit fields, one of them a plausible year.
+/// "3//1950" and "1950--" have empty fields and stay silent.
 fn numeric_dmy_token(t: &str) -> bool {
-    t.chars()
-        .all(|c| c.is_ascii_digit() || c == '/' || c == '-')
-        && t.matches(['/', '-']).count() == 2
-        && t.split(['/', '-']).any(year_token)
+    let fields: Vec<&str> = t.split(['/', '-']).collect();
+    fields.len() == 3
+        && fields
+            .iter()
+            .all(|f| !f.is_empty() && f.chars().all(|c| c.is_ascii_digit()))
+        && fields.iter().any(|f| year_of(f).is_some())
 }
 
 /// True when a PLAC value actually parses as a date instead of merely

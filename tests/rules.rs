@@ -2415,4 +2415,15 @@ fn w712_street_address_leading_house_number_stays_silent() {
     assert!(has_with(&tilde, "W712", "hygiene"));
     let dmy = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC 3/4/1950\n");
     assert!(has_with(&dmy, "W712", "hygiene"));
+    // Malformed numeric tokens are not dates either.
+    for bad in ["3//1950", "1950--"] {
+        let g = wrap551(&format!(
+            "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n2 PLAC {bad}\n"
+        ));
+        assert!(
+            !has_with(&g, "W712", "hygiene"),
+            "{bad} fired: {:?}",
+            codes_with(&g, "hygiene")
+        );
+    }
 }
