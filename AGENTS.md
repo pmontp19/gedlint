@@ -21,7 +21,7 @@ exists. Numbers live where they are enforced.
 - Every repair is gated on configuration, so a rule that reports nothing repairs nothing. `tests/fixes.rs` ties the two surfaces together; keep it that way.
 - No global diagnostic cap. A real export can bury errors under hundreds of vendor-tag infos, so limit output only via `--max`.
 - Rule documentation lives once, in `src/registry.rs`. The CLI's `--explain` and the web viewer both render it, so they cannot disagree. Do not write rule prose anywhere else.
-- This repo is private. Commit and push after every work unit.
+- This repo is public. Commit and push after every work unit.
 
 ## Quality gates
 
