@@ -222,13 +222,13 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
             events::check_detail_singletons(&mut diags, &mut events, l, lvl, &rec);
         }
         upgrade::check_rela_sub(&mut diags, l, version);
-        individuals::record_sub_date(&mut people, l, &cur_sub, &cur);
-        // The MyHeritage-style consistency checks read a DATE against the
-        // birth/death index and a PLAC against cause/date wordlists, but
+        // Both the person/family chronology readers (W301-W304, W308) and the
+        // MyHeritage-style consistency checks (W310) read a DATE or PLAC, but
         // only when the line hangs directly off the level-1 fact: a DATE
-        // under RESI -> SOUR -> DATA is the citation's publication year,
-        // not a residence date, and must not reach W310.
+        // under BIRT/RESI -> SOUR -> DATA is the citation's publication or
+        // access date, not the event date, and must not reach W301/W308/W310.
         if parent_tag == cur_sub {
+            individuals::record_sub_date(&mut people, l, parent_tag, &cur);
             if l.tag == "DATE" {
                 if let Some((xref, _)) = cur.as_ref() {
                     consistency.record_fact(xref, &cur_sub, &l.value, l.no);
