@@ -189,6 +189,105 @@ pub(crate) fn finish_refs(diags: &mut Vec<Diag>, st: &Graph) {
     }
 }
 
+/// End of run: E202 ancestral cycle (an individual is their own ancestor).
+/// O(V+E) DFS over child -> parent edges built from FAMC/CHIL plus the
+/// HUSB/WIFE of each family. Reports once per back edge, at the FAMC line
+/// when the link exists, else at the CHIL line, so output is deterministic.
+pub(crate) fn finish_cycles(diags: &mut Vec<Diag>, st: &Graph) {
+    use std::collections::{HashMap, HashSet};
+    // child -> [(parent, line)].
+    let mut parents: HashMap<String, Vec<(String, usize)>> = HashMap::new();
+    for (child, fams) in &st.indi_famc {
+        parents.entry(child.clone()).or_default();
+        for (fam, fam_line) in fams {
+            for slot in [&st.fam_husb, &st.fam_wife] {
+                if let Some((px, _)) = slot.get(fam) {
+                    if st.records.contains_key(px) {
+                        parents
+                            .entry(child.clone())
+                            .or_default()
+                            .push((px.clone(), *fam_line));
+                    }
+                }
+            }
+        }
+    }
+    for (fam, chils) in &st.fam_chil {
+        let ps: Vec<String> = [&st.fam_husb, &st.fam_wife]
+            .iter()
+            .filter_map(|slot| slot.get(fam).map(|(px, _)| px.clone()))
+            .filter(|px| st.records.contains_key(px))
+            .collect();
+        for (child, chil_line) in chils {
+            parents.entry(child.clone()).or_default();
+            for px in &ps {
+                let v = parents.entry(child.clone()).or_default();
+                if !v.iter().any(|(p, _)| p == px) {
+                    v.push((px.clone(), *chil_line));
+                }
+            }
+        }
+    }
+    for v in parents.values_mut() {
+        v.sort();
+        v.dedup();
+    }
+    let mut nodes: Vec<String> = parents.keys().cloned().collect();
+    nodes.sort();
+    // 0 = unvisited, 1 = on stack, 2 = done.
+    let mut color: HashMap<String, u8> = nodes.iter().map(|n| (n.clone(), 0)).collect();
+    let mut stack: Vec<String> = Vec::new();
+    let mut in_stack: HashSet<String> = HashSet::new();
+    // Iterative DFS from each root in sorted order. The explicit stack
+    // holds (node, next child index).
+    for root in &nodes {
+        if color[root] != 0 {
+            continue;
+        }
+        let mut work: Vec<(String, usize)> = vec![(root.clone(), 0)];
+        color.insert(root.clone(), 1);
+        stack.push(root.clone());
+        in_stack.insert(root.clone());
+        while let Some((node, idx)) = work.pop() {
+            let kids: Vec<(String, usize)> = parents.get(&node).cloned().unwrap_or_default();
+            if idx < kids.len() {
+                work.push((node.clone(), idx + 1));
+                let (par, line) = kids[idx].clone();
+                let pc = color.get(&par).copied().unwrap_or(0);
+                if pc == 0 {
+                    color.insert(par.clone(), 1);
+                    stack.push(par.clone());
+                    in_stack.insert(par.clone());
+                    work.push((par, 0));
+                } else if in_stack.contains(&par) {
+                    // Back edge closes a directed cycle through the stack.
+                    // Global output order comes from the total sort in
+                    // `lint_lines`; insertion here follows sorted roots.
+                    let mut cyc: Vec<String> = Vec::new();
+                    for s in stack.iter().rev() {
+                        cyc.push(s.clone());
+                        if s == &par {
+                            break;
+                        }
+                    }
+                    cyc.reverse();
+                    diags.push(Diag::new(
+                        "E202",
+                        Category::Correctness,
+                        Severity::Error,
+                        line,
+                        format!("{}: ancestral cycle ({})", node, cyc.join(" -> ")),
+                    ));
+                }
+            } else {
+                color.insert(node.clone(), 2);
+                in_stack.remove(&node);
+                stack.pop();
+            }
+        }
+    }
+}
+
 /// End of run: W202 FAMC/CHIL asymmetry.
 pub(crate) fn finish_symmetry(diags: &mut Vec<Diag>, st: &Graph) {
     // W202: FAMC not listed as CHIL (and vice versa). Each half reports at

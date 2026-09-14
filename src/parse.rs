@@ -208,6 +208,44 @@ pub(crate) fn year_of(s: &str) -> Option<i64> {
     best
 }
 
+/// True when the DATE value is bounded above ("BEF ..."): the real date can
+/// be earlier than the year written, so after-the-fact comparisons must not
+/// fire on it. Token match on the uppercased value, pure string scan,
+/// WASM-safe.
+pub(crate) fn is_bef(s: &str) -> bool {
+    s.split(|c: char| !c.is_ascii_alphabetic())
+        .any(|t| t.eq_ignore_ascii_case("BEF"))
+}
+
+/// True when the DATE value is bounded below ("AFT ..."): the real date can
+/// be later than the year written.
+pub(crate) fn is_aft(s: &str) -> bool {
+    s.split(|c: char| !c.is_ascii_alphabetic())
+        .any(|t| t.eq_ignore_ascii_case("AFT"))
+}
+
+/// True when the DATE value is approximate or a range rather than an exact
+/// day: ABT/CAL/EST, BET/AND, FROM/TO, INT, BEF/AFT, or a calendar escape.
+/// Year comparisons against such a date prove nothing near a boundary, so
+/// sequencing rules suppress on it. Pure string scan, WASM-safe.
+pub(crate) fn is_inexact(s: &str) -> bool {
+    if s.contains("@#") {
+        return true;
+    }
+    s.split(|c: char| !c.is_ascii_alphabetic()).any(|t| {
+        t.eq_ignore_ascii_case("BEF")
+            || t.eq_ignore_ascii_case("AFT")
+            || t.eq_ignore_ascii_case("ABT")
+            || t.eq_ignore_ascii_case("CAL")
+            || t.eq_ignore_ascii_case("EST")
+            || t.eq_ignore_ascii_case("BET")
+            || t.eq_ignore_ascii_case("AND")
+            || t.eq_ignore_ascii_case("FROM")
+            || t.eq_ignore_ascii_case("TO")
+            || t.eq_ignore_ascii_case("INT")
+    })
+}
+
 pub(crate) fn norm_name(s: &str) -> String {
     s.to_lowercase()
         .replace('/', " ")

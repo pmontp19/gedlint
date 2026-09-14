@@ -234,10 +234,15 @@ pub(crate) fn lint_lines(text: &str) -> Report {
     events::finish(&mut diags, &events, version);
     graph::finish_refs(&mut diags, &graph);
     graph::finish_symmetry(&mut diags, &graph);
+    graph::finish_cycles(&mut diags, &graph);
     individuals::finish_lifespans(&mut diags, &people, &graph);
     individuals::finish_parent_ages(&mut diags, &people, &graph);
+    individuals::finish_parent_death_birth(&mut diags, &people, &graph);
+    individuals::finish_marriage_sequence(&mut diags, &people, &graph);
+    individuals::finish_spouse_sex(&mut diags, &people, &graph);
     individuals::finish_sex(&mut diags, &people, version);
     individuals::finish_duplicates(&mut diags, &people, &graph);
+    hygiene::finish_sibling_spacing(&mut diags, &people, &graph);
 
     let individuals = people.indi_birth.len();
     let mut families_set: HashSet<&String> = HashSet::new();
