@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diag::{Category, Diag, Severity};
-use crate::parse::{Line, Version};
+use crate::parse::{is_inexact, year_of, Line, Version};
 
 // Common individual/family events whose detail singletons are {0:1}.
 const EVENT_TAGS: &[&str] = &[
@@ -28,6 +28,9 @@ const CONFLICT_EVENTS: &[&str] = &["BIRT", "CHR", "DEAT", "BURI", "MARR", "DIV",
 type EvKey = (String, String, usize);
 // (instance, DATE value, line) hit inside one record+event group.
 type EvHit = (usize, String, usize);
+// First-instance resolution for W310: ((record, event), instance, year,
+// DATE value, DATE line).
+type EvDated = ((String, String), usize, i64, String, usize);
 /// Everything the event rules accumulate during the single pass.
 #[derive(Default)]
 pub(crate) struct Events {
@@ -228,6 +231,103 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Events, version: Version) {
                     }
                 }
                 prev = Some(hit);
+            }
+        }
+    }
+
+    // W310: vital events out of order for one individual. First instance
+    // per event anchors the comparison (a conflicting duplicate is W307's
+    // job, not this one). Inexact dates (ABT/CAL/EST, ranges, BEF/AFT)
+    // suppress the check that reads them, and years past 9999 are parser
+    // fallbacks, never dates. Reports at the offending DATE line, inside
+    // the same event block.
+    {
+        // Re-resolve first-instance deterministically: lowest inst wins.
+        let mut first: HashMap<(String, String), (usize, i64, String, usize)> = HashMap::new();
+        let mut dated: Vec<EvDated> = Vec::new();
+        for ((rec, ev, inst), (val, line)) in &st.event_dates {
+            if !matches!(ev.as_str(), "BIRT" | "CHR" | "BAPM" | "DEAT" | "BURI") {
+                continue;
+            }
+            let Some(y) = year_of(val) else { continue };
+            if y >= 10000 {
+                continue;
+            }
+            dated.push(((rec.clone(), ev.clone()), *inst, y, val.clone(), *line));
+        }
+        dated.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.4.cmp(&b.4)));
+        for ((rec, ev), inst, y, val, line) in dated {
+            first.entry((rec, ev)).or_insert((inst, y, val, line));
+        }
+        let mut recs: Vec<String> = first
+            .keys()
+            .map(|(r, _)| r.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        recs.sort();
+        for rec in recs {
+            let get = |ev: &str| first.get(&(rec.clone(), ev.to_string())).cloned();
+            let birt = get("BIRT");
+            let chr = get("CHR");
+            let bapm = get("BAPM");
+            let deat = get("DEAT");
+            let buri = get("BURI");
+            let bad = |v: &str| is_inexact(v);
+            if let (Some((_, by, bv, _)), Some((_, cy, cv, cl))) = (birt.clone(), chr.clone()) {
+                if cy < by && !bad(&bv) && !bad(&cv) {
+                    diags.push(Diag::new(
+                        "W310",
+                        Category::Suspicious,
+                        Severity::Error,
+                        cl,
+                        format!("{}: CHR ({}) before BIRT ({})", rec, cy, by),
+                    ));
+                }
+            }
+            if let (Some((_, by, bv, _)), Some((_, ay, av, al))) = (birt.clone(), bapm.clone()) {
+                if ay < by && !bad(&bv) && !bad(&av) {
+                    diags.push(Diag::new(
+                        "W310",
+                        Category::Suspicious,
+                        Severity::Error,
+                        al,
+                        format!("{}: BAPM ({}) before BIRT ({})", rec, ay, by),
+                    ));
+                }
+            }
+            if let (Some((_, dy, dv, _)), Some((_, uy, uv, ul))) = (deat.clone(), buri.clone()) {
+                if uy < dy && !bad(&dv) && !bad(&uv) {
+                    diags.push(Diag::new(
+                        "W310",
+                        Category::Suspicious,
+                        Severity::Error,
+                        ul,
+                        format!("{}: BURI ({}) before DEAT ({})", rec, uy, dy),
+                    ));
+                }
+            }
+            if let (Some((_, dy, dv, _)), Some((_, ay, av, al))) = (deat.clone(), bapm) {
+                if ay > dy && !bad(&dv) && !bad(&av) {
+                    diags.push(Diag::new(
+                        "W310",
+                        Category::Suspicious,
+                        Severity::Error,
+                        al,
+                        format!("{}: BAPM ({}) after DEAT ({})", rec, ay, dy),
+                    ));
+                }
+            }
+            if let (Some((_, dy, dv, _)), Some((_, cy, cv, cl))) = (deat, chr) {
+                if cy > dy && !bad(&dv) && !bad(&cv) {
+                    diags.push(Diag::new(
+                        "W310",
+                        Category::Suspicious,
+                        Severity::Error,
+                        cl,
+                        format!("{}: CHR ({}) after DEAT ({})", rec, cy, dy),
+                    ));
+                }
             }
         }
     }

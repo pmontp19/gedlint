@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use crate::diag::{Category, Diag, Severity};
-use crate::parse::{norm_name, year_of, Line, Version};
+use crate::parse::{is_aft, is_bef, norm_name, year_of, Line, Version};
 use crate::rules::graph::Graph;
 
 /// Per-individual and per-family facts collected during the pass.
@@ -16,6 +16,19 @@ pub(crate) struct People {
     pub(crate) indi_name: HashMap<String, String>,
     pub(crate) indi_sex: HashMap<String, (String, usize)>,
     pub(crate) fam_marr: HashMap<String, Option<i64>>,
+    /// Raw DATE text per individual birth (for the W704 day ordinal).
+    pub(crate) indi_birth_raw: HashMap<String, String>,
+    /// `1 MARR` line per family (for W304 and as fallback for W311).
+    pub(crate) fam_marr_line: HashMap<String, usize>,
+    /// Every MARR instance per family: (year, `1 MARR` line, raw DATE text).
+    /// W311 checks each union; `fam_marr` keeps the last for W304.
+    pub(crate) fam_marrs: HashMap<String, Vec<(i64, usize, String)>>,
+    /// Birth DATE was `BEF`-qualified: the real birth can be earlier.
+    pub(crate) birth_is_bef: HashMap<String, bool>,
+    /// Birth DATE was `AFT`-qualified: the real birth can be later.
+    pub(crate) birth_is_aft: HashMap<String, bool>,
+    /// Death DATE was `AFT`-qualified: the real death can be later.
+    pub(crate) death_is_aft: HashMap<String, bool>,
 }
 
 /// INDI.SEX: E008 on the {0:1} slot; the value itself is checked at the end.
@@ -42,16 +55,31 @@ pub(crate) fn record_event_year(st: &mut People, l: &Line, xref: &str, kind: &st
         match l.tag.as_str() {
             "BIRT" => {
                 st.indi_birth.insert(xref.to_string(), Some(y));
+                st.indi_birth_raw.insert(xref.to_string(), l.value.clone());
+                st.birth_is_bef.insert(xref.to_string(), is_bef(&l.value));
+                st.birth_is_aft.insert(xref.to_string(), is_aft(&l.value));
             }
             "DEAT" => {
                 st.indi_death.insert(xref.to_string(), Some(y));
+                st.death_is_aft.insert(xref.to_string(), is_aft(&l.value));
             }
             _ => {
                 if kind == "FAM" {
                     st.fam_marr.insert(xref.to_string(), Some(y));
+                    st.fam_marr_line.insert(xref.to_string(), l.no);
+                    st.fam_marrs.entry(xref.to_string()).or_default().push((
+                        y,
+                        l.no,
+                        l.value.clone(),
+                    ));
                 }
             }
         }
+    } else if l.tag == "MARR" && kind == "FAM" {
+        // A MARR line with no parsable year still anchors W311 reporting
+        // when a subordinate DATE later supplies the year. Each MARR block
+        // re-anchors: remarriage files hold several unions per family.
+        st.fam_marr_line.insert(xref.to_string(), l.no);
     }
     // "DEAT Y" (dead, date unknown) records no year here, which is what
     // keeps it out of the W301 checks in `finish_lifespans`: they need a
@@ -70,7 +98,10 @@ pub(crate) fn record_sub_date(
         if let Some((xref, kind)) = cur.clone() {
             if kind == "INDI" {
                 if let Some(y) = year_of(&l.value) {
-                    st.indi_birth.insert(xref, Some(y));
+                    st.indi_birth.insert(xref.clone(), Some(y));
+                    st.indi_birth_raw.insert(xref.clone(), l.value.clone());
+                    st.birth_is_bef.insert(xref.clone(), is_bef(&l.value));
+                    st.birth_is_aft.insert(xref, is_aft(&l.value));
                 }
             }
         }
@@ -79,7 +110,8 @@ pub(crate) fn record_sub_date(
         if let Some((xref, kind)) = cur.clone() {
             if kind == "INDI" {
                 if let Some(y) = year_of(&l.value) {
-                    st.indi_death.insert(xref, Some(y));
+                    st.indi_death.insert(xref.clone(), Some(y));
+                    st.death_is_aft.insert(xref, is_aft(&l.value));
                 }
             }
         }
@@ -87,7 +119,21 @@ pub(crate) fn record_sub_date(
     if cur_sub == "MARR" && l.tag == "DATE" {
         if let Some((xref, kind)) = cur.clone() {
             if kind == "FAM" {
-                st.fam_marr.insert(xref, year_of(&l.value));
+                if let Some(y) = year_of(&l.value) {
+                    st.fam_marr.insert(xref.clone(), Some(y));
+                    // The level-1 MARR precedes its DATE, so its line is
+                    // already anchored; fall back to the DATE line itself.
+                    let line = st.fam_marr_line.get(&xref).copied().unwrap_or(l.no);
+                    let v = st.fam_marrs.entry(xref).or_default();
+                    // A year on the MARR line itself plus a subordinate DATE
+                    // is one union, not two: the DATE refines the event line.
+                    if v.last().map(|e| e.1) == Some(line) {
+                        v.pop();
+                    }
+                    v.push((y, line, l.value.clone()));
+                } else {
+                    st.fam_marr.insert(xref, None);
+                }
             }
         }
     }
@@ -198,6 +244,190 @@ pub(crate) fn finish_parent_ages(diags: &mut Vec<Diag>, st: &People, graph: &Gra
                     ));
                 }
             }
+        }
+    }
+}
+
+/// End of run: W308 child born after a parent's death, W309 child born
+/// before a parent's birth. Both report at the child's record line.
+pub(crate) fn finish_parent_death_birth(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
+    for (fam, chils) in &graph.fam_chil {
+        for (c, _) in chils {
+            let cb = st.indi_birth.get(c).copied().flatten();
+            let Some(cb) = cb else { continue };
+            if cb >= 10000 {
+                continue;
+            }
+            let child_line = graph.records.get(c).map(|r| r.1).unwrap_or(0);
+            // W308 is suppressed when the uncertainty runs the other way:
+            // a BEF birth can be earlier, an AFT death can be later.
+            let birth_bef = st.birth_is_bef.get(c).copied().unwrap_or(false);
+            if !birth_bef {
+                for (parent, rol, is_mother) in [
+                    (&graph.fam_husb.get(fam), "father", false),
+                    (&graph.fam_wife.get(fam), "mother", true),
+                ] {
+                    if let Some((px, _)) = parent {
+                        if let Some(Some(pd)) = st.indi_death.get(px) {
+                            if *pd >= 10000 {
+                                continue;
+                            }
+                            if st.death_is_aft.get(px).copied().unwrap_or(false) {
+                                continue;
+                            }
+                            // Fathers get one gestation year of slack for a
+                            // posthumous birth; mothers do not.
+                            let late = if is_mother { cb > *pd } else { cb > *pd + 1 };
+                            if late {
+                                diags.push(Diag::new(
+                                    "W308",
+                                    Category::Suspicious,
+                                    Severity::Warning,
+                                    child_line,
+                                    format!(
+                                        "{}: {} born ({}) after {} {} death ({})",
+                                        fam, c, cb, rol, px, pd
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            // W309: a child older than their own parent. W303 already warns
+            // on implausible gaps; a non-positive gap is impossible, an error.
+            // Suppressed when the uncertainty runs the other way: an AFT
+            // child birth can be later, a BEF parent birth can be earlier.
+            let child_aft = st.birth_is_aft.get(c).copied().unwrap_or(false);
+            if !child_aft {
+                for (parent, rol) in [
+                    (&graph.fam_husb.get(fam), "father"),
+                    (&graph.fam_wife.get(fam), "mother"),
+                ] {
+                    if let Some((px, _)) = parent {
+                        if st.birth_is_bef.get(px).copied().unwrap_or(false) {
+                            continue;
+                        }
+                        if let Some(Some(pb)) = st.indi_birth.get(px) {
+                            if *pb >= 10000 {
+                                continue;
+                            }
+                            if cb <= *pb {
+                                diags.push(Diag::new(
+                                    "W309",
+                                    Category::Suspicious,
+                                    Severity::Error,
+                                    child_line,
+                                    format!(
+                                        "{}: {} born ({}) before {} {} birth ({})",
+                                        fam, c, cb, rol, px, pb
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// End of run: W311 marriage after a spouse's death or before a spouse's
+/// birth. Checks every MARR instance in the family (a remarriage file holds
+/// several) and reports at that union's `1 MARR` line. A BEF-qualified
+/// marriage can predate the written year, an AFT one can follow it, so each
+/// arm suppresses on the qualifier that runs its way.
+pub(crate) fn finish_marriage_sequence(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
+    use crate::parse::{is_aft, is_bef};
+    // Deterministic iteration: families sorted, instances in pass order.
+    let mut fams: Vec<&String> = st.fam_marrs.keys().collect();
+    fams.sort();
+    for fam in fams {
+        let Some(instances) = st.fam_marrs.get(fam) else {
+            continue;
+        };
+        for (mm, marr_line, raw) in instances {
+            if *mm >= 10000 {
+                continue;
+            }
+            let marr_bef = is_bef(raw);
+            let marr_aft = is_aft(raw);
+            for (parent, rol) in [
+                (&graph.fam_husb.get(fam), "husband"),
+                (&graph.fam_wife.get(fam), "wife"),
+            ] {
+                if let Some((px, _)) = parent {
+                    if let Some(Some(pb)) = st.indi_birth.get(px) {
+                        let birth_bef = st.birth_is_bef.get(px).copied().unwrap_or(false);
+                        if *pb < 10000 && *mm < *pb && !marr_aft && !birth_bef {
+                            diags.push(Diag::new(
+                                "W311",
+                                Category::Suspicious,
+                                Severity::Error,
+                                *marr_line,
+                                format!(
+                                    "{}: marriage ({}) before {} {} birth ({})",
+                                    fam, mm, rol, px, pb
+                                ),
+                            ));
+                        }
+                    }
+                    if let Some(Some(pd)) = st.indi_death.get(px) {
+                        let death_aft = st.death_is_aft.get(px).copied().unwrap_or(false);
+                        if *pd < 10000 && *mm > *pd && !marr_bef && !death_aft {
+                            diags.push(Diag::new(
+                                "W311",
+                                Category::Suspicious,
+                                Severity::Error,
+                                *marr_line,
+                                format!(
+                                    "{}: marriage ({}) after {} {} death ({})",
+                                    fam, mm, rol, px, pd
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// End of run: W312 HUSB/WIFE pointing at an individual recorded with the
+/// other sex. Only fires on a jointly inverted pair (HUSB is F *and* WIFE
+/// is M): a single mismatched side is indistinguishable from a same-sex
+/// marriage, which the official 7.0 `same-sex-marriage.ged` records with
+/// HUSB+WIFE. Reports at both link lines.
+pub(crate) fn finish_spouse_sex(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
+    for (fam, (husb, husb_line)) in &graph.fam_husb {
+        let Some((wife, wife_line)) = graph.fam_wife.get(fam) else {
+            continue;
+        };
+        let husb_f = st
+            .indi_sex
+            .get(husb)
+            .map(|(s, _)| s.trim().eq_ignore_ascii_case("F"))
+            .unwrap_or(false);
+        let wife_m = st
+            .indi_sex
+            .get(wife)
+            .map(|(s, _)| s.trim().eq_ignore_ascii_case("M"))
+            .unwrap_or(false);
+        if husb_f && wife_m {
+            diags.push(Diag::new(
+                "W312",
+                Category::Suspicious,
+                Severity::Warning,
+                *husb_line,
+                format!("{}: HUSB {} is recorded as female (SEX F)", fam, husb),
+            ));
+            diags.push(Diag::new(
+                "W312",
+                Category::Suspicious,
+                Severity::Warning,
+                *wife_line,
+                format!("{}: WIFE {} is recorded as male (SEX M)", fam, wife),
+            ));
         }
     }
 }

@@ -1872,3 +1872,297 @@ fn hygiene_rules_are_off_by_default() {
     assert!(!has(&g, "W702"));
     assert!(!has(&g, "W703"));
 }
+
+#[test]
+fn w308_child_after_mother_death() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1940\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE 1945\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    assert!(has(&g, "W308"));
+}
+
+#[test]
+fn w308_father_gets_one_gestation_year() {
+    // Father died 1944, child born 1945: allowed posthumous birth.
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1944\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1900\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE 1945\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    assert!(!has(&ok, "W308"));
+    // Two years after: no longer gestation.
+    let bad = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1943\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1900\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE 1945\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    assert!(has(&bad, "W308"));
+}
+
+#[test]
+fn w308_suppressed_by_bef_and_aft() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE AFT 1940\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE 1945\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    assert!(!has(&g, "W308"), "{:?}", codes(&g));
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1940\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE BEF 1945\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    assert!(!has(&g2, "W308"), "{:?}", codes(&g2));
+}
+
+#[test]
+fn w308_reports_at_child_record_line() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1940\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE 1945\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    let d = only(&g, "W308");
+    let child_line = g.lines().position(|l| l == "0 @I3@ INDI").unwrap() + 1;
+    assert_eq!(d.line, child_line, "{:?}", d);
+}
+
+#[test]
+fn w309_child_before_parent_birth_is_error() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1900\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE 1899\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    // One per parent link, both errors at the child record line.
+    let r = lint_str(&g);
+    let hits: Vec<&Diag> = r.diags.iter().filter(|d| d.code == "W309").collect();
+    assert_eq!(hits.len(), 2, "{:?}", r.diags);
+    for d in &hits {
+        assert_eq!(d.severity, Severity::Error);
+    }
+    let child_line = g.lines().position(|l| l == "0 @I3@ INDI").unwrap() + 1;
+    assert!(hits.iter().all(|d| d.line == child_line));
+}
+
+#[test]
+fn w309_suppressed_by_qualifiers() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME Mare /Y/\n1 BIRT\n2 DATE 1900\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE AFT 1899\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n",
+    );
+    assert!(!has(&g, "W309"), "{:?}", codes(&g));
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /X/\n1 BIRT\n2 DATE BEF 1900\n\
+         0 @I3@ INDI\n1 NAME Fill /Z/\n1 BIRT\n2 DATE 1899\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 CHIL @I3@\n",
+    );
+    assert!(!has(&g2, "W309"), "{:?}", codes(&g2));
+}
+
+#[test]
+fn w310_bapm_before_birth_and_buri_before_death() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 BAPM\n2 DATE 1899\n");
+    assert!(has(&g, "W310"));
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n1 BURI\n2 DATE 1949\n",
+    );
+    assert!(has(&g2, "W310"));
+    let g3 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n1 BAPM\n2 DATE 1960\n",
+    );
+    assert!(has(&g3, "W310"));
+    // In order: silent.
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 BAPM\n2 DATE 1901\n1 DEAT\n2 DATE 1950\n1 BURI\n2 DATE 1951\n",
+    );
+    assert!(!has(&ok, "W310"), "{:?}", codes(&ok));
+}
+
+#[test]
+fn w310_suppressed_by_qualifiers() {
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 BAPM\n2 DATE BEF 1900\n");
+    assert!(!has(&g, "W310"), "{:?}", codes(&g));
+    // Approximate and ranged dates prove nothing near a boundary.
+    let abt = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE ABT 1900\n1 BAPM\n2 DATE 1899\n");
+    assert!(!has(&abt, "W310"), "{:?}", codes(&abt));
+    let bet = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 BAPM\n2 DATE BET 1890 AND 1910\n",
+    );
+    assert!(!has(&bet, "W310"), "{:?}", codes(&bet));
+}
+
+#[test]
+fn w310_chr_after_death() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n1 CHR\n2 DATE 1960\n",
+    );
+    assert!(has(&g, "W310"));
+}
+
+#[test]
+fn w311_marriage_after_death_and_before_birth() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1940\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1950\n",
+    );
+    let d = only(&g, "W311");
+    assert_eq!(d.severity, Severity::Error);
+    let marr_line = g.lines().position(|l| l == "1 MARR").unwrap() + 1;
+    assert_eq!(d.line, marr_line, "{:?}", d);
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1890\n",
+    );
+    assert!(has(&g2, "W311"));
+}
+
+#[test]
+fn w311_checks_every_union_and_honors_qualifiers() {
+    // Two unions: the first predates both births, the second is fine.
+    // W311 must see the first, not just the last MARR.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1900\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1890\n1 DIV\n2 DATE 1895\n1 MARR\n2 DATE 1905\n",
+    );
+    assert!(has(&g, "W311"), "{:?}", codes(&g));
+    // BEF marriage against a death, AFT marriage against a birth: silent.
+    let bef = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1940\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE BEF 1950\n",
+    );
+    assert!(!has(&bef, "W311"), "{:?}", codes(&bef));
+    let aft = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE AFT 1890\n",
+    );
+    assert!(!has(&aft, "W311"), "{:?}", codes(&aft));
+    // Spouse-side uncertainty also suppresses: BEF birth, AFT death.
+    let sbef = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BEF 1900\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1880\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1890\n",
+    );
+    assert!(!has(&sbef, "W311"), "{:?}", codes(&sbef));
+    let sdaft = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE AFT 1940\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 MARR\n2 DATE 1950\n",
+    );
+    assert!(!has(&sdaft, "W311"), "{:?}", codes(&sdaft));
+}
+
+#[test]
+fn w312_spouse_sex_discordance() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 SEX F\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 SEX M\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n",
+    );
+    assert_eq!(
+        codes(&g).iter().filter(|c| c.as_str() == "W312").count(),
+        2,
+        "{:?}",
+        codes(&g)
+    );
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 SEX M\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 SEX F\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n",
+    );
+    assert!(!has(&ok, "W312"), "{:?}", codes(&ok));
+    // A single mismatched side is a same-sex marriage, never flagged.
+    let same = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 SEX M\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 SEX M\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n",
+    );
+    assert!(!has(&same, "W312"), "{:?}", codes(&same));
+    // Unknown sex never fires.
+    let u = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n",
+    );
+    assert!(!has(&u, "W312"));
+}
+
+#[test]
+fn e202_ancestral_cycle() {
+    // I1 child of F1, I2 parent in F1 and child of F2, I1 parent in F2: loop.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 FAMC @F2@\n\
+         0 @F1@ FAM\n1 HUSB @I2@\n1 CHIL @I1@\n\
+         0 @F2@ FAM\n1 HUSB @I1@\n1 CHIL @I2@\n",
+    );
+    let d = only(&g, "E202");
+    assert_eq!(d.severity, Severity::Error);
+    assert!(d.line > 0, "{:?}", d);
+    // Acyclic chain: silent.
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n\
+         0 @I2@ INDI\n1 NAME C /D/\n\
+         0 @F1@ FAM\n1 HUSB @I2@\n1 CHIL @I1@\n",
+    );
+    assert!(!has(&ok, "E202"), "{:?}", codes(&ok));
+}
+
+#[test]
+fn w704_sibling_spacing() {
+    let g = wrap551(
+        "0 @I0@ INDI\n1 NAME Mare /Y/\n\
+         0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1 JAN 1900\n1 FAMC @F1@\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1 JUN 1900\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 WIFE @I0@\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(has_with(&g, "W704", "hygiene"));
+    // Twins on the same day: silent.
+    let twins = wrap551(
+        "0 @I0@ INDI\n1 NAME Mare /Y/\n\
+         0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1 JAN 1900\n1 FAMC @F1@\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1 JAN 1900\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 WIFE @I0@\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(!has_with(&twins, "W704", "hygiene"));
+    // Two years apart: silent. Year-only dates: unmeasurable, silent.
+    let far = wrap551(
+        "0 @I0@ INDI\n1 NAME Mare /Y/\n\
+         0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1 JAN 1900\n1 FAMC @F1@\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1 JAN 1902\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 WIFE @I0@\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(!has_with(&far, "W704", "hygiene"));
+    let yearly = wrap551(
+        "0 @I0@ INDI\n1 NAME Mare /Y/\n\
+         0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 FAMC @F1@\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1900\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 WIFE @I0@\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(!has_with(&yearly, "W704", "hygiene"));
+    // Surplus tokens are not exact dates: unmeasurable, silent.
+    let noisy = wrap551(
+        "0 @I0@ INDI\n1 NAME Mare /Y/\n\
+         0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1 JAN 1900\n1 FAMC @F1@\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE NOTE 1 JUN 1900\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 WIFE @I0@\n1 CHIL @I1@\n1 CHIL @I2@\n",
+    );
+    assert!(!has_with(&noisy, "W704", "hygiene"));
+    // Off by default.
+    assert!(!has(&g, "W704"));
+}

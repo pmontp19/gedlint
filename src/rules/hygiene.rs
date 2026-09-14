@@ -1,5 +1,8 @@
 use crate::diag::{Category, Diag, Severity};
 use crate::parse::{truncate, Line};
+use crate::rules::dates::date_ordinal;
+use crate::rules::graph::Graph;
+use crate::rules::individuals::People;
 use crate::rules::names::surname_slot;
 
 /// W701: polluted-name, on any raw name value: the whole `1 NAME` value or
@@ -91,5 +94,56 @@ pub(crate) fn check_malformed_place(diags: &mut Vec<Diag>, l: &Line) {
             )
             .in_ruleset("hygiene"),
         );
+    }
+}
+
+/// W704: impossible sibling spacing. Children of the same mother born 1 to
+/// 240 days apart (same day = twins, skipped). Only exact `DD MMM YYYY`
+/// dates participate; year-only or qualified dates cannot be measured and
+/// are skipped. Reports at the later-born child's record line.
+pub(crate) fn finish_sibling_spacing(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
+    use std::collections::HashMap;
+    // mother xref -> [(ordinal, child xref)].
+    let mut by_mother: HashMap<String, Vec<(i64, String)>> = HashMap::new();
+    for (fam, chils) in &graph.fam_chil {
+        let Some((mother, _)) = graph.fam_wife.get(fam) else {
+            continue;
+        };
+        for (child, _) in chils {
+            let raw = st.indi_birth_raw.get(child);
+            let Some(raw) = raw else { continue };
+            let Some(ord) = date_ordinal(raw) else {
+                continue;
+            };
+            by_mother
+                .entry(mother.clone())
+                .or_default()
+                .push((ord, child.clone()));
+        }
+    }
+    for kids in by_mother.values_mut() {
+        kids.sort();
+        // Consecutive pairs suffice: the list is sorted, so any wider gap
+        // is larger than the step inside it.
+        for w in 1..kids.len() {
+            let (prev_ord, prev_child) = kids[w - 1].clone();
+            let (ord, child) = kids[w].clone();
+            let gap = ord - prev_ord;
+            if (1..=240).contains(&gap) {
+                diags.push(
+                    Diag::new(
+                        "W704",
+                        Category::Suspicious,
+                        Severity::Warning,
+                        graph.records.get(&child).map(|r| r.1).unwrap_or(0),
+                        format!(
+                            "{} and {} born {} days apart: possible merged family or duplicate",
+                            prev_child, child, gap
+                        ),
+                    )
+                    .in_ruleset("hygiene"),
+                );
+            }
+        }
     }
 }
