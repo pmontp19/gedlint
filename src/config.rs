@@ -47,9 +47,9 @@ pub struct Thresholds {
     pub duplicate_window: i64,
     /// W704: sibling gaps up to this many days warn (twins excluded).
     pub sibling_max_gap: i64,
-    /// W705: no DEAT and birth this many years before the file's latest
-    /// year warns (the latest year in the file stands in for today, so the
-    /// engine needs no clock and stays WASM-safe).
+    /// W705: no DEAT and birth more than this many years before the file's
+    /// latest year warns (the latest year in the file stands in for today,
+    /// so the engine needs no clock and stays WASM-safe).
     pub max_alive_years: i64,
     /// W706: spouses' birth years further apart than this warn.
     pub max_spouse_gap: i64,

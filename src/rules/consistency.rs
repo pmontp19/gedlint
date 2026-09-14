@@ -58,7 +58,7 @@ pub(crate) fn finish_all(
     thr: &Thresholds,
 ) {
     finish_fact_chronology(diags, st, people, graph);
-    finish_alive_too_old(diags, people, graph, thr);
+    finish_alive_too_old(diags, st, people, graph, thr);
     finish_spouse_gap(diags, people, graph, thr);
     finish_marriage_age(diags, people, graph, thr);
     finish_same_first_name(diags, people, graph);
@@ -141,25 +141,38 @@ pub(crate) fn finish_fact_chronology(
 /// before the latest year found anywhere in the file. The file's own
 /// latest year stands in for today, so the engine needs no clock: a file
 /// whose newest date is 1850 judges age against 1850, not against the wall
-/// calendar. `DEAT Y` (dead, date unknown) and `AFT`-qualified births
-/// suppress, since neither proves a living person.
-fn finish_alive_too_old(diags: &mut Vec<Diag>, people: &People, graph: &Graph, thr: &Thresholds) {
-    let mut latest: Option<i64> = None;
-    for b in people.indi_birth.values().flatten() {
-        if *b < 10000 {
-            latest = Some(latest.map_or(*b, |m: i64| m.max(*b)));
+/// calendar. Every exact year the consistency collector saw counts, births
+/// and deaths as well as dated facts: a modern residence is as good a
+/// "the file reaches the present day" signal as a death. `DEAT Y` (dead,
+/// date unknown) and `AFT`-qualified births suppress, since neither proves
+/// a living person.
+fn finish_alive_too_old(
+    diags: &mut Vec<Diag>,
+    st: &Consistency,
+    people: &People,
+    graph: &Graph,
+    thr: &Thresholds,
+) {
+    fn bump(y: i64, latest: &mut Option<i64>) {
+        if y < 10000 {
+            *latest = Some(latest.map_or(y, |m: i64| m.max(y)));
         }
     }
+    let mut latest: Option<i64> = None;
+    for b in people.indi_birth.values().flatten() {
+        bump(*b, &mut latest);
+    }
     for d in people.indi_death.values().flatten() {
-        if *d < 10000 {
-            latest = Some(latest.map_or(*d, |m: i64| m.max(*d)));
-        }
+        bump(*d, &mut latest);
     }
     for years in people.fam_marrs.values() {
         for (y, _, _) in years {
-            if *y < 10000 {
-                latest = Some(latest.map_or(*y, |m: i64| m.max(*y)));
-            }
+            bump(*y, &mut latest);
+        }
+    }
+    for (_, _, val, _) in &st.fact_dates {
+        if let Some(y) = year_of(val) {
+            bump(y, &mut latest);
         }
     }
     let Some(now) = latest else { return };
@@ -179,7 +192,7 @@ fn finish_alive_too_old(diags: &mut Vec<Diag>, people: &People, graph: &Graph, t
         let Some(Some(b)) = people.indi_birth.get(xref) else {
             continue;
         };
-        if *b >= 10000 || *b + thr.max_alive_years > now {
+        if *b >= 10000 || *b + thr.max_alive_years >= now {
             continue;
         }
         if people.indi_died.contains(xref) {

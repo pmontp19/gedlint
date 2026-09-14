@@ -2214,6 +2214,49 @@ fn w705_alive_but_too_old() {
 }
 
 #[test]
+fn w705_threshold_is_strict_and_facts_set_the_reference_year() {
+    // Exactly max-alive-years old: silent ("more than" in the docs, and
+    // the same boundary style as W301's >105).
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n",
+    );
+    assert!(!has_thr(&g, "W705", "max-alive-years = 50\n"));
+    // One year later in the file: 51, fires at the same threshold.
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1951\n",
+    );
+    assert!(has_thr(&g2, "W705", "max-alive-years = 50\n"));
+    // A dated fact pushes the file's present to 2020: the 1900-born person
+    // is then 120, flagged.
+    let modern = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 RESI\n2 DATE 2020\n\
+          0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n",
+    );
+    assert!(has_with(&modern, "W705", "hygiene"));
+}
+
+#[test]
+fn w310_ignores_citation_publication_dates() {
+    // A citation's publication year (RESI -> SOUR -> DATA -> DATE) is not a
+    // residence date and must not trip the generic fact check.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n1 DEAT\n2 DATE 1950\n\
+          1 RESI\n2 DATE 1940\n2 SOUR @S1@\n3 DATA\n4 DATE 1999\n\
+          0 @S1@ SOUR\n1 TITL T\n",
+    );
+    assert!(!has(&g, "W310"), "{:?}", codes(&g));
+    // The residence date itself is still checked: before the birth, fires.
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+          1 RESI\n2 DATE 1890\n2 SOUR @S1@\n3 DATA\n4 DATE 1999\n\
+          0 @S1@ SOUR\n1 TITL T\n",
+    );
+    assert!(has(&g2, "W310"), "{:?}", codes(&g2));
+}
+
+#[test]
 fn w706_large_spouse_age_difference() {
     let g = wrap551(
         "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\

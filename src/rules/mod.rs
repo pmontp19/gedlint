@@ -223,16 +223,21 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
         }
         upgrade::check_rela_sub(&mut diags, l, version);
         individuals::record_sub_date(&mut people, l, &cur_sub, &cur);
-        // The MyHeritage-style consistency checks read every DATE against
-        // the birth/death index and every PLAC against cause/date wordlists.
-        if l.tag == "DATE" {
-            if let Some((xref, _)) = cur.as_ref() {
-                consistency.record_fact(xref, &cur_sub, &l.value, l.no);
+        // The MyHeritage-style consistency checks read a DATE against the
+        // birth/death index and a PLAC against cause/date wordlists, but
+        // only when the line hangs directly off the level-1 fact: a DATE
+        // under RESI -> SOUR -> DATA is the citation's publication year,
+        // not a residence date, and must not reach W310.
+        if parent_tag == cur_sub {
+            if l.tag == "DATE" {
+                if let Some((xref, _)) = cur.as_ref() {
+                    consistency.record_fact(xref, &cur_sub, &l.value, l.no);
+                }
             }
-        }
-        if l.tag == "PLAC" {
-            if let Some((xref, _)) = cur.as_ref() {
-                consistency.record_plac(xref, &l.value, l.no);
+            if l.tag == "PLAC" {
+                if let Some((xref, _)) = cur.as_ref() {
+                    consistency.record_plac(xref, &l.value, l.no);
+                }
             }
         }
         upgrade::check_pedi_case(&mut diags, l, version);
