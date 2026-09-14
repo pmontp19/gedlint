@@ -96,14 +96,16 @@ pub(crate) fn record_event_year(st: &mut People, l: &Line, xref: &str, kind: &st
     // records the year via `record_sub_date`, and is checked like any other.
 }
 
-/// BIRT/DEAT/MARR DATE below level 1: the authoritative year for W301-W304.
+/// BIRT/DEAT/MARR DATE directly below the event: the authoritative year for
+/// W301-W304. A DATE nested deeper (e.g. BIRT -> SOUR -> DATA -> DATE) is
+/// citation metadata, not the event date.
 pub(crate) fn record_sub_date(
     st: &mut People,
     l: &Line,
-    cur_sub: &str,
+    parent_tag: &str,
     cur: &Option<(String, String)>,
 ) {
-    if cur_sub == "BIRT" && l.tag == "DATE" {
+    if parent_tag == "BIRT" && l.tag == "DATE" {
         if let Some((xref, kind)) = cur.clone() {
             if kind == "INDI" {
                 if let Some(y) = year_of(&l.value) {
@@ -115,7 +117,7 @@ pub(crate) fn record_sub_date(
             }
         }
     }
-    if cur_sub == "DEAT" && l.tag == "DATE" {
+    if parent_tag == "DEAT" && l.tag == "DATE" {
         if let Some((xref, kind)) = cur.clone() {
             if kind == "INDI" {
                 if let Some(y) = year_of(&l.value) {
@@ -125,7 +127,7 @@ pub(crate) fn record_sub_date(
             }
         }
     }
-    if cur_sub == "MARR" && l.tag == "DATE" {
+    if parent_tag == "MARR" && l.tag == "DATE" {
         if let Some((xref, kind)) = cur.clone() {
             if kind == "FAM" {
                 if let Some(y) = year_of(&l.value) {

@@ -133,6 +133,27 @@ fn w301_longevity_112() {
 }
 
 #[test]
+fn w301_ignores_nested_citation_dates() {
+    // Individual born in 1905, died in 1980. Citation has 2019 access date.
+    // Must not trigger W301 (death 1980 before birth 2019).
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 13 NOV 1905\n2 SOUR @S1@\n3 DATA\n4 DATE 8 OCT 2019\n\
+         1 DEAT\n2 DATE 10 DEC 1980\n\
+         0 @S1@ SOUR\n1 TITL Probe\n",
+    );
+    assert!(!has(&g, "W301"), "{:?}", codes(&g));
+
+    // Individual born 1905, died 1980 with citation access date 2019 on DEAT.
+    // Must not treat death year as 2019 (which would trigger longevity 114 > 105).
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1905\n\
+         1 DEAT\n2 DATE 1980\n2 SOUR @S1@\n3 DATA\n4 DATE 2019\n\
+         0 @S1@ SOUR\n1 TITL Probe\n",
+    );
+    assert!(!has(&g2, "W301"), "{:?}", codes(&g2));
+}
+
+#[test]
 fn w302_duplicates() {
     let g = wrap551(
         "0 @I1@ INDI\n1 NAME Joan /Osó/\n1 BIRT\n2 DATE 1861\n0 @I2@ INDI\n1 NAME Joan /Oso/\n1 BIRT\n2 DATE 1862\n",
@@ -165,6 +186,21 @@ fn w304_child_before_marriage() {
          0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n1 MARR\n2 DATE 1920\n",
     );
     assert!(has(&g, "W304"));
+}
+
+#[test]
+fn w304_ignores_nested_citation_dates() {
+    // MARR event with nested citation access date: marriage year must stay 1920,
+    // not become 2019 (which would trigger W304 for child born in 1925).
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE 1900\n\
+         0 @I2@ INDI\n1 NAME C /D/\n1 BIRT\n2 DATE 1902\n\
+         0 @I3@ INDI\n1 NAME E /F/\n1 BIRT\n2 DATE 1925\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I2@\n1 CHIL @I3@\n\
+         1 MARR\n2 DATE 1920\n2 SOUR @S1@\n3 DATA\n4 DATE 2019\n\
+         0 @S1@ SOUR\n1 TITL Probe\n",
+    );
+    assert!(!has(&g, "W304"), "{:?}", codes(&g));
 }
 
 #[test]
@@ -1933,6 +1969,21 @@ fn w308_reports_at_child_record_line() {
     let d = only(&g, "W308");
     let child_line = g.lines().position(|l| l == "0 @I3@ INDI").unwrap() + 1;
     assert_eq!(d.line, child_line, "{:?}", d);
+}
+
+#[test]
+fn w308_ignores_nested_citation_dates() {
+    // Reproduction from issue #72: nested SOUR.DATA.DATE is citation recording/access
+    // metadata, not the event date. Must not poison the child's birth date to trigger W308.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME Pare /Test/\n1 SEX M\n1 DEAT\n2 DATE 16 SEP 1944\n1 FAMS @F1@\n\
+         0 @I3@ INDI\n1 NAME Mare /Test/\n1 SEX F\n1 DEAT\n2 DATE 10 FEB 1958\n1 FAMS @F1@\n\
+         0 @I2@ INDI\n1 NAME Fill /Test/\n1 SEX F\n1 BIRT\n2 DATE 13 NOV 1905\n2 SOUR @S1@\n3 QUAY 0\n3 DATA\n4 DATE 8 OCT 2019\n1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 HUSB @I1@\n1 WIFE @I3@\n1 CHIL @I2@\n1 MARR\n2 DATE 24 JAN 1889\n\
+         0 @S1@ SOUR\n1 TITL Probe source\n",
+    );
+    assert!(!has(&g, "W308"), "{:?}", codes(&g));
+    assert!(!has(&g, "W301"), "{:?}", codes(&g));
 }
 
 #[test]
