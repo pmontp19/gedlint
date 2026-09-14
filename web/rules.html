@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Every gedlint rule: what breaks in Gramps, webtrees, RootsMagic and other genealogy software, and how to fix it.">
+<title>gedlint rules reference</title>
+<link rel="stylesheet" href="rules.css">
+</head>
+<body class="style-reference" id="top">
+<header class="site-head"><div class="wrap head-row"><span class="brand">gedlint</span><nav class="head-nav"><a href="index.html">Linter</a><a href="https://github.com/pmontp19/gedlint" rel="noopener">Source</a></nav></div></header>
+<main class="wrap">
+<h1>Rule reference</h1>
+<p class="lede">37 rules check a GEDCOM file for the defects that break imports in Gramps, webtrees, RootsMagic and elsewhere. The same explanations print in the terminal: <code>gedlint --explain CODE</code>.</p>
+<section class="usage" id="usage">
+<h2>Using gedlint</h2>
+<p>You can check a file <a href="index.html">right here in the browser</a> (nothing is uploaded), or with the command-line tool:</p>
+<pre><code>gedlint tree.ged                # report: what will break on import
+gedlint --explain W401          # why one rule exists, how to satisfy it
+gedlint --fix tree.ged          # apply the provably safe repairs (.bak copy)
+gedlint --fix --unsafe tree.ged # also format guesses, marked needs review
+gedlint --format json tree.ged  # machine-readable, complete</code></pre>
+<p>Each finding reads <code>severity [code:category] line N: message</code>; the code links to its entry below. Rule groups can be switched and re-leveled per project with a <code>gedlint.toml</code> file, and every pull request can be checked with the <a href="https://github.com/pmontp19/gedlint#github-action" rel="noopener">GitHub Action</a>.</p>
+</section>
+<nav class="toc" aria-label="Rules">
+<p><a href="#rs-core">core (30)</a> &middot; <a href="#rs-hispanic-naming">hispanic-naming (3)</a> &middot; <a href="#rs-hygiene">hygiene (4)</a></p>
+</nav>
+<section class="ruleset" id="rs-core">
+<h2>core <span class="rs-meta">30 rules, on by default</span></h2>
+<article class="rule" id="E001">
+<h3><a class="anchor" href="#E001"><code>E001</code></a> <span class="rname">invalid-line-level</span></h3>
+<p class="rtitle">Start every line with a level number, one deeper at most</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-safe">fixable by --fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>The level number at the start of a line is the only thing that says what the line belongs to. A line without one (a note or a source transcription that wrapped onto its own line is the usual cause) or a line that jumps two levels at once leaves the importer with nowhere to put the text: Gramps and webtrees list it in the import log and drop it, and lenient importers hang it off the previous person. Either way the note, place or source is missing from the tree you end up with.</p>
+<h4>How to fix it</h4>
+<p>Continuation text belongs on a CONT line one level deeper than the line it continues: &quot;1 NOTE first part&quot; followed by &quot;2 CONT second part&quot;. <code>gedlint --fix</code> adds that prefix for you. For a level jump, add the missing intermediate line or lower the level so it grows by one at most.</p>
+</details>
+</article>
+<article class="rule" id="E002">
+<h3><a class="anchor" href="#E002"><code>E002</code></a> <span class="rname">head-trlr-envelope</span></h3>
+<p class="rtitle">Open the file with HEAD and close it with TRLR</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A GEDCOM file is an envelope: HEAD first, TRLR last. Readers take the version and the character set from the header before anything else, so a file that starts with a record or ends without TRLR is commonly refused outright with &quot;not a GEDCOM file&quot;, and a program that does open it treats whatever follows TRLR as if it were not there.</p>
+<h4>How to fix it</h4>
+<p>Move the HEAD record to the very first line and leave a single &quot;0 TRLR&quot; as the last one. Delete anything after TRLR, or move it above TRLR when it is a real record. Two exports concatenated into one file is the usual origin.</p>
+</details>
+</article>
+<article class="rule" id="E003">
+<h3><a class="anchor" href="#E003"><code>E003</code></a> <span class="rname">duplicate-xref</span></h3>
+<p class="rtitle">Give every record its own identifier</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>The @I123@ identifier is how one record points at another. When two records share it, every pointer that names it becomes ambiguous and importers resolve it to whichever of the two they read last: children end up attached to the wrong parents, or one of the two people is swallowed by the other.</p>
+<h4>How to fix it</h4>
+<p>Renumber one of the two records to an unused identifier and update the pointers that meant that one. If the two records are the same person exported twice, merge them in your genealogy program and export again.</p>
+</details>
+</article>
+<article class="rule" id="E004">
+<h3><a class="anchor" href="#E004"><code>E004</code></a> <span class="rname">malformed-xref</span></h3>
+<p class="rtitle">Write identifiers as @XREF@, with no spaces</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>An identifier must be an @...@ token with no spaces and no nesting. A malformed one matches nothing, so every link into that record breaks at once: the person keeps their name but arrives in the new program without parents, children or sources.</p>
+<h4>How to fix it</h4>
+<p>Rewrite it as @ plus letters, digits or underscores plus @, for example @I42@, and make sure every pointer that references the record uses exactly the same spelling. Hand-editing a GEDCOM is where this normally comes from.</p>
+</details>
+</article>
+<article class="rule" id="E005">
+<h3><a class="anchor" href="#E005"><code>E005</code></a> <span class="rname">orphan-continuation</span></h3>
+<p class="rtitle">Anchor every CONT and CONC to the line it continues</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-safe">fixable by --fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>CONT and CONC continue the value of the line directly above them, one level up, and they never nest inside each other. One that hangs from nothing, or from another CONT or CONC, continues nothing: strict importers drop the text and lenient ones paste it into a neighbouring field. Long notes and record transcriptions are what usually come out mangled. A CONT nested under a CONC has only one possible meaning: it continues the same value the CONC continues, and only its level number is wrong.</p>
+<h4>How to fix it</h4>
+<p>Put the CONT or CONC line exactly one level below the value line it belongs to, and never chain one under another: &quot;1 NOTE line one&quot;, &quot;2 CONT line two&quot;, &quot;2 CONT line three&quot;. <code>gedlint --fix</code> rewrites the level of a nested continuation for you, and only the number in column one changes, so you can judge the result against the text. A CONT or CONC with no line above it at all is left for you to place, because only you know which value it was meant to continue.</p>
+</details>
+</article>
+<article class="rule" id="E007">
+<h3><a class="anchor" href="#E007"><code>E007</code></a> <span class="rname">conc-in-gedcom7</span></h3>
+<p class="rtitle">Drop CONC from 7.0 files and carry long values on CONT</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>GEDCOM 7 removed CONC and reserved the tag (spec 1.3), so a 7.0 reader is entitled to refuse the file outright or to skip the line. Skipping it costs you the tail of the value: a long note or place name arrives cut off exactly where the exporter chose to split it, and nothing says so.</p>
+<h4>How to fix it</h4>
+<p>Join the CONC fragments back into the value of their parent line, which 7.0 allows because it has no line-length limit, and keep CONT only where you want a real line break. Staying on 5.5.1 is the other valid answer if you are not migrating yet.</p>
+</details>
+</article>
+<article class="rule" id="E008">
+<h3><a class="anchor" href="#E008"><code>E008</code></a> <span class="rname">duplicate-singleton</span></h3>
+<p class="rtitle">Keep the one-per-record fields to a single instance</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>The specification allows exactly one SEX per person, one HUSB and one WIFE per family, one GEDC in the header, and one of each detail such as DATE, PLAC or CAUS inside a given event block. A second copy is almost always a merge leftover, and importers silently keep whichever they read first or last: the birth date your program shows afterwards may not be the one you meant to keep.</p>
+<h4>How to fix it</h4>
+<p>Decide which value is right, delete the other, and give genuinely different information its own block. A second marriage is a second MARR event, not a second DATE inside the first one.</p>
+</details>
+</article>
+<article class="rule" id="E009">
+<h3><a class="anchor" href="#E009"><code>E009</code></a> <span class="rname">missing-required-substructure</span></h3>
+<p class="rtitle">Supply the substructures the specification requires</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Some lines are not optional. The header needs GEDC with its VERS, which is how a reader learns whether the file is 5.5.1 or 7.0; in 7.0 a custom EVEN or FACT needs a TYPE and an LDS ordinance STAT needs a DATE. Without the version the importer guesses, and guessing wrong changes how dates, names and the character encoding are read for the entire file.</p>
+<h4>How to fix it</h4>
+<p>Add the missing lines: &quot;1 GEDC&quot; with &quot;2 VERS 5.5.1&quot; (or 7.0) inside HEAD, a &quot;2 TYPE ...&quot; under each custom EVEN or FACT, and a DATE under each ordinance STAT.</p>
+</details>
+</article>
+<article class="rule" id="E101">
+<h3><a class="anchor" href="#E101"><code>E101</code></a> <span class="rname">invalid-utf8</span></h3>
+<p class="rtitle">Keep every character whole and the file in valid UTF-8</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-safe">fixable by --fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>MyHeritage cuts long values at a fixed byte count, and when the cut falls inside an accented character its two halves end up on different CONC lines. What is left is not valid UTF-8: where &quot;José&quot; belongs the importer shows a replacement box or a truncated &quot;Jos&quot;, and some readers refuse the file outright. The same rule fires when the file is not UTF-8 at all while presenting itself as UTF-8.</p>
+<h4>How to fix it</h4>
+<p><code>gedlint --fix</code> rejoins the split characters, which is a safe and invertible repair. If the whole file is in a legacy encoding instead, convert it to UTF-8, or declare the real encoding in &quot;1 CHAR&quot; so readers stop decoding it as UTF-8.</p>
+</details>
+</article>
+<article class="rule" id="E201">
+<h3><a class="anchor" href="#E201"><code>E201</code></a> <span class="rname">broken-reference</span></h3>
+<p class="rtitle">Point only at records that exist in the same file</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A pointer such as &quot;1 FAMC @F12@&quot; promises that @F12@ is in the file. When it is not, the link is simply lost on import: the child arrives without parents, the citation without its source, the person without their photograph. A partial export of a larger tree, or a record deleted by hand, is the classic cause.</p>
+<h4>How to fix it</h4>
+<p>Either add the missing record to the file or delete the pointer that names it. In 7.0, @VOID@ is the correct way to say &quot;deliberately nothing here&quot;. When the file came from a filtered export, re-export the whole tree instead.</p>
+</details>
+</article>
+<article class="rule" id="E202">
+<h3><a class="anchor" href="#E202"><code>E202</code></a> <span class="rname">ancestral-cycle</span></h3>
+<p class="rtitle">Break the loop where a person becomes their own ancestor</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">correctness</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A directed cycle through parent links (a child attached as their own grandparent after a bad merge or a mistyped identifier) has no valid reading: chart generators recurse forever or stop at an arbitrary depth, relationship calculators report contradictory paths, and exporters either loop or drop whole branches without warning.</p>
+<h4>How to fix it</h4>
+<p>Follow the chain named in the message and unlink the wrong parent or child connection in your genealogy program, then export again. When two records describe the same person, merge them instead of linking them as parent and child.</p>
+</details>
+</article>
+<article class="rule" id="U501">
+<h3><a class="anchor" href="#U501"><code>U501</code></a> <span class="rname">removed-in-gedcom7</span></h3>
+<p class="rtitle">Replace the 5.5.1 constructs that GEDCOM 7.0 dropped</p>
+<ul class="badges">
+<li class="b sev-info">info</li>
+<li class="b cat">upgrade</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>These lines are valid 5.5.1 and are not errors today: they only have no home in GEDCOM 7. RELA became the enumerated ROLE, HEAD.CHAR disappeared because 7.0 is always UTF-8, PEDI values are uppercase, and a BET range has to be complete and in chronological order. A 7.0 reader given them ignores or reports the line, so the relationship description or the date range stops travelling with your tree. One of the checks is not about the migration at all: a BET range whose years run backwards is reported on a 5.5.1 file too, because no reader expects a range to end before it starts.</p>
+<h4>How to fix it</h4>
+<p>When you migrate, swap RELA for an enumerated ROLE with a PHRASE holding the free text, delete &quot;1 CHAR&quot;, uppercase the PEDI value, and write ranges as &quot;BET &lt;earlier&gt; AND &lt;later&gt;&quot;. The migration guide is at gedcom.io/migrate. Apart from putting a backwards range the right way round, nothing has to change while you stay on 5.5.1.</p>
+</details>
+</article>
+<article class="rule" id="U502">
+<h3><a class="anchor" href="#U502"><code>U502</code></a> <span class="rname">undocumented-vendor-tag</span></h3>
+<p class="rtitle">Declare the vendor extension tags that a 7.0 file carries</p>
+<ul class="badges">
+<li class="b sev-info">info</li>
+<li class="b cat">upgrade</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Tags beginning with an underscore are private extensions: _MARNM for a married name, _UPD for MyHeritage&#39;s last-changed stamp, _APID for an Ancestry source link. They survive into 7.0 as undocumented extensions, which means every other program is entitled to drop them, and a married name recorded only in _MARNM is exactly what disappears when the tree moves to another program.</p>
+<h4>How to fix it</h4>
+<p>Keep the tags, and when you move to 7.0 declare them in a &quot;1 SCHMA&quot; block in the header so readers know what they mean. Copy anything you cannot afford to lose into a standard structure first: a married name fits a second &quot;1 NAME&quot; with &quot;2 TYPE MARRIED&quot; under it.</p>
+</details>
+</article>
+<article class="rule" id="W102">
+<h3><a class="anchor" href="#W102"><code>W102</code></a> <span class="rname">encoding-artifact</span></h3>
+<p class="rtitle">Keep the bytes plain: no BOM, one line ending, no controls</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">style</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A byte-order mark in front of &quot;0 HEAD&quot; stops many 5.5.x readers from recognizing the first line at all, so the file is rejected as malformed (7.0 recommends the BOM, and it is not flagged there). CRLF and LF mixed in one file confuse older parsers and make every later diff unreadable. Stray control characters ride along inside names and notes and surface as boxes or as broken text.</p>
+<h4>How to fix it</h4>
+<p>Save 5.5.1 files as UTF-8 without BOM, pick one line ending for the whole file, and remove the control characters from the values that carry them. None of that is automatic. Independently of this warning, and whether or not it fired, <code>gedlint --fix</code> always rewrites classic Mac CR line endings to LF: that is whole-file preprocessing, not a repair of this rule.</p>
+</details>
+</article>
+<article class="rule" id="W202">
+<h3><a class="anchor" href="#W202"><code>W202</code></a> <span class="rname">asymmetric-famc-chil</span></h3>
+<p class="rtitle">Keep FAMC and CHIL pointing back at each other</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A parent-child link is written twice: the child says &quot;1 FAMC @F1@&quot; and the family answers with &quot;1 CHIL @I1@&quot;. With only one half present, what you see depends on which half your program reads first: the child shows up in the family&#39;s list but has no parents on their own page, or the reverse. The missing half is usually gone for good at the next export.</p>
+<h4>How to fix it</h4>
+<p>Add the line that is missing. Every &quot;1 FAMC @Fx@&quot; in a person needs a matching &quot;1 CHIL&quot; in family @Fx@, and every CHIL needs its FAMC. Re-linking the child to the family inside your genealogy program normally restores both halves at once.</p>
+</details>
+</article>
+<article class="rule" id="W301">
+<h3><a class="anchor" href="#W301"><code>W301</code></a> <span class="rname">implausible-lifespan</span></h3>
+<p class="rtitle">Check deaths before births and lifespans over 105 years</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A death before a birth, or a life longer than 105 years, is nearly always a mistyped year, a date read from the wrong column of a parish register, or two different people merged into one. Nothing breaks on import, but the mistake spreads: every age, generation gap and timeline your program draws is computed from these two dates.</p>
+<h4>How to fix it</h4>
+<p>Open the person and compare both dates against the source. If the record really is exceptional and correct, leave it alone: this rule asks you to verify, it does not claim the data is wrong.</p>
+</details>
+</article>
+<article class="rule" id="W302">
+<h3><a class="anchor" href="#W302"><code>W302</code></a> <span class="rname">possible-duplicate-individual</span></h3>
+<p class="rtitle">Review same-name people born within two years of each other</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Two records with the same name and birth years two years apart or less are the classic result of importing the same branch twice, or of a merge that matched nothing. Left alone they split one person&#39;s sources, children and photographs across two half-empty pages, and neither page tells the whole story.</p>
+<h4>How to fix it</h4>
+<p>Compare the two records. If they are the same person, merge them in your genealogy program, which keeps both sets of sources, and export again. If they are a nephew named after their uncle, which happens constantly, nothing needs to change.</p>
+</details>
+</article>
+<article class="rule" id="W303">
+<h3><a class="anchor" href="#W303"><code>W303</code></a> <span class="rname">implausible-parent-age</span></h3>
+<p class="rtitle">Check parents implausibly young or old at a child&#39;s birth</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A parent under 13, a mother over 50 or a father over 70 at a child&#39;s birth usually means the child is attached to the wrong generation, most often a grandparent linked as a parent. The tree then has one generation too few, and every descendant chart and relationship calculation drawn from it is wrong from that point down.</p>
+<h4>How to fix it</h4>
+<p>Check whether the child belongs to this family or to the next generation, and check the two birth years for a transposed digit. Late fathers and very young mothers are real, so verify the record rather than assume the link is wrong.</p>
+</details>
+</article>
+<article class="rule" id="W304">
+<h3><a class="anchor" href="#W304"><code>W304</code></a> <span class="rname">child-born-before-marriage</span></h3>
+<p class="rtitle">Check children born before the marriage date of their family</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>This is often simply true and needs no change at all. It is flagged because the other common cause is a wrong marriage year, or a child of an earlier union attached to the later family, which puts that child in the wrong household in every report and chart your program prints.</p>
+<h4>How to fix it</h4>
+<p>Verify the marriage date and which family the child belongs to. When the birth really does precede the marriage, leave it as it stands, or record the earlier union as its own family so the child sits where they belong.</p>
+</details>
+</article>
+<article class="rule" id="W305">
+<h3><a class="anchor" href="#W305"><code>W305</code></a> <span class="rname">invalid-sex-value</span></h3>
+<p class="rtitle">Use the SEX values the version allows: M, F, U, and X in 7.0</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>SEX carries one letter: M, F or U in 5.5.1, plus X in 7.0. Anything else, a whole word or a blank value included, is not understood, so importers store U instead. The person then shows up with a neutral icon and drops out of the &quot;sons&quot; and &quot;daughters&quot; listings your program builds from this field.</p>
+<h4>How to fix it</h4>
+<p>Write &quot;1 SEX M&quot;, &quot;1 SEX F&quot; or &quot;1 SEX U&quot;, and &quot;1 SEX X&quot; only in a 7.0 file. Anything you want to say in words about a person&#39;s gender belongs in a NOTE, not in this field.</p>
+</details>
+</article>
+<article class="rule" id="W306">
+<h3><a class="anchor" href="#W306"><code>W306</code></a> <span class="rname">invalid-enum-value</span></h3>
+<p class="rtitle">Spell enumerated values the way the specification lists them</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Fields such as PEDI, ROLE, QUAY, RESN, NAME.TYPE, FAMC.STAT, an ordinance STAT, HEAD.CHAR and the media type of a FILE take their value from a fixed list. A value outside the list is dropped rather than adapted: an adoption recorded as &quot;2 PEDI adopted child&quot; imports as an ordinary birth relationship, and the fact that the child was adopted is gone from the tree.</p>
+<h4>How to fix it</h4>
+<p>Use the listed value named in the message; 7.0 wants the exact uppercase spelling, 5.5.1 accepts any case. When none of them fits, that is what OTHER is for: put it there and write the real wording in a PHRASE beside it.</p>
+</details>
+</article>
+<article class="rule" id="W307">
+<h3><a class="anchor" href="#W307"><code>W307</code></a> <span class="rname">conflicting-duplicate-event</span></h3>
+<p class="rtitle">Reconcile single events recorded twice with different dates</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A person is born, christened, baptized, confirmed and buried once each, and a given marriage or divorce happens on a single date, so one of those events twice with two different dates is the fingerprint of a merge where neither date won. Programs keep one of them, usually the first, so the date you end up looking at may not be the researched one and the other is lost at the next export. A remarriage, MARR then DIV then MARR, is a legitimate sequence and is not flagged.</p>
+<h4>How to fix it</h4>
+<p>Keep the date you can source, delete the other, and put the rejected one in a NOTE if it is worth remembering. When both dates are right because they describe two different occasions, give each its own event block with its own PLAC and SOUR.</p>
+</details>
+</article>
+<article class="rule" id="W308">
+<h3><a class="anchor" href="#W308"><code>W308</code></a> <span class="rname">child-born-after-parent-death</span></h3>
+<p class="rtitle">Check children born after a parent died</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A birth after the mother&#39;s death, or more than a year after the father&#39;s death, usually means the child is attached to the wrong parents or a death year lost a digit. Nothing breaks on import, but every descendant timeline and relationship path drawn below that link inherits the wrong household.</p>
+<h4>How to fix it</h4>
+<p>Compare the child&#39;s birth date against both parents&#39; death dates in the sources. Fathers allow one year of slack for a posthumous birth; anything beyond that, or any birth after the mother&#39;s death, belongs to another family or needs a corrected year.</p>
+</details>
+</article>
+<article class="rule" id="W309">
+<h3><a class="anchor" href="#W309"><code>W309</code></a> <span class="rname">child-born-before-parent-birth</span></h3>
+<p class="rtitle">Flag children older than their own parents</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A child born in the same year as a parent or earlier cannot be that couple&#39;s child: the link almost always joins two generations, typically a grandparent recorded as a parent. Charts built from it lose a generation and every relationship below that point is computed one step wrong.</p>
+<h4>How to fix it</h4>
+<p>Move the child to the family where they belong, usually one generation down, or correct the birth year that carries the transposed digit. W303 already warns on wide gaps; this error marks the gap that cannot happen.</p>
+</details>
+</article>
+<article class="rule" id="W310">
+<h3><a class="anchor" href="#W310"><code>W310</code></a> <span class="rname">chronological-event-sequence</span></h3>
+<p class="rtitle">Keep baptism, burial and death in chronological order</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A christening or baptism before the birth, a burial before the death, or a baptism after the death is nearly always a date attached to the wrong event or the wrong person after a merge. Timelines and age calculations built from these dates place the person&#39;s whole life in the wrong order.</p>
+<h4>How to fix it</h4>
+<p>Open the person and compare each event date against its source, moving the stray date to the event it belongs to. Approximate, ranged, BEF and AFT qualified dates are not flagged, because an inexact date near a boundary proves nothing.</p>
+</details>
+</article>
+<article class="rule" id="W311">
+<h3><a class="anchor" href="#W311"><code>W311</code></a> <span class="rname">marriage-before-birth-or-after-death</span></h3>
+<p class="rtitle">Keep marriages inside both spouses&#39; lifetimes</p>
+<ul class="badges">
+<li class="b sev-error">error</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A marriage dated before either spouse was born or after either spouse died usually attaches the wrong couple to the family or carries a marriage year from a different union. Family reports then show a household that could never have existed, with children assigned to it.</p>
+<h4>How to fix it</h4>
+<p>Verify the marriage date and that the two spouses are the right pair. When the date belongs to an earlier or later union, record that union as its own family instead of reusing this one. Each marriage in the family is checked, and BEF or AFT qualified dates are not flagged against the side their uncertainty covers.</p>
+</details>
+</article>
+<article class="rule" id="W312">
+<h3><a class="anchor" href="#W312"><code>W312</code></a> <span class="rname">spouse-role-sex-discordance</span></h3>
+<p class="rtitle">Match HUSB and WIFE roles to the recorded sex</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A family whose HUSB is recorded female while its WIFE is recorded male is usually a swapped pair from manual editing or a bad import. Programs that list sons and daughters or draw pedigree symbols from these two fields then place the parents on the wrong sides of every chart. A single mismatched side alone is never flagged, because a same-sex marriage is legitimately recorded with two men or two women in these slots.</p>
+<h4>How to fix it</h4>
+<p>Swap the two spouse links back, or correct the SEX value that is wrong. Records without a usable SEX value are never flagged, so only a jointly inverted pair needs review.</p>
+</details>
+</article>
+<article class="rule" id="W401">
+<h3><a class="anchor" href="#W401"><code>W401</code></a> <span class="rname">url-in-place</span></h3>
+<p class="rtitle">Keep URLs out of PLAC and put the link where links belong</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">style</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>MyHeritage writes the address of its place catalogue into the place name itself. The place then imports as the literal text &quot;Sabadell, https://...&quot;, which matches nothing that anyone else wrote for the same town: your place index fills up with near-duplicates, and no map lookup or place merge resolves them.</p>
+<h4>How to fix it</h4>
+<p>Trim the value back to the place name and move the link into a NOTE, or into a &quot;2 WWW&quot; line in 7.0. The name should read the way a person would write it: &quot;Sabadell, Valles Occidental, Barcelona, Spain&quot;.</p>
+</details>
+</article>
+<article class="rule" id="W402">
+<h3><a class="anchor" href="#W402"><code>W402</code></a> <span class="rname">nonstandard-name-or-date</span></h3>
+<p class="rtitle">Write NAME and DATE values in the shape the format defines</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">style</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>A surname is delimited by a pair of slashes and a date is &quot;DD MMM YYYY&quot; with an English three-letter month. With a slash missing the importer reads the whole string as a given name, so the person files under the wrong letter and has no surname in any index. A date written &quot;gener 1901&quot; or &quot;about 1901&quot; is stored as unparsed text: it does not sort, does not filter, and never lands on a timeline.</p>
+<h4>How to fix it</h4>
+<p>Balance the slashes around the surname, as in &quot;1 NAME Joan /Puig i Ferrer/&quot;, and write dates as &quot;12 JAN 1901&quot;, using ABT, CAL or EST for approximations and &quot;BET x AND y&quot; for ranges. Keep the original wording in a PHRASE or a NOTE when it matters.</p>
+</details>
+</article>
+<article class="rule" id="W403">
+<h3><a class="anchor" href="#W403"><code>W403</code></a> <span class="rname">html-in-note</span></h3>
+<p class="rtitle">Store notes as plain text, not as HTML</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">style</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b on">on by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Exporters that keep notes in a rich-text editor write the markup out exactly as it stands, so &lt;br&gt;, &amp;nbsp; and whole &lt;notexml&gt; wrappers end up inside the note. GEDCOM notes are plain text: the receiving program prints the tags literally, and a note that looked like three tidy paragraphs on screen arrives as one paragraph full of angle brackets.</p>
+<h4>How to fix it</h4>
+<p>Convert the markup to plain text before exporting: a &lt;br&gt; becomes a real line break on a CONT line and a &amp;nbsp; becomes an ordinary space. Delete the wrapper elements entirely.</p>
+</details>
+</article>
+</section>
+<section class="ruleset" id="rs-hispanic-naming">
+<h2>hispanic-naming <span class="rs-meta">3 rules, off by default</span></h2>
+<article class="rule" id="W601">
+<h3><a class="anchor" href="#W601"><code>W601</code></a> <span class="rname">no-comma-in-surname</span></h3>
+<p class="rtitle">Remove the single comma separating two surnames</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">style</li>
+<li class="b fix-safe">fixable by --fix</li>
+<li class="b off">off by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Iberian surnames are space-separated; the comma is an export artifact that triggers reverse-indexing in Anglo-centric software. The rule reads the surname slot of &quot;1 NAME&quot; and the &quot;2 SURN&quot; subtag, and reports a record once: the same surname written wrong in both places is one defect, not two.</p>
+<h4>How to fix it</h4>
+<p>Remove the comma. The rule&#39;s repair does this for you automatically when it finds exactly two tokens and one comma.</p>
+</details>
+</article>
+<article class="rule" id="W602">
+<h3><a class="anchor" href="#W602"><code>W602</code></a> <span class="rname">no-married-name</span></h3>
+<p class="rtitle">Review married names imported into the _MARNM tag</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">style</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b off">off by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Women do not take a husband&#39;s surname in Iberian and Latin American naming, so its presence is almost always an import artifact from Anglo-centric software.</p>
+<h4>How to fix it</h4>
+<p>Verify the name. If it is an artifact, delete the <code>_MARNM</code> tag. This requires manual review because deleting the tag destroys data.</p>
+</details>
+</article>
+<article class="rule" id="W603">
+<h3><a class="anchor" href="#W603"><code>W603</code></a> <span class="rname">no-abbreviated-given-name</span></h3>
+<p class="rtitle">Expand abbreviated given names</p>
+<ul class="badges">
+<li class="b sev-info">info</li>
+<li class="b cat">style</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b off">off by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Abbreviated given names like Mª, Ma., Fco., Jph. are ambiguous and make searching difficult in consumer software, as users rarely guess the exact abbreviation used when searching for a person in an index. The rule reads the whole &quot;1 NAME&quot; value and the &quot;2 GIVN&quot; subtag, and reports a record once.</p>
+<h4>How to fix it</h4>
+<p>Write out the full name instead so that consumer software can index it properly and users can find the person without guessing abbreviations.</p>
+</details>
+</article>
+</section>
+<section class="ruleset" id="rs-hygiene">
+<h2>hygiene <span class="rs-meta">4 rules, off by default</span></h2>
+<article class="rule" id="W701">
+<h3><a class="anchor" href="#W701"><code>W701</code></a> <span class="rname">polluted-name</span></h3>
+<p class="rtitle">Remove notes, occupations or nicknames from name fields</p>
+<ul class="badges">
+<li class="b sev-info">info</li>
+<li class="b cat">style</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b off">off by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Consumer software indexing names cannot separate notes or occupations from actual names. A parenthetical, asterisk or digit breaks the name index. The rule reads &quot;1 NAME&quot; and the &quot;2 SURN&quot; subtag, and reports a record once.</p>
+<h4>How to fix it</h4>
+<p>Move the notes, occupations or nicknames to their proper tags like NOTE, OCCU or NICK.</p>
+</details>
+</article>
+<article class="rule" id="W702">
+<h3><a class="anchor" href="#W702"><code>W702</code></a> <span class="rname">all-caps-name</span></h3>
+<p class="rtitle">Avoid all-caps surnames</p>
+<ul class="badges">
+<li class="b sev-info">info</li>
+<li class="b cat">style</li>
+<li class="b fix-maybe">needs review (--fix --unsafe)</li>
+<li class="b off">off by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Fully capitalized surnames are a long-standing genealogical convention rather than a defect, and title casing is lossy for MCDONALD, O&#39;BRIEN, DE LA O and most Iberian particles. The rule reads the surname slot of &quot;1 NAME&quot; and the &quot;2 SURN&quot; subtag, and reports a record once; a given name is out of scope, so the repair never title-cases one.</p>
+<h4>How to fix it</h4>
+<p>Write names in standard capitalization. You can apply a potentially unsafe automatic repair using <code>--fix --unsafe</code>.</p>
+</details>
+</article>
+<article class="rule" id="W703">
+<h3><a class="anchor" href="#W703"><code>W703</code></a> <span class="rname">malformed-place</span></h3>
+<p class="rtitle">Remove doubled commas from place names</p>
+<ul class="badges">
+<li class="b sev-info">info</li>
+<li class="b cat">style</li>
+<li class="b fix-safe">fixable by --fix</li>
+<li class="b off">off by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Doubled commas inside PLAC break the place index in consumer software, causing near-duplicates and breaking map lookups completely.</p>
+<h4>How to fix it</h4>
+<p>Remove the extra commas from the place name. The automatic repair <code>gedlint --fix</code> does this for you automatically.</p>
+</details>
+</article>
+<article class="rule" id="W704">
+<h3><a class="anchor" href="#W704"><code>W704</code></a> <span class="rname">impossible-sibling-spacing</span></h3>
+<p class="rtitle">Review siblings born less than eight months apart</p>
+<ul class="badges">
+<li class="b sev-warning">warning</li>
+<li class="b cat">suspicious</li>
+<li class="b fix-none">no automatic fix</li>
+<li class="b off">off by default</li>
+</ul>
+<details>
+<summary>Why it matters and how to fix it</summary>
+<h4>Why it matters</h4>
+<p>Two children of the same mother born one to eight months apart, on exact dates, are in practice either one person entered twice with slightly different dates or children of two different unions merged into a single family. Left alone, the duplicate splits sources across two pages and the merged household misleads every sibling chart.</p>
+<h4>How to fix it</h4>
+<p>Compare the two birth dates against the parish register. Merge the pair when they are one person, or split the later union into its own family when two mothers were merged. Twins sharing the same day are never flagged, and families with no recorded mother are skipped because spacing cannot be measured without her.</p>
+</details>
+</article>
+</section>
+<footer class="site-foot"><p>Generated from the same rule registry the CLI prints with <code>--explain</code>, so the two cannot drift. &middot; <a href="#top">Back to top</a></p></footer>
+</main>
+</body>
+</html>

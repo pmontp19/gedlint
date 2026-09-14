@@ -1,0 +1,114 @@
+name: Release
+
+# Builds the release archives on real runners and ships them to GitHub
+# Releases. Before this workflow, release binaries were built by hand by
+# whichever agent ran the release, with a different cross-compilation setup
+# every time and nothing written down; the four targets compile natively on
+# hosted runners, so nobody ever has to cross-compile on a laptop again.
+#
+# Two flows, both triggered by pushing a tag:
+#   v0.Y.Z  (two dots)  creates that version's release with --generate-notes
+#                       and its assets. Tag the bump-merge commit on main
+#                       once its CI is green.
+#   v1      (no dots)   the floating tag the GitHub Action pins
+#                       (pmontp19/gedlint@v1). Force-move it onto the commit
+#                       you just released and push: this flow rebuilds the
+#                       same sources and overwrites the v1 release's assets
+#                       in place. The changelog script skips v1 on purpose:
+#                       it is an alias for the current version, not a
+#                       release of its own.
+#
+# Asset layout matches the pre-workflow releases: one archive per target
+# containing a gedlint-<tag>-<target>/ directory with the binary, LICENSE,
+# README.md and AGENTS.md, plus a .sha256 (sha256sum format) next to each,
+# which action.yml requires unless require-checksum is false.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v1'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and ship (e.g. v0.10.0 or v1)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR="gedlint-${TAG}-${{ matrix.target }}"
+          mkdir "$DIR"
+          cp "target/${{ matrix.target }}/release/gedlint"* "$DIR"/
+          cp LICENSE README.md AGENTS.md "$DIR"/
+          case "${{ matrix.target }}" in
+            *windows*)
+              7z a -tzip "$DIR.zip" "$DIR" > /dev/null
+              ;;
+            *)
+              tar czf "$DIR.tar.gz" "$DIR"
+              ;;
+          esac
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$DIR".* > "$DIR.sha256"
+          else
+            shasum -a 256 "$DIR".* > "$DIR.sha256"
+          fi
+          rm -rf "$DIR"
+          ls -la
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-${{ matrix.target }}
+          path: gedlint-${{ env.TAG }}-*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: assets
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd assets
+          ls -la
+          if [[ "$TAG" == v1 ]]; then
+            # The floating alias: overwrite the assets of the existing
+            # release, never create a second one.
+            gh release upload v1 gedlint-* --clobber
+          elif gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" gedlint-* --clobber
+          else
+            gh release create "$TAG" --verify-tag --generate-notes \
+              --title "$TAG" gedlint-*
+          fi
