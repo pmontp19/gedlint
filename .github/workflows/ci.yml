@@ -29,9 +29,9 @@ jobs:
           printf '[lints.rules]\n"W305" = "off"\n' > smoke/off.toml
           cat > smoke/warn.baseline.json <<'JSON'
           {
-            "gedlint-baseline": 1,
+            "gedlint-baseline": 2,
             "entries": [
-              {"code": "W305", "fingerprint": "@i#@: invalid sex (q), expected m/f/u", "count": 1}
+              {"code": "W305", "fingerprint": "h1:2921ee46e1c60b04", "count": 1}
             ]
           }
           JSON
