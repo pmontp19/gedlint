@@ -1,10 +1,11 @@
 //! The rules, grouped by domain, and the single streaming pass that runs them.
 //!
-//! `lint_lines` walks the parsed lines once, in the original order, handing
+//! `lint_lines_with` walks the parsed lines once, in the original order, handing
 //! each line to the rule groups that care about it. Every group owns its own
 //! piece of mutable state (`Structure`, `Graph`, `People`, `Events`, `Names`,
 //! `EnumState`); the pass itself only owns the traversal cursor.
 
+pub(crate) mod consistency;
 pub(crate) mod dates;
 pub(crate) mod encoding;
 pub(crate) mod enums;
@@ -20,9 +21,11 @@ pub(crate) mod upgrade;
 
 use std::collections::HashSet;
 
+use crate::config::Thresholds;
 use crate::diag::{Category, Diag, Report, Severity};
 use crate::parse::{detect_version, parse_line, truncate, Line, BOM_LEN};
 
+use consistency::Consistency;
 use enums::EnumState;
 use events::Events;
 use graph::Graph;
@@ -30,7 +33,7 @@ use individuals::People;
 use names::Names;
 use structure::Structure;
 
-pub(crate) fn lint_lines(text: &str) -> Report {
+pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
     // The BOM is not part of the grammar: it is reported in encoding_diags
     // and stripped so "0 HEAD" on the first line is recognized. Spans, on the
     // other hand, are on-disk offsets, so line 1 carries the stripped bytes as
@@ -59,6 +62,7 @@ pub(crate) fn lint_lines(text: &str) -> Report {
     let mut events = Events::default();
     let mut names = Names::default();
     let mut enum_state = EnumState::default();
+    let mut consistency = Consistency::default();
 
     // Traversal cursor owned by the pass itself.
     let mut cur: Option<(String, String)> = None; // (xref, kind)
@@ -149,6 +153,9 @@ pub(crate) fn lint_lines(text: &str) -> Report {
                 }
                 style::check_plac_url_record(&mut diags, l);
                 hygiene::check_malformed_place(&mut diags, l);
+                if l.tag == "PLAC" {
+                    consistency.record_plac(&xref, &l.value, l.no);
+                }
                 hispanic_naming::check_married_name(&mut diags, l);
                 style::check_note_html(&mut diags, l);
                 upgrade::check_rela_record(&mut diags, l, version);
@@ -216,6 +223,23 @@ pub(crate) fn lint_lines(text: &str) -> Report {
         }
         upgrade::check_rela_sub(&mut diags, l, version);
         individuals::record_sub_date(&mut people, l, &cur_sub, &cur);
+        // The MyHeritage-style consistency checks read a DATE against the
+        // birth/death index and a PLAC against cause/date wordlists, but
+        // only when the line hangs directly off the level-1 fact: a DATE
+        // under RESI -> SOUR -> DATA is the citation's publication year,
+        // not a residence date, and must not reach W310.
+        if parent_tag == cur_sub {
+            if l.tag == "DATE" {
+                if let Some((xref, _)) = cur.as_ref() {
+                    consistency.record_fact(xref, &cur_sub, &l.value, l.no);
+                }
+            }
+            if l.tag == "PLAC" {
+                if let Some((xref, _)) = cur.as_ref() {
+                    consistency.record_plac(xref, &l.value, l.no);
+                }
+            }
+        }
         upgrade::check_pedi_case(&mut diags, l, version);
         style::check_plac_url(&mut diags, l);
         hygiene::check_malformed_place(&mut diags, l);
@@ -235,14 +259,15 @@ pub(crate) fn lint_lines(text: &str) -> Report {
     graph::finish_refs(&mut diags, &graph);
     graph::finish_symmetry(&mut diags, &graph);
     graph::finish_cycles(&mut diags, &graph);
-    individuals::finish_lifespans(&mut diags, &people, &graph);
-    individuals::finish_parent_ages(&mut diags, &people, &graph);
+    individuals::finish_lifespans(&mut diags, &people, &graph, thr);
+    individuals::finish_parent_ages(&mut diags, &people, &graph, thr);
     individuals::finish_parent_death_birth(&mut diags, &people, &graph);
     individuals::finish_marriage_sequence(&mut diags, &people, &graph);
     individuals::finish_spouse_sex(&mut diags, &people, &graph);
     individuals::finish_sex(&mut diags, &people, version);
-    individuals::finish_duplicates(&mut diags, &people, &graph);
-    hygiene::finish_sibling_spacing(&mut diags, &people, &graph);
+    individuals::finish_duplicates(&mut diags, &people, &graph, thr);
+    hygiene::finish_sibling_spacing(&mut diags, &people, &graph, thr);
+    consistency::finish_all(&mut diags, &consistency, &people, &graph, thr);
 
     let individuals = people.indi_birth.len();
     let mut families_set: HashSet<&String> = HashSet::new();

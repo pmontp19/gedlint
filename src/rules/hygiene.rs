@@ -1,3 +1,4 @@
+use crate::config::Thresholds;
 use crate::diag::{Category, Diag, Severity};
 use crate::parse::{truncate, Line};
 use crate::rules::dates::date_ordinal;
@@ -98,10 +99,15 @@ pub(crate) fn check_malformed_place(diags: &mut Vec<Diag>, l: &Line) {
 }
 
 /// W704: impossible sibling spacing. Children of the same mother born 1 to
-/// 240 days apart (same day = twins, skipped). Only exact `DD MMM YYYY`
-/// dates participate; year-only or qualified dates cannot be measured and
-/// are skipped. Reports at the later-born child's record line.
-pub(crate) fn finish_sibling_spacing(diags: &mut Vec<Diag>, st: &People, graph: &Graph) {
+/// `sibling_max_gap` days apart (same day = twins, skipped). Only exact
+/// `DD MMM YYYY` dates participate; year-only or qualified dates cannot be
+/// measured and are skipped. Reports at the later-born child's record line.
+pub(crate) fn finish_sibling_spacing(
+    diags: &mut Vec<Diag>,
+    st: &People,
+    graph: &Graph,
+    thr: &Thresholds,
+) {
     use std::collections::HashMap;
     // mother xref -> [(ordinal, child xref)].
     let mut by_mother: HashMap<String, Vec<(i64, String)>> = HashMap::new();
@@ -129,7 +135,7 @@ pub(crate) fn finish_sibling_spacing(diags: &mut Vec<Diag>, st: &People, graph: 
             let (prev_ord, prev_child) = kids[w - 1].clone();
             let (ord, child) = kids[w].clone();
             let gap = ord - prev_ord;
-            if (1..=240).contains(&gap) {
+            if gap >= 1 && gap <= thr.sibling_max_gap {
                 diags.push(
                     Diag::new(
                         "W704",

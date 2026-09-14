@@ -35,7 +35,7 @@ pub use baseline::{
     apply_baseline, baseline_from_report, baseline_to_json, fingerprint, parse_baseline, Baseline,
     BaselineEntry, BaselineOutcome,
 };
-pub use config::{parse_config, Config, ConfigError, RuleLevel};
+pub use config::{parse_config, Config, ConfigError, RuleLevel, Thresholds};
 pub use diag::{Category, Diag, DiagGroup, Report, Severity};
 pub use fix::{
     apply_edits, compute_edits, compute_edits_with, fix_bytes, fix_bytes_with, normalize_endings,
@@ -49,7 +49,7 @@ pub use rulesdoc::{rules_html, DocStyle};
 
 use parse::{normalize_newlines, scan_head};
 use rules::encoding::encoding_diags;
-use rules::lint_lines;
+use rules::lint_lines_with;
 
 // ---------------------------------------------------------------------------
 // Pure public API (reusable from WASM): text in, report out.
@@ -85,7 +85,7 @@ fn lint_bytes_split(data: &[u8], cfg: &Config) -> Report {
     let (version, charset) = scan_head(&text);
     let diags: Vec<Diag> = encoding_diags(&data, version, charset.as_deref());
 
-    let mut r = lint_lines(&text);
+    let mut r = lint_lines_with(&text, cfg.thresholds());
     // Encoding diags go first (low line numbers), then semantic ones.
     let mut all = diags;
     all.append(&mut r.diags);

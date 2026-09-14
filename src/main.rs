@@ -45,8 +45,9 @@ fn help() -> String {
         -V, --version         version\n\
         \n\
         CONFIG: gedlint.toml is looked up in the file's directory and every\n  \
-        parent. It sets presets and per-rule severities; an unknown rule,\n  \
-        preset or spelling is an error, never a silent no-op.\n\
+        parent. It sets presets, per-rule severities and [lints.thresholds]\n  \
+        numeric limits; an unknown rule, preset, threshold or spelling is an\n  \
+        error, never a silent no-op.\n\
         \n\
         EXIT: 0 clean, 1 warnings, 2 errors (also: bad usage, unreadable\n  \
         file, invalid config; with --baseline: only NEW findings count)\n\
@@ -58,7 +59,8 @@ fn help() -> String {
         W303 parent age, W304 child before marriage, W305 SEX, W306 enums,\n  \
         W307 conflicting duplicate events, W401 PLAC+URL,\n  \
         W402 style (NAME/DATE), W403 NOTE+HTML,\n  \
-        W102 encoding/style, U501/U502 upgrade path 5.5.1 -> 7.0"
+        W102 encoding/style, U501/U502 upgrade path 5.5.1 -> 7.0,\n  \
+        hygiene W701-W712 (opt-in: spacing, caps, places, MyHeritage-style consistency)"
     )
 }
 

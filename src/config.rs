@@ -29,6 +29,50 @@ pub enum RuleLevel {
     Severity(Severity),
 }
 
+/// Numeric thresholds for the consistency rules. Every field has a default
+/// matching the historical hardcoded value, so a file without a
+/// `[lints.thresholds]` section behaves exactly as before. Pure data, no
+/// fs/env access, WASM-safe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Thresholds {
+    /// W301: lifespan over this many years warns.
+    pub max_lifespan: i64,
+    /// W303: parent younger than this at a child's birth warns.
+    pub min_parent_age: i64,
+    /// W303: mother older than this at a child's birth warns.
+    pub max_mother_age: i64,
+    /// W303: father older than this at a child's birth warns.
+    pub max_father_age: i64,
+    /// W302: birth years this far apart (inclusive) count as duplicates.
+    pub duplicate_window: i64,
+    /// W704: sibling gaps up to this many days warn (twins excluded).
+    pub sibling_max_gap: i64,
+    /// W705: no DEAT and birth more than this many years before the file's
+    /// latest year warns (the latest year in the file stands in for today,
+    /// so the engine needs no clock and stays WASM-safe).
+    pub max_alive_years: i64,
+    /// W706: spouses' birth years further apart than this warn.
+    pub max_spouse_gap: i64,
+    /// W707: marriage (or death of a married person) younger than this warns.
+    pub min_marriage_age: i64,
+}
+
+impl Default for Thresholds {
+    fn default() -> Self {
+        Thresholds {
+            max_lifespan: 105,
+            min_parent_age: 13,
+            max_mother_age: 50,
+            max_father_age: 70,
+            duplicate_window: 2,
+            sibling_max_gap: 240,
+            max_alive_years: 110,
+            max_spouse_gap: 25,
+            min_marriage_age: 16,
+        }
+    }
+}
+
 /// A parsed `gedlint.toml`. Build one with [`parse_config`]; the zero value
 /// is the built-in behaviour (the `recommended` preset, no overrides) and is
 /// exactly what the plain `lint_str` / `lint_bytes` entry points apply.
@@ -41,6 +85,8 @@ pub struct Config {
     /// `[lints.rules]` entries, with the key already resolved to the
     /// canonical rule code by the registry.
     overrides: Vec<(&'static str, RuleLevel)>,
+    /// `[lints.thresholds]` entries. Absent keys keep their defaults.
+    thresholds: Thresholds,
 }
 
 impl Default for Config {
@@ -48,6 +94,7 @@ impl Default for Config {
         Config {
             presets: vec!["recommended".to_string()],
             overrides: Vec::new(),
+            thresholds: Thresholds::default(),
         }
     }
 }
@@ -94,6 +141,11 @@ impl Config {
     pub fn enables(&self, code: &str) -> bool {
         !matches!(self.effective().get(code), Some(RuleLevel::Off))
     }
+
+    /// The numeric thresholds the consistency rules compare against.
+    pub fn thresholds(&self) -> &Thresholds {
+        &self.thresholds
+    }
 }
 
 /// Why a configuration file was refused. `line` is 1-based.
@@ -134,16 +186,20 @@ fn preset_names() -> Vec<String> {
 /// Parse and validate a `gedlint.toml` file's text. Pure: text in, config
 /// or a located error out, no filesystem access anywhere.
 ///
-/// Only a minimal TOML subset is understood: `[lints]` and `[lints.rules]`
-/// sections, `key = "string"` pairs and one string array (`presets`). Keys
+/// Only a minimal TOML subset is understood: `[lints]`, `[lints.rules]` and
+/// `[lints.thresholds]` sections, `key = "string"` pairs, bare integer
+/// values for thresholds, and one string array (`presets`). Keys
 /// may be quoted strings or bare `[A-Za-z0-9_-]` words; `#` starts a comment
 /// outside a string. Anything else is a hard error.
 pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut presets: Option<Vec<String>> = None;
     let mut overrides: Vec<(&'static str, RuleLevel)> = Vec::new();
+    let mut thresholds = Thresholds::default();
+    let mut seen_threshold_keys: Vec<String> = Vec::new();
     let mut seen_lints = false;
     let mut seen_rules = false;
+    let mut seen_thresholds = false;
     // None = before any section header.
     let mut section: Option<Section> = None;
 
@@ -178,10 +234,17 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
                     seen_rules = true;
                     Section::Rules
                 }
+                "lints.thresholds" => {
+                    if seen_thresholds {
+                        return Err(err(no, "section [lints.thresholds] appears twice"));
+                    }
+                    seen_thresholds = true;
+                    Section::Thresholds
+                }
                 other => {
                     return Err(err(
                         no,
-                        format!("unknown section [{other}]: expected [lints] or [lints.rules]"),
+                        format!("unknown section [{other}]: expected [lints], [lints.rules] or [lints.thresholds]"),
                     ));
                 }
             });
@@ -269,12 +332,67 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
                 };
                 overrides.push((meta.code, level));
             }
+            Section::Thresholds => {
+                if seen_threshold_keys.iter().any(|k| k == &key) {
+                    return Err(err(no, format!("threshold \"{key}\" is configured twice")));
+                }
+                let n = parse_threshold_value(value, no)?;
+                match key.as_str() {
+                    "max-lifespan" => {
+                        check_threshold_range(no, &key, n, 50, 150)?;
+                        thresholds.max_lifespan = n;
+                    }
+                    "min-parent-age" => {
+                        check_threshold_range(no, &key, n, 0, 30)?;
+                        thresholds.min_parent_age = n;
+                    }
+                    "max-mother-age" => {
+                        check_threshold_range(no, &key, n, 0, 100)?;
+                        thresholds.max_mother_age = n;
+                    }
+                    "max-father-age" => {
+                        check_threshold_range(no, &key, n, 0, 120)?;
+                        thresholds.max_father_age = n;
+                    }
+                    "duplicate-window" => {
+                        check_threshold_range(no, &key, n, 0, 20)?;
+                        thresholds.duplicate_window = n;
+                    }
+                    "sibling-max-gap" => {
+                        check_threshold_range(no, &key, n, 0, 1000)?;
+                        thresholds.sibling_max_gap = n;
+                    }
+                    "max-alive-years" => {
+                        check_threshold_range(no, &key, n, 50, 300)?;
+                        thresholds.max_alive_years = n;
+                    }
+                    "max-spouse-gap" => {
+                        check_threshold_range(no, &key, n, 0, 100)?;
+                        thresholds.max_spouse_gap = n;
+                    }
+                    "min-marriage-age" => {
+                        check_threshold_range(no, &key, n, 0, 30)?;
+                        thresholds.min_marriage_age = n;
+                    }
+                    _ => {
+                        return Err(err(
+                            no,
+                            format!(
+                                "unknown threshold \"{key}\": valid thresholds are {}",
+                                threshold_names().join(", ")
+                            ),
+                        ));
+                    }
+                }
+                seen_threshold_keys.push(key);
+            }
         }
     }
 
     Ok(Config {
         presets: presets.unwrap_or_else(|| vec!["recommended".to_string()]),
         overrides,
+        thresholds,
     })
 }
 
@@ -282,6 +400,63 @@ pub fn parse_config(text: &str) -> Result<Config, ConfigError> {
 enum Section {
     Lints,
     Rules,
+    Thresholds,
+}
+
+/// Every threshold key a `[lints.thresholds]` section may set, for the
+/// unknown-key error. Quoted in the message the way presets are.
+fn threshold_names() -> Vec<String> {
+    [
+        "max-lifespan",
+        "min-parent-age",
+        "max-mother-age",
+        "max-father-age",
+        "duplicate-window",
+        "sibling-max-gap",
+        "max-alive-years",
+        "max-spouse-gap",
+        "min-marriage-age",
+    ]
+    .iter()
+    .map(|k| format!("\"{k}\""))
+    .collect()
+}
+
+/// A bare integer threshold value: no quotes, no decimals, no signs.
+fn parse_threshold_value(s: &str, no: usize) -> Result<i64, ConfigError> {
+    let v = s.trim();
+    if v.starts_with('"') {
+        return Err(err(
+            no,
+            "threshold values must be bare integers, e.g. max-lifespan = 105",
+        ));
+    }
+    if v.is_empty() || !v.chars().all(|c| c.is_ascii_digit()) {
+        return Err(err(
+            no,
+            "threshold values must be bare integers, e.g. max-lifespan = 105",
+        ));
+    }
+    v.parse::<i64>()
+        .map_err(|_| err(no, "threshold value is too large"))
+}
+
+/// Range guard so a typo (a 1000-year lifespan, a negative age) fails loudly
+/// instead of silently disabling the rule it tunes.
+fn check_threshold_range(
+    no: usize,
+    key: &str,
+    n: i64,
+    lo: i64,
+    hi: i64,
+) -> Result<(), ConfigError> {
+    if !(lo..=hi).contains(&n) {
+        return Err(err(
+            no,
+            format!("threshold \"{key}\" must be between {lo} and {hi}, got {n}"),
+        ));
+    }
+    Ok(())
 }
 
 /// Drop a trailing `#` comment, but only outside a quoted string: inside
