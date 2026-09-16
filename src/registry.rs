@@ -537,7 +537,7 @@ imports as the literal text \"Sabadell, https://...\", which matches nothing tha
 the same town: your place index fills up with near-duplicates, and no map lookup or place merge resolves \
 them.",
         remedy: "Trim the value back to the place name and move the link into a NOTE, or into a \"2 WWW\" \
-line in 7.0. The name should read the way a person would write it: \"Sabadell, Valles Occidental, \
+line in 7.0. The name should read the way a person would write it: \"Sabadell, Vallès Occidental, \
 Barcelona, Spain\".",
     },
     RuleMeta {
@@ -549,12 +549,12 @@ Barcelona, Spain\".",
         default_enabled: true,
         fixable: None,
         example: Some((
-            "1 NAME rosa prat\n1 BIRT\n2 DATE 12/3/1901",
+            "1 NAME Rosa /Prat\n1 BIRT\n2 DATE 12 gener 1901",
             "1 NAME Rosa /Prat/\n1 BIRT\n2 DATE 12 MAR 1901",
         )),
         title: "Write NAME and DATE values in the shape the format defines",
         why: "A surname is delimited by a pair of slashes and a date is \"DD MMM YYYY\" with an English \
-three-letter month. With a slash missing the importer reads the whole string as a given name, so the \
+three-letter month. With the slashes unbalanced the importer reads the whole string as a given name, so the \
 person files under the wrong letter and has no surname in any index. A date written \"gener 1901\" or \
 \"about 1901\" is stored as unparsed text: it does not sort, does not filter, and never lands on a \
 timeline.",
