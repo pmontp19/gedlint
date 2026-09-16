@@ -408,19 +408,22 @@ mod tests {
     }
 
     #[test]
-    fn example_block_renders_when_present() {
-        // All registry entries are None today; render a modified copy to pin
-        // the markup the content PRs will fill in.
-        let mut rules = RULES.to_vec();
-        rules[0].example = Some((
-            "1 NOTE first part\nbecause it lost the prefix",
-            "1 NOTE first part\n2 CONT because it lost the prefix",
-        ));
-        let html = rules_html_for(DocStyle::Reference, &rules);
+    fn example_blocks_render() {
+        // The shipped registry carries examples for the top rules; the page
+        // renders one example block per rule that has one, and none for the
+        // rest.
+        let html = rules_html(DocStyle::Reference);
         assert!(html.contains("class=\"example\""));
-        assert!(html.contains("ex-before"));
-        assert!(html.contains("2 CONT because it lost the prefix"));
-        // And the shipped page has none yet.
-        assert!(!rules_html(DocStyle::Reference).contains("class=\"example\""));
+        assert!(html.contains("2 CONT and the register spells the town Botarell"));
+        let n = RULES.iter().filter(|r| r.example.is_some()).count();
+        assert!(n >= 8, "example count regressed: {n}");
+        assert_eq!(html.matches("class=\"example\"").count(), n);
+
+        // A registry without examples must not emit the block at all.
+        let mut rules = RULES.to_vec();
+        for r in &mut rules {
+            r.example = None;
+        }
+        assert!(!rules_html_for(DocStyle::Reference, &rules).contains("class=\"example\""));
     }
 }

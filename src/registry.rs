@@ -53,7 +53,10 @@ pub const RULES: &[RuleMeta] = &[
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: Some(Applicability::Safe),
-        example: None,
+        example: Some((
+            "1 NOTE The boat left Barcelona at dawn\nand the register spells the town Botarell",
+            "1 NOTE The boat left Barcelona at dawn\n2 CONT and the register spells the town Botarell",
+        )),
         title: "Start every line with a level number, one deeper at most",
         why: "The level number at the start of a line is the only thing that says what the line belongs to. \
 A line without one (a note or a source transcription that wrapped onto its own line is the usual cause) \
@@ -90,7 +93,10 @@ into one file is the usual origin.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
-        example: None,
+        example: Some((
+            "0 @I1@ INDI\n1 NAME Pere /Vilar/\n0 @I1@ INDI\n1 NAME Pere /Vilar i Soler/",
+            "0 @I1@ INDI\n1 NAME Pere /Vilar/\n0 @I2@ INDI\n1 NAME Pere /Vilar i Soler/",
+        )),
         title: "Give every record its own identifier",
         why: "The @I123@ identifier is how one record points at another. When two records share it, every \
 pointer that names it becomes ambiguous and importers resolve it to whichever of the two they read last: \
@@ -124,7 +130,10 @@ where this normally comes from.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: Some(Applicability::Safe),
-        example: None,
+        example: Some((
+            "1 NOTE A long note\n2 CONC that wraps\n3 CONT across lines",
+            "1 NOTE A long note\n2 CONC that wraps\n2 CONT across lines",
+        )),
         title: "Anchor every CONT and CONC to the line it continues",
         why: "CONT and CONC continue the value of the line directly above them, one level up, and they never \
 nest inside each other. One that hangs from nothing, or from another CONT or CONC, continues nothing: \
@@ -196,7 +205,10 @@ under each custom EVEN or FACT, and a DATE under each ordinance STAT.",
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: Some(Applicability::Safe),
-        example: None,
+        example: Some((
+            "1 NAME Jos\u{FFFD}\n2 CONC \u{FFFD} /Casals/",
+            "1 NAME Jos\u{e9} /Casals/",
+        )),
         title: "Keep every character whole and the file in valid UTF-8",
         why: "MyHeritage cuts long values at a fixed byte count, and when the cut falls inside an accented \
 character its two halves end up on different CONC lines. What is left is not valid UTF-8: where \
@@ -214,7 +226,10 @@ whole file is in a legacy encoding instead, convert it to UTF-8, or declare the 
         default_severity: Severity::Error,
         default_enabled: true,
         fixable: None,
-        example: None,
+        example: Some((
+            "0 @I3@ INDI\n1 NAME Rosa /Campdera/\n1 FAMC @F9@",
+            "0 @I3@ INDI\n1 NAME Rosa /Campdera/",
+        )),
         title: "Point only at records that exist in the same file",
         why: "A pointer such as \"1 FAMC @F12@\" promises that @F12@ is in the file. When it is not, the link \
 is simply lost on import: the child arrives without parents, the citation without its source, the person \
@@ -391,7 +406,10 @@ sits where they belong.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
-        example: None,
+        example: Some((
+            "0 @I4@ INDI\n1 NAME Anna /Riu/\n1 SEX Q",
+            "0 @I4@ INDI\n1 NAME Anna /Riu/\n1 SEX F",
+        )),
         title: "Use the SEX values the version allows: M, F, U, and X in 7.0",
         why: "SEX carries one letter: M, F or U in 5.5.1, plus X in 7.0. Anything else, a whole word or a \
 blank value included, is not understood, so importers store U instead. The person then shows up with a \
@@ -509,7 +527,10 @@ own event block with its own PLAC and SOUR.",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
-        example: None,
+        example: Some((
+            "2 PLAC Sabadell, https://www.myheritage.es/lugares/sabadell",
+            "2 PLAC Sabadell, Vall\u{e8}s Occidental, Barcelona, Spain\n3 NOTE https://www.myheritage.es/lugares/sabadell",
+        )),
         title: "Keep URLs out of PLAC and put the link where links belong",
         why: "MyHeritage writes the address of its place catalogue into the place name itself. The place then \
 imports as the literal text \"Sabadell, https://...\", which matches nothing that anyone else wrote for \
@@ -527,7 +548,10 @@ Barcelona, Spain\".",
         default_severity: Severity::Warning,
         default_enabled: true,
         fixable: None,
-        example: None,
+        example: Some((
+            "1 NAME rosa prat\n1 BIRT\n2 DATE 12/3/1901",
+            "1 NAME Rosa /Prat/\n1 BIRT\n2 DATE 12 MAR 1901",
+        )),
         title: "Write NAME and DATE values in the shape the format defines",
         why: "A surname is delimited by a pair of slashes and a date is \"DD MMM YYYY\" with an English \
 three-letter month. With a slash missing the importer reads the whole string as a given name, so the \

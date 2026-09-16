@@ -468,18 +468,29 @@ fn fixable_matches_the_repairs_fix_really_carries() {
 
 #[test]
 fn rules_json_carries_the_example_field() {
-    // All None today: the field is reserved for the before/after snippets
-    // the documentation page and finding card will render. The JSON must
-    // already be valid for both shapes, or filling one in breaks consumers.
+    // Rules with a before/after snippet serialize it as an object; the rest
+    // stay null until their content is written. Both shapes are contract
+    // with the documentation page and the finding card.
+    let json = gedlint::rules_to_json();
+    let mut with_example = 0;
     for r in gedlint::RULES {
-        assert!(r.example.is_none(), "{} already has an example", r.code);
+        if let Some((before, after)) = r.example {
+            with_example += 1;
+            // Newlines and friends are JSON-escaped in the payload.
+            let esc = |t: &str| t.replace('\n', "\\n");
+            let shape = format!(
+                "{{\"before\":\"{}\",\"after\":\"{}\"}}",
+                esc(before),
+                esc(after)
+            );
+            assert!(
+                json.contains(&shape),
+                "{}: example missing from json",
+                r.code
+            );
+        }
     }
-    let none_shape = "\"example\":null";
-    assert!(gedlint::rules_to_json().contains(none_shape));
-
-    let mut rules = gedlint::RULES.to_vec();
-    rules[0].example = Some(("0 HEAD", "0 HEAD"));
-    let json = gedlint::rules_to_json_for(&rules);
-    let expected = format!("{{\"before\":\"{}\",\"after\":\"{}\"}}", "0 HEAD", "0 HEAD");
-    assert!(json.contains(&expected), "json: {json}");
+    // Content PRs keep landing examples; raise the floor as they do.
+    assert!(with_example >= 8, "example count regressed: {with_example}");
+    assert!(json.contains("\"example\":null"));
 }

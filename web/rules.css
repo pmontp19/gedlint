@@ -255,6 +255,12 @@ details > h4:first-of-type { margin-top: 0.4rem; }
   gap: 0.8rem;
 }
 
+/* GEDCOM lines are long for a half column; keep them on screen when they fit. */
+.example pre {
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
 .ex-before { border-left: 3px solid var(--error); margin: 0; }
 .ex-after  { border-left: 3px solid var(--accent); margin: 0; }
 
