@@ -41,7 +41,26 @@ env:
   TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
+  guard:
+    # A version tag must match the Cargo.toml it points at: the notes and
+    # asset names come from the tag, but `--version` comes from the crate,
+    # and a mismatch ships binaries that lie about what they are.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches Cargo.toml version
+        if: ${{ env.TAG != 'v1' }}
+        run: |
+          set -euo pipefail
+          CRATE="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          if [ "$TAG" != "$CRATE" ]; then
+            echo "tag $TAG does not match Cargo.toml version $CRATE"
+            echo "merge a bump PR first, then tag that commit"
+            exit 1
+          fi
+
   build:
+    needs: guard
     strategy:
       fail-fast: false
       matrix:
