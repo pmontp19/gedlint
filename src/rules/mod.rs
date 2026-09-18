@@ -15,6 +15,7 @@ pub(crate) mod hispanic_naming;
 pub(crate) mod hygiene;
 pub(crate) mod individuals;
 pub(crate) mod names;
+pub(crate) mod payloads;
 pub(crate) mod structure;
 pub(crate) mod style;
 pub(crate) mod upgrade;
@@ -249,9 +250,14 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
         style::check_plac_url(&mut diags, l);
         hygiene::check_malformed_place(&mut diags, l);
         hispanic_naming::check_married_name(&mut diags, l);
-        // DATE with suspicious format (non-ENG months, lowercase "about"...).
+        // DATE with suspicious format (non-ENG months, lowercase "about"...),
+        // plus the 5.5.1 calendar escape and the AGE duration grammar.
         if l.tag == "DATE" && !l.value.is_empty() {
             dates::check_date_style(&mut diags, l.no, &l.value, version);
+            payloads::check_calendar_escape(&mut diags, l.no, &l.value, version);
+        }
+        if l.tag == "AGE" && !l.value.is_empty() {
+            payloads::check_age(&mut diags, l.no, &l.value, version);
         }
     }
 

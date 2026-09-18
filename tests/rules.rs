@@ -951,6 +951,56 @@ fn w306_stat_is_551_enum_per_ordinance() {
     let bad2 = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT Submitted\n");
     assert!(has(&bad2, "W306"));
 }
+#[test]
+fn w404_bare_number_age() {
+    // ged-inline.org flags AGE 76 / AGE 35 / AGE 3 months in TGC551; we
+    // had no AGE grammar check at all.
+    let bad = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 DATE 3 MAR 1974\n2 AGE 76\n");
+    assert!(has(&bad, "W404"));
+    let bad2 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 AGE 3 months\n");
+    assert!(has(&bad2, "W404"));
+}
+#[test]
+fn w404_accepts_duration_forms() {
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE 76y\n1 BIRT\n2 AGE <42y 6m 9d\n");
+    assert!(!has(&ok, "W404"), "{:?}", codes(&ok));
+    let ok2 = wrap551("0 @F1@ FAM\n1 MARC\n2 HUSB\n3 AGE >42y\n2 WIFE\n3 AGE 42y 6m\n");
+    assert!(!has(&ok2, "W404"), "{:?}", codes(&ok2));
+}
+#[test]
+fn w404_551_words_and_70_difference() {
+    let infant = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE STILLBORN\n");
+    assert!(!has(&infant, "W404"));
+    // INFANT/CHILD/STILLBORN are 5.5.1 only; 7.0 dropped them.
+    let g70 =
+        "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE INFANT\n0 TRLR\n";
+    assert!(has(g70, "W404"));
+}
+#[test]
+fn w405_hebrew_date_needs_escape() {
+    // ged-inline.org flags every bare Hebrew/French date in TGC551.
+    let bad = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 2 TVT 5758\n");
+    let d = codes(&bad);
+    assert!(d.contains(&"W405".to_string()), "{:?}", d);
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE @#DHEBREW@ 2 TVT 5758\n");
+    assert!(!has(&ok, "W405"));
+}
+#[test]
+fn w405_french_republican_date_needs_escape() {
+    let bad =
+        wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BAPM\n2 DATE FROM 25 SVN 5757 TO 26 IYR 5757\n");
+    assert!(has(&bad, "W405"));
+    let bad2 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BAPM\n2 DATE 11 NIVO 0006\n");
+    assert!(has(&bad2, "W405"));
+}
+#[test]
+fn w405_spares_gregorian_and_70() {
+    let ok = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BET 5 APR 1712 AND 28 SEP 1715\n");
+    assert!(!has(&ok, "W405"), "{:?}", codes(&ok));
+    // 7.0 names calendars inline; no escape exists.
+    let g70 = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BET FRENCH_R 2 _JOUR 8 AND _CALENDRIER 4 COMP 8\n0 TRLR\n";
+    assert!(!has(g70, "W405"), "{:?}", codes(g70));
+}
 
 #[test]
 fn w307_remarriage_after_div_is_not_a_conflict() {

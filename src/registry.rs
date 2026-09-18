@@ -604,6 +604,50 @@ arrives as one paragraph full of angle brackets.",
         remedy: "Convert the markup to plain text before exporting: a <br> becomes a real line break on a \
 CONT line and a &nbsp; becomes an ordinary space. Delete the wrapper elements entirely.",
     },
+    RuleMeta {
+        code: "W404",
+        name: "nonstandard-age-value",
+        ruleset: "core",
+        category: Category::Style,
+        default_severity: Severity::Warning,
+        default_enabled: true,
+        fixable: None,
+        example: Some((
+            "1 DEAT\n2 AGE 76",
+            "1 DEAT\n2 AGE 76y",
+        )),
+        title: "Write ages as durations: 42y 6m, not 42 or 3 months",
+        why: "AGE carries a duration with a letter per unit: \"76y\", \"42y 6m\", \"11m 3w 6d\", \
+optionally bounded by < or >. A bare number (\"76\") or spelled-out units (\"3 months\") is not an \
+age to any reader: the value is stored as unparsed text, age-at-event fields show it raw or empty, \
+and sorting and averaging over ages silently skips every one written this way. 5.5.1 also allows the \
+words INFANT, CHILD and STILLBORN, which 7.0 dropped.",
+        remedy: "Give every unit its letter: \"2 AGE 76y\", \"3 AGE 3m\". Ages under a FAM event's HUSB \
+or WIFE take the same form. Put anything a duration cannot say, such as \"about three months\", in a \
+NOTE beside the age.",
+    },
+    RuleMeta {
+        code: "W405",
+        name: "missing-calendar-escape",
+        ruleset: "core",
+        category: Category::Style,
+        default_severity: Severity::Warning,
+        default_enabled: true,
+        fixable: None,
+        example: Some((
+            "2 DATE 11 NIVO 0006",
+            "2 DATE @#DFRENCH R@ 11 NIVO 0006",
+        )),
+        title: "Mark Hebrew and French Republican dates with their calendar escape",
+        why: "A 5.5.1 date in the Hebrew or French Republican calendar must start with the calendar \
+escape, @#DHEBREW@ or @#DFRENCH R@. Without it the month code (TVT, NIVO, SVN...) is just a strange \
+word: importers read the whole value as unparsed text or drop the date, so a burial dated in the \
+Hebrew calendar arrives with no date at all. Older Jewish and French-Canadian exports are where the \
+bare form usually comes from.",
+        remedy: "Prefix the value with the escape the month names imply: \"2 DATE @#DHEBREW@ 2 TVT \
+5758\" or \"2 DATE @#DFRENCH R@ 11 NIVO 0006\". 7.0 names the calendar inline (\"HEBREW 2 TVT 5758\") \
+and needs no escape.",
+    },
 
     RuleMeta {
         code: "W601",
