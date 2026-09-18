@@ -134,12 +134,17 @@ pub(crate) fn fam_member_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, x
     }
 }
 
-/// Generic level-1 pointers (SOUR, OBJE, NOTE, SUBM...): recorded for E201.
+/// Generic level-1 pointers (SOUR, OBJE, NOTE, SUBM, ASSO...): recorded for
+/// E201. A pointer under a user-defined tag names some record too, so it
+/// resolves by existence alone.
 pub(crate) fn generic_pointer(st: &mut Graph, l: &Line, xref: &str) {
     // Note: ADOP takes no pointer in 5.5.1 (event with a
     // subordinate FAMC), so it is not tracked here.
-    if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "SUBM" | "REPO")
-    {
+    let tracked = matches!(
+        l.tag.as_str(),
+        "SOUR" | "OBJE" | "NOTE" | "SUBM" | "REPO" | "ASSO" | "ALIA" | "ANCI" | "DESI"
+    ) || l.tag.starts_with('_');
+    if is_pointer(&l.value) && tracked {
         st.pending.push((
             l.no,
             xref.to_string(),
@@ -151,8 +156,9 @@ pub(crate) fn generic_pointer(st: &mut Graph, l: &Line, xref: &str) {
 
 /// Pointers below level 1 (event SOUR/OBJE/NOTE...) resolve for E201 too.
 pub(crate) fn sub_pointer(st: &mut Graph, l: &Line, cur: &Option<(String, String)>) {
-    if is_pointer(&l.value) && matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "REPO" | "SUBM")
-    {
+    let tracked = matches!(l.tag.as_str(), "SOUR" | "OBJE" | "NOTE" | "REPO" | "SUBM")
+        || l.tag.starts_with('_');
+    if is_pointer(&l.value) && tracked {
         let from = cur
             .clone()
             .map(|c| c.0)
@@ -173,6 +179,8 @@ pub(crate) fn finish_refs(diags: &mut Vec<Diag>, st: &Graph) {
             let kind = match tag.as_str() {
                 "FAMS" | "FAMC" => "FAM",
                 "HUSB" | "WIFE" | "CHIL" => "INDI",
+                "ASSO" | "ALIA" => "INDI",
+                "ANCI" | "DESI" => "SUBM",
                 _ => "record",
             };
             diags.push(Diag::new(

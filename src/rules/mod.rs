@@ -172,6 +172,10 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
                     version,
                     l.no,
                 );
+            } else if structure.in_head_main && l.tag == "SUBM" {
+                // The header's submitter pointer: HEAD opens no addressable
+                // record, so the pending entry names it "HEAD".
+                graph::generic_pointer(&mut graph, l, "HEAD");
             }
             continue;
         }

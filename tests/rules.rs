@@ -815,6 +815,42 @@ fn e201_message_grammar() {
     assert!(d.msg.contains("points to a nonexistent FAM"), "{}", d.msg);
     assert!(!d.msg.contains("nonexistent a"), "{}", d.msg);
 }
+#[test]
+fn e201_asso_alia_anci_desi_pointers() {
+    // Found against extensions.ged + ged-inline.org: pointers under ASSO,
+    // ALIA, ANCI and DESI resolve like any other reference.
+    let g =
+        wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 ASSO @X1@\n1 ALIA @X2@\n1 ANCI @X3@\n1 DESI @X4@\n");
+    let ds = codes(&g);
+    assert_eq!(ds.iter().filter(|c| *c == "E201").count(), 4, "{:?}", ds);
+}
+#[test]
+fn e201_user_defined_tag_pointer() {
+    // js-gedcom caught @B1@ under _IN in the official extensions.ged; we
+    // only resolved pointers under standard tags.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 _IN @B1@\n");
+    assert!(has(&g, "E201"));
+}
+#[test]
+fn e201_user_defined_tag_pointer_resolves() {
+    // The same pointer to an existing record stays silent (extensions.ged
+    // _LOC case).
+    let g = wrap551("0 @I1@ INDI\n1 _IN @B1@\n0 @B1@ _RECORD\n");
+    assert!(!has(&g, "E201"));
+}
+#[test]
+fn e201_level2_user_defined_tag_pointer() {
+    let g = wrap551("0 @I1@ INDI\n1 GRAD\n2 _LOC @L9@\n");
+    assert!(has(&g, "E201"));
+}
+#[test]
+fn e201_head_subm_pointer() {
+    // HEAD opens no record, but its SUBM pointer must resolve too.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 SUBM @SUB9@\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n";
+    assert!(has(g, "E201"));
+    let ok = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 SUBM @S1@\n0 @S1@ SUBM\n1 NAME A\n0 TRLR\n";
+    assert!(!has(ok, "E201"));
+}
 
 #[test]
 fn w307_remarriage_after_div_is_not_a_conflict() {
