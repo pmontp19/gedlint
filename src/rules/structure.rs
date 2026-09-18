@@ -136,8 +136,8 @@ pub(crate) fn check_continuation(
     }
 }
 
-/// Level-0 record change: HEAD/TRLR bookkeeping.
-pub(crate) fn enter_record(st: &mut Structure, l: &Line) {
+/// Level-0 record change: HEAD/TRLR bookkeeping, E010 on xref-less records.
+pub(crate) fn enter_record(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line) {
     // HEAD scope for E008 (GEDC/VERS singletons) and E009.
     st.in_head_main = l.tag == "HEAD";
     if l.tag == "HEAD" {
@@ -147,8 +147,29 @@ pub(crate) fn enter_record(st: &mut Structure, l: &Line) {
         st.saw_trlr = true;
         st.after_trlr = true;
     }
+    // E010: the record syntax of these six types is `n @XREF@ TAG`, with no
+    // pointerless alternate (only NOTE has one), so an INDI, FAM, SOUR,
+    // REPO, SUBM or OBJE line without an @xref@ opens a record no pointer
+    // can ever name (ged-inline.org caught the `0 INDI` case in the
+    // official xref.ged; we stayed silent).
+    if l.xref.is_empty()
+        && matches!(
+            l.tag.as_str(),
+            "INDI" | "FAM" | "SOUR" | "REPO" | "SUBM" | "OBJE"
+        )
+    {
+        diags.push(Diag::new(
+            "E010",
+            Category::Correctness,
+            Severity::Error,
+            l.no,
+            format!(
+                "{} record without an @xref@: no pointer can ever name it",
+                l.tag
+            ),
+        ));
+    }
 }
-
 /// HEAD.CHAR: removed in 7.0 (UTF-8 assumed); 5.5.1 has 4 legal values.
 pub(crate) fn check_head_char(diags: &mut Vec<Diag>, st: &Structure, l: &Line, version: Version) {
     if st.in_head_main && l.tag == "CHAR" {

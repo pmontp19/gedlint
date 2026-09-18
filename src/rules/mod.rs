@@ -119,7 +119,7 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
             cur_sub.clear();
             names.reported.clear();
             events.cur_event = None;
-            structure::enter_record(&mut structure, l);
+            structure::enter_record(&mut diags, &mut structure, l);
             cur = graph::open_record(&mut diags, &mut graph, &mut people, l);
             continue;
         }

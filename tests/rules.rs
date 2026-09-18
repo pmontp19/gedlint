@@ -851,6 +851,34 @@ fn e201_head_subm_pointer() {
     let ok = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 SUBM @S1@\n0 @S1@ SUBM\n1 NAME A\n0 TRLR\n";
     assert!(!has(ok, "E201"));
 }
+#[test]
+fn e010_record_without_xref() {
+    // ged-inline.org flags the xref-less `0 INDI` in the official xref.ged;
+    // only NOTE may drop its identifier.
+    let g = wrap551("0 INDI\n1 NAME A /B/\n0 @I1@ INDI\n1 NAME C /D/\n");
+    let r = lint_str(&g);
+    let ds: Vec<_> = r.diags.iter().filter(|d| d.code == "E010").collect();
+    assert_eq!(ds.len(), 1, "{:?}", r.diags);
+    assert!(ds[0].msg.contains("INDI record without an @xref@"));
+}
+#[test]
+fn e010_covers_all_six_record_types() {
+    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 INDI\n0 FAM\n0 SOUR\n0 REPO\n0 SUBM\n0 OBJE\n0 TRLR\n";
+    let r = lint_str(g);
+    assert_eq!(
+        r.diags.iter().filter(|d| d.code == "E010").count(),
+        6,
+        "{:?}",
+        r.diags
+    );
+}
+#[test]
+fn e010_spares_note_head_trlr_and_custom() {
+    // NOTE is the one record type with a pointerless alternate; custom
+    // record tags are the user's own grammar.
+    let g = wrap551("0 NOTE free-standing note\n0 @P1@ _EXT\n0 @I1@ INDI\n1 NAME A /B/\n");
+    assert!(!has(&g, "E010"));
+}
 
 #[test]
 fn w307_remarriage_after_div_is_not_a_conflict() {
