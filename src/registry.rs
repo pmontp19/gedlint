@@ -191,11 +191,14 @@ own block. A second marriage is a second MARR event, not a second DATE inside th
         example: None,
         title: "Supply the substructures the specification requires",
         why: "Some lines are not optional. The header needs GEDC with its VERS, which is how a reader learns \
-whether the file is 5.5.1 or 7.0; in 7.0 a custom EVEN or FACT needs a TYPE and an LDS ordinance STAT \
-needs a DATE. Without the version the importer guesses, and guessing wrong changes how dates, names and \
-the character encoding are read for the entire file.",
+whether the file is 5.5.1 or 7.0; in 7.0 a custom EVEN or FACT needs a TYPE, an LDS ordinance STAT \
+needs a DATE, a REPO or SUBM record needs a NAME and an OBJE record needs a FILE. Without the version \
+the importer guesses, and guessing wrong changes how dates, names and the character encoding are read \
+for the entire file; without the record-level lines the repository, submitter or photograph arrives \
+nameless or pointing at no file at all.",
         remedy: "Add the missing lines: \"1 GEDC\" with \"2 VERS 5.5.1\" (or 7.0) inside HEAD, a \"2 TYPE ...\" \
-under each custom EVEN or FACT, and a DATE under each ordinance STAT.",
+under each custom EVEN or FACT, a DATE under each ordinance STAT, a \"1 NAME\" under each REPO and SUBM \
+record and a \"1 FILE\" (with its FORM) under each OBJE record.",
     },
     RuleMeta {
         code: "E010",
@@ -448,13 +451,14 @@ you want to say in words about a person's gender belongs in a NOTE, not in this 
         fixable: None,
         example: None,
         title: "Spell enumerated values the way the specification lists them",
-        why: "Fields such as PEDI, ROLE, QUAY, RESN, NAME.TYPE, FAMC.STAT, an ordinance STAT, HEAD.CHAR and \
-the media type of a FILE take their value from a fixed list. A value outside the list is dropped rather \
-than adapted: an adoption recorded as \"2 PEDI adopted child\" imports as an ordinary birth relationship, \
-and the fact that the child was adopted is gone from the tree.",
+        why: "Fields such as PEDI, ROLE, QUAY, RESN, NAME.TYPE, FAMC.STAT, an ordinance STAT, HEAD.CHAR \
+and the media or format of a FILE take their value from a fixed list. A value outside the list is \
+dropped rather than adapted: an adoption recorded as \"2 PEDI adopted child\" imports as an ordinary \
+birth relationship, and the fact that the child was adopted is gone from the tree. In a 7.0 file a \
+value beginning with an underscore is a declared extension and is never flagged.",
         remedy: "Use the listed value named in the message; 7.0 wants the exact uppercase spelling, 5.5.1 \
 accepts any case. When none of them fits, that is what OTHER is for: put it there and write the real \
-wording in a PHRASE beside it.",
+wording in a PHRASE beside it, or, in 7.0, declare your own underscore-prefixed value in SCHMA.",
     },
     RuleMeta {
         code: "W307",

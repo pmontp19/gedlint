@@ -879,6 +879,78 @@ fn e010_spares_note_head_trlr_and_custom() {
     let g = wrap551("0 NOTE free-standing note\n0 @P1@ _EXT\n0 @I1@ INDI\n1 NAME A /B/\n");
     assert!(!has(&g, "E010"));
 }
+#[test]
+fn e009_repo_subm_need_name_obje_needs_file() {
+    // js-gedcom (g7validation.json) flags REPO without NAME, SUBM without
+    // NAME and OBJE without FILE in 7.0; ged-inline.org the REPO case.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @R1@ REPO\n0 @O1@ OBJE\n0 @S1@ SUBM\n0 TRLR\n";
+    let r = lint_str(g);
+    let e9: Vec<_> = r.diags.iter().filter(|d| d.code == "E009").collect();
+    assert_eq!(e9.len(), 3, "{:?}", r.diags);
+    assert!(e9.iter().all(|d| d.msg.contains("(7.0)")));
+}
+#[test]
+fn e009_repo_obje_subm_satisfied() {
+    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @R1@ REPO\n1 NAME Archive\n0 @O1@ OBJE\n1 FILE x.jpg\n2 FORM image/jpeg\n0 @S1@ SUBM\n1 NAME Jo\n0 TRLR\n";
+    assert!(!has(g, "E009"));
+}
+#[test]
+fn e009_record_level_is_70_only() {
+    // 5.5.1 leaves these optional; a NAME at any depth below does not
+    // satisfy the record-level requirement.
+    let g551 = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @R1@ REPO\n0 TRLR\n";
+    assert!(!has(g551, "E009"));
+    let g7 = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @S1@ SUBM\n1 ADDR x\n2 CITY y\n0 TRLR\n";
+    assert!(has(g7, "E009"));
+}
+#[test]
+fn w306_ext_enums_are_legal_in_70() {
+    // The official extensions.ged: spec type-Enum says extTag values are
+    // always permitted, so _ENUMVAL, _CHILD and the list form pass silent.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @VOID@\n2 PEDI _ENUMVAL\n1 ASSO @I1@\n2 ROLE _CHILD\n1 RESN _PRIVATE, LOCKED\n0 @S1@ SOUR\n1 DATA\n2 EVEN DEAT, _CHILD\n0 TRLR\n";
+    assert!(!has(g, "W306"), "{:?}", codes(g));
+}
+#[test]
+fn w306_still_flags_wrong_spelling_in_70() {
+    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @VOID@\n2 PEDI ADOPTED CHILD\n";
+    assert!(has(g, "W306"));
+}
+#[test]
+fn w306_551_keeps_flagging_custom_values() {
+    // 5.5.1 has no extTag provision: a custom value stays suspicious.
+    let g = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @VOID@\n2 PEDI _custom\n");
+    assert!(has(&g, "W306"));
+}
+#[test]
+fn w306_medi_checked_in_70_too() {
+    // enumset-MEDI exists in 7.0; the same list applies.
+    let ok = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @O1@ OBJE\n1 FILE f\n2 FORM image/jpeg\n3 MEDI PHOTO\n0 TRLR\n";
+    assert!(!has(ok, "W306"));
+    let bad = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @O1@ OBJE\n1 FILE f\n2 FORM image/jpeg\n3 MEDI PICTURE\n0 TRLR\n";
+    assert!(has(bad, "W306"));
+}
+#[test]
+fn w306_form_is_551_enum() {
+    // TGC551 carries FORM URL / FORM PICT / FORM RTF; ged-inline.org flags
+    // them against MULTIMEDIA_FORMAT, we were silent.
+    let bad = wrap551("0 @I1@ INDI\n1 OBJE\n2 FORM URL\n2 FILE x\n");
+    assert!(has(&bad, "W306"));
+    let bad2 = wrap551("0 @O1@ OBJE\n1 FORM PICT\n");
+    assert!(has(&bad2, "W306"));
+    let ok = wrap551("0 @I1@ INDI\n1 OBJE\n2 FORM gif\n2 FILE x\n");
+    assert!(!has(&ok, "W306"), "{:?}", codes(&ok));
+}
+#[test]
+fn w306_stat_is_551_enum_per_ordinance() {
+    // ged-inline.org flags SLGS STAT Child in TGC551; Cleared is fine.
+    let bad = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT Child\n");
+    assert!(has(&bad, "W306"));
+    let ok = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT Excluded\n1 BAPL\n2 STAT Cleared\n");
+    assert!(!has(&ok, "W306"), "{:?}", codes(&ok));
+    // SUBMITTED belongs to the baptism set, not the sealing set.
+    let bad2 = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT Submitted\n");
+    assert!(has(&bad2, "W306"));
+}
 
 #[test]
 fn w307_remarriage_after_div_is_not_a_conflict() {

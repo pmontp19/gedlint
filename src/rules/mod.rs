@@ -127,6 +127,7 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
         if lvl == 1 {
             cur_sub = l.tag.clone();
             events.cur_event = None;
+            structure::check_record_required_sub(&mut structure, l, lvl);
             structure::check_head_char(&mut diags, &structure, l, version);
             structure::check_head_gedc(&mut diags, &mut structure, l);
             if let Some((xref, kind)) = cur.clone() {
@@ -257,7 +258,7 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
     // A NAME run ending at EOF (NAME directly before TRLR) still needs W402.
     names::flush(&mut diags, &mut names, &mut people.indi_name);
 
-    structure::finish(&mut diags, &structure);
+    structure::finish(&mut diags, &structure, version);
     enums::finish(&mut diags, &enum_state);
     events::finish(&mut diags, &events, version);
     graph::finish_refs(&mut diags, &graph);

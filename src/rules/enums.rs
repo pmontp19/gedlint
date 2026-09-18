@@ -70,6 +70,32 @@ const MEDI551: &[&str] = &[
     "TOMBSTONE",
     "VIDEO",
 ];
+// 7.0 ships the same MEDI set (enumset-MEDI).
+const MEDI70: &[&str] = MEDI551;
+// 5.5.1 MULTIMEDIA_FORMAT (the FORM payload under OBJE/FILE).
+const FORM551: &[&str] = &["BMP", "GIF", "JPEG", "OLE", "PCX", "TIFF", "WAV"];
+// 5.5.1 LDS statuses: baptism-style for BAPL/CONL/ENDL/SLGC/INIL, spouse
+// sealing for SLGS. The two sets differ in SUBMITTED vs EXCLUDED.
+const STAT551_ORD: &[&str] = &[
+    "BIC",
+    "CLEARED",
+    "COMPLETED",
+    "DNS",
+    "DNC",
+    "PRE_1970",
+    "SUBMITTED",
+    "UNCLEARED",
+];
+const STAT551_SLGS: &[&str] = &[
+    "BIC",
+    "CLEARED",
+    "COMPLETED",
+    "DNS",
+    "DNC",
+    "EXCLUDED",
+    "PRE_1970",
+    "UNCLEARED",
+];
 const ORD_STAT: &[&str] = &[
     "BIC",
     "CANCELED",
@@ -140,6 +166,14 @@ pub(crate) fn check_enum(
         }
         return;
     }
+    // 7.0: an enumeration payload always permits extTag values (spec
+    // type-Enum: "Payload values that match production extTag are always
+    // permitted"), so an underscore-prefixed value is a legal extension,
+    // never a defect. The official extensions.ged leans on exactly this
+    // (_ENUMVAL under FAMC.PEDI, _CHILD under ASSO.ROLE).
+    if version == Version::V70 && v.starts_with('_') {
+        return;
+    }
     let set: Option<(&[&str], &str)> = match tag {
         "ROLE" => {
             if version == Version::V70 {
@@ -180,7 +214,29 @@ pub(crate) fn check_enum(
             },
             "NAME.TYPE",
         )),
-        "MEDI" if version != Version::V70 => Some((MEDI551, "FILE.FORM.MEDI")),
+        "MEDI" => Some((
+            if version == Version::V70 {
+                MEDI70
+            } else {
+                MEDI551
+            },
+            "FILE.FORM.MEDI",
+        )),
+        // 5.5.1 FORM is the MULTIMEDIA_FORMAT enum (bmp/gif/jpeg/...);
+        // 7.0 FORM is a media type handled above.
+        "FORM" if version != Version::V70 && matches!(parent_tag, "OBJE" | "FILE") => {
+            Some((FORM551, "OBJE.FORM"))
+        }
+        // 5.5.1 ordinance STAT: the spouse-sealing set on SLGS, the
+        // baptism set everywhere else.
+        "STAT" if LDS_EVENTS.contains(&parent_tag) && version == Version::V551 => Some((
+            if parent_tag == "SLGS" {
+                STAT551_SLGS
+            } else {
+                STAT551_ORD
+            },
+            "LDS.STAT",
+        )),
         _ => None,
     };
     let Some((allowed, what)) = set else { return };
@@ -191,8 +247,10 @@ pub(crate) fn check_enum(
         let all_ok = v.split(',').all(|t| {
             // Empty tokens (trailing comma, "A, ,B") are tolerated:
             // exporter quirk, the meaningful tokens still get validated.
+            // An underscore-prefixed token is an extTag extension value,
+            // always permitted in 7.0.
             let t = t.trim();
-            t.is_empty() || allowed.contains(&t)
+            t.is_empty() || t.starts_with('_') || allowed.contains(&t)
         });
         if all_ok {
             return;

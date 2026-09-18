@@ -22,6 +22,11 @@ pub(crate) struct Structure {
     // (GEDCOM version), SOUR.VERS (product version) and CHAR.VERS are three
     // different {0:1} slots, not one.
     pub(crate) head_vers_seen: HashMap<usize, usize>,
+    // E009: record-level required substructures outstanding, one entry per
+    // REPO/SUBM/OBJE record opened: (record tag, record line, satisfied?).
+    // 7.0 makes NAME mandatory under REPO and SUBM records and FILE under
+    // OBJE records.
+    pub(crate) req_subs: Vec<(String, usize, bool)>,
 }
 
 /// E002: HEAD must be the first line; nothing may follow TRLR.
@@ -169,6 +174,32 @@ pub(crate) fn enter_record(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line) 
             ),
         ));
     }
+    // E009 tracker: the registry gives NAME {1:1} under REPO and SUBM
+    // records and FILE {1:M} under OBJE records in 7.0. Entries resolve
+    // at end of run, so a record followed straight by the next one is
+    // still judged.
+    if matches!(l.tag.as_str(), "REPO" | "SUBM" | "OBJE") {
+        st.req_subs.push((l.tag.clone(), l.no, false));
+    }
+}
+
+/// Marks the open record's required substructure as satisfied (E009, 7.0):
+/// the newest REPO/SUBM/OBJE entry is the record this level-1 line hangs
+/// under.
+pub(crate) fn check_record_required_sub(st: &mut Structure, l: &Line, lvl: u32) {
+    if lvl != 1 {
+        return;
+    }
+    let is_name = l.tag == "NAME";
+    let is_file = l.tag == "FILE";
+    if !is_name && !is_file {
+        return;
+    }
+    if let Some((tag, _, seen)) = st.req_subs.last_mut() {
+        if !*seen && ((tag == "OBJE") == is_file) {
+            *seen = true;
+        }
+    }
 }
 /// HEAD.CHAR: removed in 7.0 (UTF-8 assumed); 5.5.1 has 4 legal values.
 pub(crate) fn check_head_char(diags: &mut Vec<Diag>, st: &Structure, l: &Line, version: Version) {
@@ -246,7 +277,7 @@ pub(crate) fn check_head_vers(
 }
 
 /// End of run: the records and substructures that must exist (E002, E009).
-pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Structure) {
+pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Structure, version: Version) {
     // E002: HEAD/TRLR are required.
     if !st.saw_head {
         diags.push(Diag::new(
@@ -285,5 +316,23 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Structure) {
             0,
             "GEDC without required VERS".into(),
         ));
+    }
+
+    // E009: 7.0 requires NAME under REPO and SUBM records, FILE under OBJE
+    // records (registry cardinality {1:1}/{1:M}; js-gedcom flags the OBJE
+    // case in probe files, ged-inline.org the REPO case).
+    if version == Version::V70 {
+        for (tag, line, seen) in &st.req_subs {
+            if !seen {
+                let need = if tag == "OBJE" { "FILE" } else { "NAME" };
+                diags.push(Diag::new(
+                    "E009",
+                    Category::Correctness,
+                    Severity::Error,
+                    *line,
+                    format!("{} record without required {} (7.0)", tag, need),
+                ));
+            }
+        }
     }
 }

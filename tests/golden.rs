@@ -91,14 +91,30 @@ fn tgc551_lf_no_structural_errors() {
         "only the deliberate CAL-vs-EST CHR: {:?}",
         r.diags
     );
-    // Placeholder MEDI/ROLE payloads are genuine W306s.
+    // Placeholder MEDI/ROLE payloads are genuine W306s, and so are the
+    // non-standard FORM multimedia formats and the "Child" SLGS STAT the
+    // Committee file carries deliberately (ged-inline.org flags the same
+    // lines against MULTIMEDIA_FORMAT and LDS_SPOUSE_SEALING_DATE_STATUS).
     let w306: Vec<usize> = r
         .diags
         .iter()
         .filter(|d| d.code == "W306")
         .map(|d| d.line)
         .collect();
-    assert_eq!(w306, vec![1398, 1591], "{:?}", r.diags);
+    assert_eq!(
+        w306,
+        vec![
+            245, 249, 253, 257, // FORM URL x4 (Extra URL Filelinks)
+            274, 278, 282, 286, // FORM TEXT/W8BN/RTF/PDF (General Custom)
+            303, 307, 311, 315, 319, 324, 327,  // FORM PICT..mpeg (Nonstandard)
+            1277, // SLGS STAT Child
+            1398, // MEDI "Book (or other description of this source)"
+            1591, // SOUR.EVEN.ROLE free text
+            2144, // OBJE record FORM PICT
+        ],
+        "{:?}",
+        r.diags
+    );
 }
 
 #[test]
