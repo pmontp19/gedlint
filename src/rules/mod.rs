@@ -15,6 +15,7 @@ pub(crate) mod hispanic_naming;
 pub(crate) mod hygiene;
 pub(crate) mod individuals;
 pub(crate) mod names;
+pub(crate) mod payloads;
 pub(crate) mod structure;
 pub(crate) mod style;
 pub(crate) mod upgrade;
@@ -119,7 +120,7 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
             cur_sub.clear();
             names.reported.clear();
             events.cur_event = None;
-            structure::enter_record(&mut structure, l);
+            structure::enter_record(&mut diags, &mut structure, l);
             cur = graph::open_record(&mut diags, &mut graph, &mut people, l);
             continue;
         }
@@ -127,6 +128,7 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
         if lvl == 1 {
             cur_sub = l.tag.clone();
             events.cur_event = None;
+            structure::check_record_required_sub(&mut structure, l, lvl, parent_tag);
             structure::check_head_char(&mut diags, &structure, l, version);
             structure::check_head_gedc(&mut diags, &mut structure, l);
             if let Some((xref, kind)) = cur.clone() {
@@ -172,12 +174,18 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
                     version,
                     l.no,
                 );
+            } else if structure.in_head_main && l.tag == "SUBM" {
+                // The header's submitter pointer: HEAD opens no addressable
+                // record, so the pending entry names it "HEAD".
+                graph::generic_pointer(&mut graph, l, "HEAD");
             }
             continue;
         }
 
         // Level >= 2.
         names::continue_value(&mut diags, &mut names, &mut people.indi_name, l, lvl);
+        // The FORM under a record-level OBJE FILE (E009, 7.0).
+        structure::check_record_required_sub(&mut structure, l, lvl, parent_tag);
         // SURN/GIVN under the NAME: the structured fields the hispanic-naming
         // and hygiene rulesets also read. After continue_value, so a defect
         // in both 1 NAME and the subtag is one diagnostic, not two.
@@ -244,16 +252,21 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
         style::check_plac_url(&mut diags, l);
         hygiene::check_malformed_place(&mut diags, l);
         hispanic_naming::check_married_name(&mut diags, l);
-        // DATE with suspicious format (non-ENG months, lowercase "about"...).
+        // DATE with suspicious format (non-ENG months, lowercase "about"...),
+        // plus the 5.5.1 calendar escape and the AGE duration grammar.
         if l.tag == "DATE" && !l.value.is_empty() {
             dates::check_date_style(&mut diags, l.no, &l.value, version);
+            payloads::check_calendar_escape(&mut diags, l.no, &l.value, version);
+        }
+        if l.tag == "AGE" && !l.value.is_empty() {
+            payloads::check_age(&mut diags, l.no, &l.value, version);
         }
     }
 
     // A NAME run ending at EOF (NAME directly before TRLR) still needs W402.
     names::flush(&mut diags, &mut names, &mut people.indi_name);
 
-    structure::finish(&mut diags, &structure);
+    structure::finish(&mut diags, &structure, version);
     enums::finish(&mut diags, &enum_state);
     events::finish(&mut diags, &events, version);
     graph::finish_refs(&mut diags, &graph);

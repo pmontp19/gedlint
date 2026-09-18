@@ -6,6 +6,16 @@ use std::collections::HashMap;
 use crate::diag::{Category, Diag, Severity};
 use crate::parse::{is_pointer, truncate, Line, Version};
 
+/// One REPO/SUBM/OBJE record opened, with the state its required
+/// substructures (E009, 7.0) accumulate: NAME under REPO/SUBM; every FILE
+/// directly under an OBJE record needs its own FORM {1:1}.
+pub(crate) struct ReqRec {
+    pub(crate) tag: String,
+    pub(crate) line: usize,
+    pub(crate) name_seen: bool,
+    pub(crate) files: Vec<(usize, bool)>,
+}
+
 /// Skeleton state carried across the single pass.
 #[derive(Default)]
 pub(crate) struct Structure {
@@ -22,6 +32,12 @@ pub(crate) struct Structure {
     // (GEDCOM version), SOUR.VERS (product version) and CHAR.VERS are three
     // different {0:1} slots, not one.
     pub(crate) head_vers_seen: HashMap<usize, usize>,
+    // E009: record-level required substructures. `active` indexes req_subs
+    // for the record currently open, so a NAME under a later INDI can never
+    // satisfy an earlier REPO; entries resolve at end of run, so a record
+    // followed straight by the next one is still judged.
+    pub(crate) req_subs: Vec<ReqRec>,
+    pub(crate) active: Option<usize>,
 }
 
 /// E002: HEAD must be the first line; nothing may follow TRLR.
@@ -136,8 +152,8 @@ pub(crate) fn check_continuation(
     }
 }
 
-/// Level-0 record change: HEAD/TRLR bookkeeping.
-pub(crate) fn enter_record(st: &mut Structure, l: &Line) {
+/// Level-0 record change: HEAD/TRLR bookkeeping, E010 on xref-less records.
+pub(crate) fn enter_record(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line) {
     // HEAD scope for E008 (GEDC/VERS singletons) and E009.
     st.in_head_main = l.tag == "HEAD";
     if l.tag == "HEAD" {
@@ -147,8 +163,62 @@ pub(crate) fn enter_record(st: &mut Structure, l: &Line) {
         st.saw_trlr = true;
         st.after_trlr = true;
     }
+    // E010: the record syntax of these six types is `n @XREF@ TAG`, with no
+    // pointerless alternate (only NOTE has one), so an INDI, FAM, SOUR,
+    // REPO, SUBM or OBJE line without an @xref@ opens a record no pointer
+    // can ever name (ged-inline.org caught the `0 INDI` case in the
+    // official xref.ged; we stayed silent).
+    if l.xref.is_empty()
+        && matches!(
+            l.tag.as_str(),
+            "INDI" | "FAM" | "SOUR" | "REPO" | "SUBM" | "OBJE"
+        )
+    {
+        diags.push(Diag::new(
+            "E010",
+            Category::Correctness,
+            Severity::Error,
+            l.no,
+            format!(
+                "{} record without an @xref@: no pointer can ever name it",
+                l.tag
+            ),
+        ));
+    }
+    // E009 tracker: the registry gives NAME {1:1} under REPO and SUBM
+    // records, and FORM {1:1} under every FILE {1:M} of an OBJE record, in
+    // 7.0. Only the record this line opens can satisfy it.
+    if matches!(l.tag.as_str(), "REPO" | "SUBM" | "OBJE") {
+        st.req_subs.push(ReqRec {
+            tag: l.tag.clone(),
+            line: l.no,
+            name_seen: false,
+            files: Vec::new(),
+        });
+        st.active = Some(st.req_subs.len() - 1);
+    } else {
+        st.active = None;
+    }
 }
 
+/// Tracks the open record's required substructures (E009, 7.0): NAME under
+/// REPO/SUBM, FILE under OBJE, and the FORM under each of those FILEs.
+pub(crate) fn check_record_required_sub(st: &mut Structure, l: &Line, lvl: u32, parent_tag: &str) {
+    let Some(i) = st.active else { return };
+    let rec = &mut st.req_subs[i];
+    if lvl == 1 && parent_tag == rec.tag {
+        if rec.tag != "OBJE" && l.tag == "NAME" {
+            rec.name_seen = true;
+        } else if rec.tag == "OBJE" && l.tag == "FILE" {
+            rec.files.push((l.no, false));
+        }
+    } else if lvl == 2 && l.tag == "FORM" && parent_tag == "FILE" {
+        // The FORM belongs to the nearest FILE still missing one.
+        if let Some(file) = rec.files.iter_mut().rev().find(|f| !f.1) {
+            file.1 = true;
+        }
+    }
+}
 /// HEAD.CHAR: removed in 7.0 (UTF-8 assumed); 5.5.1 has 4 legal values.
 pub(crate) fn check_head_char(diags: &mut Vec<Diag>, st: &Structure, l: &Line, version: Version) {
     if st.in_head_main && l.tag == "CHAR" {
@@ -225,7 +295,7 @@ pub(crate) fn check_head_vers(
 }
 
 /// End of run: the records and substructures that must exist (E002, E009).
-pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Structure) {
+pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Structure, version: Version) {
     // E002: HEAD/TRLR are required.
     if !st.saw_head {
         diags.push(Diag::new(
@@ -264,5 +334,49 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Structure) {
             0,
             "GEDC without required VERS".into(),
         ));
+    }
+
+    // E009: 7.0 requires NAME under REPO and SUBM records, and a FORM under
+    // every FILE of an OBJE record (registry cardinality {1:1}/{1:M};
+    // js-gedcom flags the OBJE case in probe files, ged-inline.org the
+    // REPO case).
+    if version == Version::V70 {
+        for rec in &st.req_subs {
+            match rec.tag.as_str() {
+                "OBJE" => {
+                    if rec.files.is_empty() {
+                        diags.push(Diag::new(
+                            "E009",
+                            Category::Correctness,
+                            Severity::Error,
+                            rec.line,
+                            "OBJE record without required FILE (7.0)".into(),
+                        ));
+                    }
+                    for (fline, has_form) in &rec.files {
+                        if !has_form {
+                            diags.push(Diag::new(
+                                "E009",
+                                Category::Correctness,
+                                Severity::Error,
+                                *fline,
+                                "OBJE FILE without required FORM (7.0)".into(),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    if !rec.name_seen {
+                        diags.push(Diag::new(
+                            "E009",
+                            Category::Correctness,
+                            Severity::Error,
+                            rec.line,
+                            format!("{} record without required NAME (7.0)", rec.tag),
+                        ));
+                    }
+                }
+            }
+        }
     }
 }

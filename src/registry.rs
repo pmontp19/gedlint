@@ -191,11 +191,35 @@ own block. A second marriage is a second MARR event, not a second DATE inside th
         example: None,
         title: "Supply the substructures the specification requires",
         why: "Some lines are not optional. The header needs GEDC with its VERS, which is how a reader learns \
-whether the file is 5.5.1 or 7.0; in 7.0 a custom EVEN or FACT needs a TYPE and an LDS ordinance STAT \
-needs a DATE. Without the version the importer guesses, and guessing wrong changes how dates, names and \
-the character encoding are read for the entire file.",
+whether the file is 5.5.1 or 7.0; in 7.0 a custom EVEN or FACT needs a TYPE, an LDS ordinance STAT \
+needs a DATE, a REPO or SUBM record needs a NAME and an OBJE record needs a FILE. Without the version \
+the importer guesses, and guessing wrong changes how dates, names and the character encoding are read \
+for the entire file; without the record-level lines the repository, submitter or photograph arrives \
+nameless or pointing at no file at all.",
         remedy: "Add the missing lines: \"1 GEDC\" with \"2 VERS 5.5.1\" (or 7.0) inside HEAD, a \"2 TYPE ...\" \
-under each custom EVEN or FACT, and a DATE under each ordinance STAT.",
+under each custom EVEN or FACT, a DATE under each ordinance STAT, a \"1 NAME\" under each REPO and SUBM \
+record and a \"1 FILE\" (with its FORM) under each OBJE record.",
+    },
+    RuleMeta {
+        code: "E010",
+        name: "record-requires-xref",
+        ruleset: "core",
+        category: Category::Correctness,
+        default_severity: Severity::Error,
+        default_enabled: true,
+        fixable: None,
+        example: Some((
+            "0 INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
+            "0 @I1@ INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
+        )),
+        title: "Give INDI, FAM, SOUR, REPO, SUBM and OBJE records an @xref@",
+        why: "These six record types are defined with an identifier in their first line, and only a NOTE \
+record may drop it. A record opened as \"0 INDI\" with no @xref@ has no name, so no FAMC, CHIL, SOUR \
+or OBJE line anywhere in the file can ever point at it: strict importers refuse the record and lenient \
+ones read it as an anonymous blob that drops out of every index and chart. Hand-merging two files is \
+the usual origin.",
+        remedy: "Give the record an unused identifier, \"0 @I12@ INDI\", and keep it stable across \
+exports. Nothing may point at the record yet, but the next link you add now has a name to use.",
     },
     RuleMeta {
         code: "E101",
@@ -427,13 +451,14 @@ you want to say in words about a person's gender belongs in a NOTE, not in this 
         fixable: None,
         example: None,
         title: "Spell enumerated values the way the specification lists them",
-        why: "Fields such as PEDI, ROLE, QUAY, RESN, NAME.TYPE, FAMC.STAT, an ordinance STAT, HEAD.CHAR and \
-the media type of a FILE take their value from a fixed list. A value outside the list is dropped rather \
-than adapted: an adoption recorded as \"2 PEDI adopted child\" imports as an ordinary birth relationship, \
-and the fact that the child was adopted is gone from the tree.",
+        why: "Fields such as PEDI, ROLE, QUAY, RESN, NAME.TYPE, FAMC.STAT, an ordinance STAT, HEAD.CHAR \
+and the media or format of a FILE take their value from a fixed list. A value outside the list is \
+dropped rather than adapted: an adoption recorded as \"2 PEDI adopted child\" imports as an ordinary \
+birth relationship, and the fact that the child was adopted is gone from the tree. In a 7.0 file a \
+value beginning with an underscore is a declared extension and is never flagged.",
         remedy: "Use the listed value named in the message; 7.0 wants the exact uppercase spelling, 5.5.1 \
 accepts any case. When none of them fits, that is what OTHER is for: put it there and write the real \
-wording in a PHRASE beside it.",
+wording in a PHRASE beside it, or, in 7.0, declare your own underscore-prefixed value in SCHMA.",
     },
     RuleMeta {
         code: "W307",
@@ -578,6 +603,50 @@ receiving program prints the tags literally, and a note that looked like three t
 arrives as one paragraph full of angle brackets.",
         remedy: "Convert the markup to plain text before exporting: a <br> becomes a real line break on a \
 CONT line and a &nbsp; becomes an ordinary space. Delete the wrapper elements entirely.",
+    },
+    RuleMeta {
+        code: "W404",
+        name: "nonstandard-age-value",
+        ruleset: "core",
+        category: Category::Style,
+        default_severity: Severity::Warning,
+        default_enabled: true,
+        fixable: None,
+        example: Some((
+            "1 DEAT\n2 AGE 76",
+            "1 DEAT\n2 AGE 76y",
+        )),
+        title: "Write ages as durations: 42y 6m, not 42 or 3 months",
+        why: "AGE carries a duration with a letter per unit: \"76y\", \"42y 6m\", \"11m 3w 6d\", \
+optionally bounded by < or >. A bare number (\"76\") or spelled-out units (\"3 months\") is not an \
+age to any reader: the value is stored as unparsed text, age-at-event fields show it raw or empty, \
+and sorting and averaging over ages silently skips every one written this way. 5.5.1 also allows the \
+words INFANT, CHILD and STILLBORN, which 7.0 dropped.",
+        remedy: "Give every unit its letter: \"2 AGE 76y\", \"3 AGE 3m\". Ages under a FAM event's HUSB \
+or WIFE take the same form. Put anything a duration cannot say, such as \"about three months\", in a \
+NOTE beside the age.",
+    },
+    RuleMeta {
+        code: "W405",
+        name: "missing-calendar-escape",
+        ruleset: "core",
+        category: Category::Style,
+        default_severity: Severity::Warning,
+        default_enabled: true,
+        fixable: None,
+        example: Some((
+            "2 DATE 11 NIVO 0006",
+            "2 DATE @#DFRENCH R@ 11 NIVO 0006",
+        )),
+        title: "Mark Hebrew and French Republican dates with their calendar escape",
+        why: "A 5.5.1 date in the Hebrew or French Republican calendar must start with the calendar \
+escape, @#DHEBREW@ or @#DFRENCH R@. Without it the month code (TVT, NIVO, SVN...) is just a strange \
+word: importers read the whole value as unparsed text or drop the date, so a burial dated in the \
+Hebrew calendar arrives with no date at all. Older Jewish and French-Canadian exports are where the \
+bare form usually comes from.",
+        remedy: "Prefix the value with the escape the month names imply: \"2 DATE @#DHEBREW@ 2 TVT \
+5758\" or \"2 DATE @#DFRENCH R@ 11 NIVO 0006\". 7.0 names the calendar inline (\"HEBREW 2 TVT 5758\") \
+and needs no escape.",
     },
 
     RuleMeta {
