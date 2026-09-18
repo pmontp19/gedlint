@@ -19,7 +19,7 @@ pub(crate) fn check_age(diags: &mut Vec<Diag>, line: usize, value: &str, version
     if version != Version::V70 && AGE_WORDS551.contains(&v.to_ascii_uppercase().as_str()) {
         return;
     }
-    if age_duration_ok(v) {
+    if age_duration_ok(v, version) {
         return;
     }
     let hint = if version == Version::V70 {
@@ -33,39 +33,51 @@ pub(crate) fn check_age(diags: &mut Vec<Diag>, line: usize, value: &str, version
         Severity::Warning,
         line,
         format!(
-            "malformed AGE value {:?} (write a duration like 42y 6m, bounds like >70y allowed{})",
+            "malformed AGE value {:?} (write a duration like 42y 6m; bounds are written like > 70y{})",
             truncate_value(v),
             hint
         ),
     ));
 }
 
-/// The 7.0 Age production, liberal about unit case: one optional < or >
+/// The age-duration grammar of the detected version: an optional < or >
 /// bound, then one to four `digits + unit` tokens in y -> m -> w -> d order,
-/// each unit once. Every token needs its unit: "76" is not an age.
-fn age_duration_ok(v: &str) -> bool {
+/// each unit once. Every token needs its unit: "76" is not an age. Weeks
+/// were introduced in 7.0 (5.5.1 has y/m/d only), 7.0 requires the space
+/// after a bound ("-ageBound D"), and no version caps the digits.
+fn age_duration_ok(v: &str, version: Version) -> bool {
     let mut s = v;
     if let Some(rest) = s.strip_prefix('<').or_else(|| s.strip_prefix('>')) {
-        s = rest.trim_start();
+        if version == Version::V70 {
+            // 7.0: the bound is its own component, delimited by one space.
+            let Some(rest) = rest.strip_prefix(' ') else {
+                return false;
+            };
+            s = rest;
+        } else {
+            s = rest.trim_start();
+        }
     }
     let mut last = 0u8;
     let mut any = false;
-    for tok in s.split_whitespace() {
+    let tokens: Box<dyn Iterator<Item = &str>> = if version == Version::V70 {
+        // One space between components: an empty token means a doubled one.
+        Box::new(s.split(' '))
+    } else {
+        Box::new(s.split_whitespace())
+    };
+    for tok in tokens {
         let Some((num, unit)) = tok.as_bytes().split_last_chunk::<1>() else {
             return false;
         };
         let order = match unit {
             b"y" | b"Y" => 1,
             b"m" | b"M" => 2,
-            b"w" | b"W" => 3,
+            b"w" | b"W" if version != Version::V551 => 3,
             b"d" | b"D" => 4,
             _ => return false,
         };
-        if order <= last
-            || num.is_empty()
-            || !num.iter().all(|b| b.is_ascii_digit())
-            || num.len() > 3
-        {
+        if order <= last || num.is_empty() || !num.iter().all(|b| b.is_ascii_digit()) {
             return false;
         }
         last = order;
@@ -88,7 +100,10 @@ const FRENCH_MONTHS: &[&str] = &[
 /// `@#DHEBREW@` / `@#DFRENCH R@` escape prefix. Without it the month code is
 /// not a month at all: importers store the value as unparsed text or refuse
 /// the date (ged-inline.org flags every bare Hebrew/French date in TGC551).
-/// 7.0 names calendars inline, so it is exempt.
+/// 7.0 names calendars inline, so it is exempt. A range holds two
+/// independent dates: each component needs the escape for its own calendar,
+/// so `FROM @#DHEBREW@ 2 TVT 5758 TO 11 NIVO 0006` still reports the bare
+/// French Republican half.
 pub(crate) fn check_calendar_escape(
     diags: &mut Vec<Diag>,
     line: usize,
@@ -99,27 +114,57 @@ pub(crate) fn check_calendar_escape(
         return;
     }
     let v = value.trim();
-    if v.is_empty() || v.contains("@#D") {
+    if v.is_empty() {
         return;
     }
-    let month = v
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .find(|t| HEBREW_MONTHS.contains(t) || FRENCH_MONTHS.contains(t));
-    let Some(month) = month else { return };
-    let calendar = if HEBREW_MONTHS.contains(&month) {
-        "@#DHEBREW@"
-    } else {
-        "@#DFRENCH R@"
-    };
-    diags.push(Diag::new(
-        "W405",
-        Category::Style,
-        Severity::Warning,
-        line,
-        format!(
-            "date month {month} needs the {calendar} escape prefix in 5.5.1 (non-Gregorian dates are only readable with it)"
-        ),
-    ));
+    for component in date_components(v) {
+        let c = component.trim();
+        if c.is_empty() || c.contains("@#D") {
+            continue;
+        }
+        let Some(month) = c
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .find(|t| HEBREW_MONTHS.contains(t) || FRENCH_MONTHS.contains(t))
+        else {
+            continue;
+        };
+        let calendar = if HEBREW_MONTHS.contains(&month) {
+            "@#DHEBREW@"
+        } else {
+            "@#DFRENCH R@"
+        };
+        diags.push(Diag::new(
+            "W405",
+            Category::Style,
+            Severity::Warning,
+            line,
+            format!(
+                "date month {month} needs the {calendar} escape prefix in 5.5.1 (non-Gregorian dates are only readable with it)"
+            ),
+        ));
+    }
+}
+
+/// One GEDCOM 5.5.1 DATE value can hold several date components separated
+/// by the range/approximation keywords. Split on those keywords so each
+/// component's calendar escape is judged on its own half.
+fn date_components(v: &str) -> Vec<String> {
+    const KEYWORDS: &[&str] = &[
+        "FROM", "TO", "BET", "AND", "BEF", "AFT", "ABT", "CAL", "EST", "INT",
+    ];
+    let mut parts: Vec<String> = vec![String::new()];
+    for word in v.split_whitespace() {
+        if KEYWORDS.contains(&word) {
+            parts.push(String::new());
+        } else {
+            let last = parts.last_mut().unwrap();
+            if !last.is_empty() {
+                last.push(' ');
+            }
+            last.push_str(word);
+        }
+    }
+    parts
 }
 
 fn truncate_value(v: &str) -> String {

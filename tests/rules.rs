@@ -904,11 +904,66 @@ fn e009_record_level_is_70_only() {
     assert!(has(g7, "E009"));
 }
 #[test]
+fn e009_tracking_binds_to_the_open_record() {
+    // CodeRabbit: a NAME under a later INDI must not satisfy an earlier
+    // REPO, and the next record must not lose the earlier one's report.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @R1@ REPO\n0 @I1@ INDI\n1 NAME A /B/\n0 TRLR\n";
+    let r = lint_str(g);
+    let e9: Vec<_> = r.diags.iter().filter(|d| d.code == "E009").collect();
+    assert_eq!(e9.len(), 1, "{:?}", r.diags);
+    assert!(e9[0].msg.contains("REPO record without required NAME"));
+}
+#[test]
+fn e009_obje_file_needs_its_own_form() {
+    // Registry: FILE.FORM is {1:1} in 7.0, one FORM per FILE.
+    let bad = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @O1@ OBJE\n1 FILE a.bin\n0 TRLR\n";
+    let r = lint_str(bad);
+    assert!(
+        r.diags
+            .iter()
+            .any(|d| d.code == "E009" && d.msg.contains("FILE without required FORM")),
+        "{:?}",
+        r.diags
+    );
+    let ok = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @O1@ OBJE\n1 FILE a.jpg\n2 FORM image/jpeg\n1 FILE b.png\n2 FORM image/png\n0 TRLR\n";
+    assert!(!has(ok, "E009"), "{:?}", codes(ok));
+}
+#[test]
+fn e009_obje_form_must_hang_off_the_file() {
+    // A FORM under CHAN (or anywhere else) does not satisfy the FILE.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @O1@ OBJE\n1 FILE a.bin\n1 CHAN\n2 DATE 1 JAN 2024\n2 FORM image/jpeg\n0 TRLR\n";
+    let r = lint_str(g);
+    assert!(
+        r.diags
+            .iter()
+            .any(|d| d.code == "E009" && d.msg.contains("FILE without required FORM")),
+        "{:?}",
+        r.diags
+    );
+}
+#[test]
+fn e009_embedded_obje_unaffected() {
+    // An OBJE structure inside INDI is not a record; no record-level E009.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 OBJE\n2 FILE x\n3 FORM image/jpeg\n0 TRLR\n";
+    assert!(!has(g, "E009"), "{:?}", codes(g));
+}
+#[test]
 fn w306_ext_enums_are_legal_in_70() {
     // The official extensions.ged: spec type-Enum says extTag values are
     // always permitted, so _ENUMVAL, _CHILD and the list form pass silent.
     let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @VOID@\n2 PEDI _ENUMVAL\n1 ASSO @I1@\n2 ROLE _CHILD\n1 RESN _PRIVATE, LOCKED\n0 @S1@ SOUR\n1 DATA\n2 EVEN DEAT, _CHILD\n0 TRLR\n";
     assert!(!has(g, "W306"), "{:?}", codes(g));
+}
+#[test]
+fn w306_malformed_ext_values_still_flag() {
+    // CodeRabbit: extTag is "_" + [A-Z0-9_]+; anything else is not an
+    // extension value and must reach the enum check.
+    for bad in ["_BAD-VALUE", "_BAD VALUE", "_lower"] {
+        let g = format!(
+            "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @VOID@\n2 PEDI {bad}\n"
+        );
+        assert!(has(&g, "W306"), "{bad}: {:?}", codes(&g));
+    }
 }
 #[test]
 fn w306_still_flags_wrong_spelling_in_70() {
@@ -977,6 +1032,28 @@ fn w404_551_words_and_70_difference() {
     assert!(has(g70, "W404"));
 }
 #[test]
+fn w404_version_grammars() {
+    // CodeRabbit: weeks are a 7.0 addition, 7.0 wants the space after a
+    // bound, and no version caps the digits.
+    let w551 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE 8w\n");
+    assert!(has(&w551, "W404"));
+    let w70 = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE 8w\n0 TRLR\n";
+    assert!(!has(w70, "W404"), "{:?}", codes(w70));
+    let bound70 =
+        "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE > 70y\n0 TRLR\n";
+    assert!(!has(bound70, "W404"));
+    let bound70_tight =
+        "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE >70y\n0 TRLR\n";
+    assert!(has(bound70_tight, "W404"));
+    let bound551 = wrap551("0 @F1@ FAM\n1 MARC\n2 WIFE\n3 AGE >42y 6m\n");
+    assert!(!has(&bound551, "W404"), "{:?}", codes(&bound551));
+    let big70 =
+        "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE 1000d\n0 TRLR\n";
+    assert!(!has(big70, "W404"), "{:?}", codes(big70));
+    let big551 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE 1000d\n");
+    assert!(!has(&big551, "W404"), "{:?}", codes(&big551));
+}
+#[test]
 fn w405_hebrew_date_needs_escape() {
     // ged-inline.org flags every bare Hebrew/French date in TGC551.
     let bad = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 2 TVT 5758\n");
@@ -1000,6 +1077,24 @@ fn w405_spares_gregorian_and_70() {
     // 7.0 names calendars inline; no escape exists.
     let g70 = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BET FRENCH_R 2 _JOUR 8 AND _CALENDRIER 4 COMP 8\n0 TRLR\n";
     assert!(!has(g70, "W405"), "{:?}", codes(g70));
+}
+#[test]
+fn w405_escape_per_component() {
+    // CodeRabbit: an escape on the first half of a range does not cover
+    // the second; each date component needs its own calendar escape.
+    let mixed = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE FROM @#DHEBREW@ 2 TVT 5758 TO 11 NIVO 0006\n",
+    );
+    let ds = codes(&mixed);
+    assert!(
+        ds.iter().any(|c| c == "W405"),
+        "the bare French Republican half must flag: {:?}",
+        ds
+    );
+    let both = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE FROM @#DHEBREW@ 2 TVT 5758 TO @#DFRENCH R@ 11 NIVO 0006\n",
+    );
+    assert!(!has(&both, "W405"), "{:?}", codes(&both));
 }
 
 #[test]

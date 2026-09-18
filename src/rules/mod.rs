@@ -128,7 +128,7 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
         if lvl == 1 {
             cur_sub = l.tag.clone();
             events.cur_event = None;
-            structure::check_record_required_sub(&mut structure, l, lvl);
+            structure::check_record_required_sub(&mut structure, l, lvl, parent_tag);
             structure::check_head_char(&mut diags, &structure, l, version);
             structure::check_head_gedc(&mut diags, &mut structure, l);
             if let Some((xref, kind)) = cur.clone() {
@@ -184,6 +184,8 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
 
         // Level >= 2.
         names::continue_value(&mut diags, &mut names, &mut people.indi_name, l, lvl);
+        // The FORM under a record-level OBJE FILE (E009, 7.0).
+        structure::check_record_required_sub(&mut structure, l, lvl, parent_tag);
         // SURN/GIVN under the NAME: the structured fields the hispanic-naming
         // and hygiene rulesets also read. After continue_value, so a defect
         // in both 1 NAME and the subtag is one diagnostic, not two.

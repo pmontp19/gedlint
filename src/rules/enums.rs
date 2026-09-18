@@ -121,6 +121,20 @@ const EVENATTR: &[&str] = &[
     "ORDN", "PROB", "PROP", "RELI", "RESI", "RETI", "SSN", "TITL", "WILL",
 ];
 
+/// True when `v` matches the 7.0 extTag production: an underscore followed
+/// by uppercase letters, digits or underscores (grammar.abnf: `extTag =
+/// underscore 1*tagchar`). Anything else is not a legal extension value and
+/// must keep flowing through the enum check.
+fn is_ext_tag(v: &str) -> bool {
+    let Some(rest) = v.strip_prefix('_') else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+}
+
 /// OTHER values awaiting a sibling PHRASE, and the slots a PHRASE was seen on.
 #[derive(Default)]
 pub(crate) struct EnumState {
@@ -168,10 +182,10 @@ pub(crate) fn check_enum(
     }
     // 7.0: an enumeration payload always permits extTag values (spec
     // type-Enum: "Payload values that match production extTag are always
-    // permitted"), so an underscore-prefixed value is a legal extension,
+    // permitted"), so a well-formed underscore value is a legal extension,
     // never a defect. The official extensions.ged leans on exactly this
     // (_ENUMVAL under FAMC.PEDI, _CHILD under ASSO.ROLE).
-    if version == Version::V70 && v.starts_with('_') {
+    if version == Version::V70 && is_ext_tag(v) {
         return;
     }
     let set: Option<(&[&str], &str)> = match tag {
@@ -247,10 +261,10 @@ pub(crate) fn check_enum(
         let all_ok = v.split(',').all(|t| {
             // Empty tokens (trailing comma, "A, ,B") are tolerated:
             // exporter quirk, the meaningful tokens still get validated.
-            // An underscore-prefixed token is an extTag extension value,
-            // always permitted in 7.0.
+            // A well-formed extTag token is an extension value, always
+            // permitted in 7.0.
             let t = t.trim();
-            t.is_empty() || t.starts_with('_') || allowed.contains(&t)
+            t.is_empty() || is_ext_tag(t) || allowed.contains(&t)
         });
         if all_ok {
             return;

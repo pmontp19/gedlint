@@ -6,6 +6,16 @@ use std::collections::HashMap;
 use crate::diag::{Category, Diag, Severity};
 use crate::parse::{is_pointer, truncate, Line, Version};
 
+/// One REPO/SUBM/OBJE record opened, with the state its required
+/// substructures (E009, 7.0) accumulate: NAME under REPO/SUBM; every FILE
+/// directly under an OBJE record needs its own FORM {1:1}.
+pub(crate) struct ReqRec {
+    pub(crate) tag: String,
+    pub(crate) line: usize,
+    pub(crate) name_seen: bool,
+    pub(crate) files: Vec<(usize, bool)>,
+}
+
 /// Skeleton state carried across the single pass.
 #[derive(Default)]
 pub(crate) struct Structure {
@@ -22,11 +32,12 @@ pub(crate) struct Structure {
     // (GEDCOM version), SOUR.VERS (product version) and CHAR.VERS are three
     // different {0:1} slots, not one.
     pub(crate) head_vers_seen: HashMap<usize, usize>,
-    // E009: record-level required substructures outstanding, one entry per
-    // REPO/SUBM/OBJE record opened: (record tag, record line, satisfied?).
-    // 7.0 makes NAME mandatory under REPO and SUBM records and FILE under
-    // OBJE records.
-    pub(crate) req_subs: Vec<(String, usize, bool)>,
+    // E009: record-level required substructures. `active` indexes req_subs
+    // for the record currently open, so a NAME under a later INDI can never
+    // satisfy an earlier REPO; entries resolve at end of run, so a record
+    // followed straight by the next one is still judged.
+    pub(crate) req_subs: Vec<ReqRec>,
+    pub(crate) active: Option<usize>,
 }
 
 /// E002: HEAD must be the first line; nothing may follow TRLR.
@@ -175,29 +186,36 @@ pub(crate) fn enter_record(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line) 
         ));
     }
     // E009 tracker: the registry gives NAME {1:1} under REPO and SUBM
-    // records and FILE {1:M} under OBJE records in 7.0. Entries resolve
-    // at end of run, so a record followed straight by the next one is
-    // still judged.
+    // records, and FORM {1:1} under every FILE {1:M} of an OBJE record, in
+    // 7.0. Only the record this line opens can satisfy it.
     if matches!(l.tag.as_str(), "REPO" | "SUBM" | "OBJE") {
-        st.req_subs.push((l.tag.clone(), l.no, false));
+        st.req_subs.push(ReqRec {
+            tag: l.tag.clone(),
+            line: l.no,
+            name_seen: false,
+            files: Vec::new(),
+        });
+        st.active = Some(st.req_subs.len() - 1);
+    } else {
+        st.active = None;
     }
 }
 
-/// Marks the open record's required substructure as satisfied (E009, 7.0):
-/// the newest REPO/SUBM/OBJE entry is the record this level-1 line hangs
-/// under.
-pub(crate) fn check_record_required_sub(st: &mut Structure, l: &Line, lvl: u32) {
-    if lvl != 1 {
-        return;
-    }
-    let is_name = l.tag == "NAME";
-    let is_file = l.tag == "FILE";
-    if !is_name && !is_file {
-        return;
-    }
-    if let Some((tag, _, seen)) = st.req_subs.last_mut() {
-        if !*seen && ((tag == "OBJE") == is_file) {
-            *seen = true;
+/// Tracks the open record's required substructures (E009, 7.0): NAME under
+/// REPO/SUBM, FILE under OBJE, and the FORM under each of those FILEs.
+pub(crate) fn check_record_required_sub(st: &mut Structure, l: &Line, lvl: u32, parent_tag: &str) {
+    let Some(i) = st.active else { return };
+    let rec = &mut st.req_subs[i];
+    if lvl == 1 && parent_tag == rec.tag {
+        if rec.tag != "OBJE" && l.tag == "NAME" {
+            rec.name_seen = true;
+        } else if rec.tag == "OBJE" && l.tag == "FILE" {
+            rec.files.push((l.no, false));
+        }
+    } else if lvl == 2 && l.tag == "FORM" && parent_tag == "FILE" {
+        // The FORM belongs to the nearest FILE still missing one.
+        if let Some(file) = rec.files.iter_mut().rev().find(|f| !f.1) {
+            file.1 = true;
         }
     }
 }
@@ -318,20 +336,46 @@ pub(crate) fn finish(diags: &mut Vec<Diag>, st: &Structure, version: Version) {
         ));
     }
 
-    // E009: 7.0 requires NAME under REPO and SUBM records, FILE under OBJE
-    // records (registry cardinality {1:1}/{1:M}; js-gedcom flags the OBJE
-    // case in probe files, ged-inline.org the REPO case).
+    // E009: 7.0 requires NAME under REPO and SUBM records, and a FORM under
+    // every FILE of an OBJE record (registry cardinality {1:1}/{1:M};
+    // js-gedcom flags the OBJE case in probe files, ged-inline.org the
+    // REPO case).
     if version == Version::V70 {
-        for (tag, line, seen) in &st.req_subs {
-            if !seen {
-                let need = if tag == "OBJE" { "FILE" } else { "NAME" };
-                diags.push(Diag::new(
-                    "E009",
-                    Category::Correctness,
-                    Severity::Error,
-                    *line,
-                    format!("{} record without required {} (7.0)", tag, need),
-                ));
+        for rec in &st.req_subs {
+            match rec.tag.as_str() {
+                "OBJE" => {
+                    if rec.files.is_empty() {
+                        diags.push(Diag::new(
+                            "E009",
+                            Category::Correctness,
+                            Severity::Error,
+                            rec.line,
+                            "OBJE record without required FILE (7.0)".into(),
+                        ));
+                    }
+                    for (fline, has_form) in &rec.files {
+                        if !has_form {
+                            diags.push(Diag::new(
+                                "E009",
+                                Category::Correctness,
+                                Severity::Error,
+                                *fline,
+                                "OBJE FILE without required FORM (7.0)".into(),
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    if !rec.name_seen {
+                        diags.push(Diag::new(
+                            "E009",
+                            Category::Correctness,
+                            Severity::Error,
+                            rec.line,
+                            format!("{} record without required NAME (7.0)", rec.tag),
+                        ));
+                    }
+                }
             }
         }
     }
