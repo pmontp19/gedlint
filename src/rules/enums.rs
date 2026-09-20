@@ -72,28 +72,65 @@ const MEDI551: &[&str] = &[
 ];
 // 7.0 ships the same MEDI set (enumset-MEDI).
 const MEDI70: &[&str] = MEDI551;
-// 5.5.1 MULTIMEDIA_FORMAT (the FORM payload under OBJE/FILE).
-const FORM551: &[&str] = &["BMP", "GIF", "JPEG", "OLE", "PCX", "TIFF", "WAV"];
-// 5.5.1 LDS statuses: baptism-style for BAPL/CONL/ENDL/SLGC/INIL, spouse
-// sealing for SLGS. The two sets differ in SUBMITTED vs EXCLUDED.
-const STAT551_ORD: &[&str] = &[
-    "BIC",
+// 5.5.1 MULTIMEDIA_FORMAT (the FORM payload under OBJE/FILE). The spec
+// ships the three-letter forms and its errata pins {Size=3:3}, but the
+// Committee's own TGC551 and ged-inline.org both accept the four-letter
+// spellings too, so the check takes both: the point is catching URL, RTF
+// and PICT, not relitigating JPG vs JPEG on files every exporter writes.
+const FORM551: &[&str] = &[
+    "BMP", "GIF", "JPG", "JPEG", "OLE", "PCX", "TIF", "TIFF", "WAV",
+];
+// 5.5.1 LDS statuses, one set per ordinance kind (spec p.51-52): baptism
+// for BAPL/CONL, endowment for ENDL (the errata removed INFANT from it),
+// child sealing for SLGC, spouse sealing for SLGS. Hyphens are the spec
+// spelling (PRE-1970, DNS/CAN); the 7.0 underscore forms ride along as
+// tolerated aliases, not as flags.
+const STAT551_BAPTISM: &[&str] = &[
+    "CHILD",
     "CLEARED",
     "COMPLETED",
-    "DNS",
-    "DNC",
+    "INFANT",
+    "PRE-1970",
     "PRE_1970",
+    "QUALIFIED",
+    "STILLBORN",
     "SUBMITTED",
     "UNCLEARED",
 ];
-const STAT551_SLGS: &[&str] = &[
+const STAT551_ENDOWMENT: &[&str] = &[
+    "CHILD",
+    "CLEARED",
+    "COMPLETED",
+    "PRE-1970",
+    "PRE_1970",
+    "QUALIFIED",
+    "STILLBORN",
+    "SUBMITTED",
+    "UNCLEARED",
+];
+const STAT551_CHILD_SEALING: &[&str] = &[
     "BIC",
     "CLEARED",
     "COMPLETED",
     "DNS",
-    "DNC",
-    "EXCLUDED",
+    "PRE-1970",
     "PRE_1970",
+    "QUALIFIED",
+    "STILLBORN",
+    "SUBMITTED",
+    "UNCLEARED",
+];
+const STAT551_SPOUSE_SEALING: &[&str] = &[
+    "BIC",
+    "CANCELED",
+    "COMPLETED",
+    "DNS",
+    "DNS/CAN",
+    "DNS_CAN",
+    "EXCLUDED",
+    "PRE-1970",
+    "PRE_1970",
+    "SUBMITTED",
     "UNCLEARED",
 ];
 const ORD_STAT: &[&str] = &[
@@ -241,13 +278,15 @@ pub(crate) fn check_enum(
         "FORM" if version != Version::V70 && matches!(parent_tag, "OBJE" | "FILE") => {
             Some((FORM551, "OBJE.FORM"))
         }
-        // 5.5.1 ordinance STAT: the spouse-sealing set on SLGS, the
-        // baptism set everywhere else.
+        // 5.5.1 ordinance STAT: one of the four LDS status sets, chosen
+        // by the parent ordinance (INIL is a 7.0 tag; it falls back to
+        // the baptism set and is suspicious on a 5.5.1 file for that).
         "STAT" if LDS_EVENTS.contains(&parent_tag) && version == Version::V551 => Some((
-            if parent_tag == "SLGS" {
-                STAT551_SLGS
-            } else {
-                STAT551_ORD
+            match parent_tag {
+                "ENDL" | "INIL" => STAT551_ENDOWMENT,
+                "SLGC" => STAT551_CHILD_SEALING,
+                "SLGS" => STAT551_SPOUSE_SEALING,
+                _ => STAT551_BAPTISM,
             },
             "LDS.STAT",
         )),

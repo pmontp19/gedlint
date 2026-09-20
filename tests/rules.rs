@@ -1026,14 +1026,38 @@ fn w306_form_is_551_enum() {
 }
 #[test]
 fn w306_stat_is_551_enum_per_ordinance() {
-    // ged-inline.org flags SLGS STAT Child in TGC551; Cleared is fine.
+    // ged-inline.org flags SLGS STAT Child in TGC551; Cleared is fine. The
+    // spec gives each ordinance its own status set (p.51-52).
     let bad = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT Child\n");
     assert!(has(&bad, "W306"));
     let ok = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT Excluded\n1 BAPL\n2 STAT Cleared\n");
     assert!(!has(&ok, "W306"), "{:?}", codes(&ok));
-    // SUBMITTED belongs to the baptism set, not the sealing set.
-    let bad2 = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT Submitted\n");
+    // SUBMITTED belongs to every 5.5.1 set; INFANT does not belong to
+    // the spouse-sealing set.
+    let ok2 = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT Submitted\n");
+    assert!(!has(&ok2, "W306"), "{:?}", codes(&ok2));
+    let bad2 = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT Infant\n");
     assert!(has(&bad2, "W306"));
+}
+#[test]
+fn w306_stat_551_sets_per_ordinance() {
+    // Four distinct 5.5.1 sets: endowment takes CHILD but not INFANT
+    // (spec errata), child sealing takes BIC but not EXCLUDED, spouse
+    // sealing takes CANCELED and DNS/CAN, baptism takes INFANT/QUALIFIED.
+    let ok_endl = wrap551("0 @I1@ INDI\n1 ENDL\n2 STAT Cleared\n");
+    assert!(!has(&ok_endl, "W306"), "{:?}", codes(&ok_endl));
+    let bad_endl = wrap551("0 @I1@ INDI\n1 ENDL\n2 STAT Infant\n");
+    assert!(has(&bad_endl, "W306"), "{:?}", codes(&bad_endl));
+    let ok_slgc = wrap551("0 @I1@ INDI\n1 SLGC\n2 STAT BIC\n1 FAMC @F1@\n");
+    assert!(!has(&ok_slgc, "W306"), "{:?}", codes(&ok_slgc));
+    let bad_slgc = wrap551("0 @I1@ INDI\n1 SLGC\n2 STAT Excluded\n");
+    assert!(has(&bad_slgc, "W306"), "{:?}", codes(&bad_slgc));
+    let ok_slgs = wrap551("0 @F1@ FAM\n1 SLGS\n2 STAT DNS/CAN\n");
+    assert!(!has(&ok_slgs, "W306"), "{:?}", codes(&ok_slgs));
+    let ok_bapl = wrap551("0 @I1@ INDI\n1 BAPL\n2 STAT Qualified\n");
+    assert!(!has(&ok_bapl, "W306"), "{:?}", codes(&ok_bapl));
+    let bad_bapl = wrap551("0 @I1@ INDI\n1 BAPL\n2 STAT Excluded\n");
+    assert!(has(&bad_bapl, "W306"), "{:?}", codes(&bad_bapl));
 }
 #[test]
 fn w404_bare_number_age() {
@@ -1106,6 +1130,13 @@ fn w405_spares_gregorian_and_70() {
     // 7.0 names calendars inline; no escape exists.
     let g70 = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 BIRT\n2 DATE BET FRENCH_R 2 _JOUR 8 AND _CALENDRIER 4 COMP 8\n0 TRLR\n";
     assert!(!has(g70, "W405"), "{:?}", codes(g70));
+}
+#[test]
+fn w405_needs_a_proven_version() {
+    // Gated on proven 5.5.1 like E010: a file whose VERS is missing
+    // already reports E009 for that.
+    let g = "0 HEAD\n0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 2 TVT 5758\n0 TRLR\n";
+    assert!(!has(g, "W405"), "{:?}", codes(g));
 }
 #[test]
 fn w405_escape_per_component() {

@@ -97,20 +97,16 @@ const FRENCH_MONTHS: &[&str] = &[
 ];
 
 /// W405: a 5.5.1 date in the Hebrew or French Republican calendar needs its
-/// `@#DHEBREW@` / `@#DFRENCH R@` escape prefix. Without it the month code is
-/// not a month at all: importers store the value as unparsed text or refuse
-/// the date (ged-inline.org flags every bare Hebrew/French date in TGC551).
-/// 7.0 names calendars inline, so it is exempt. A range holds two
-/// independent dates: each component needs the escape for its own calendar,
-/// so `FROM @#DHEBREW@ 2 TVT 5758 TO 11 NIVO 0006` still reports the bare
-/// French Republican half.
+/// `@#DHEBREW@` / `@#DFRENCH R@` escape prefix. Gated on the proven 5.5.1
+/// version like E010: a file whose VERS is missing already reports E009 for
+/// that, and 7.0 names calendars inline.
 pub(crate) fn check_calendar_escape(
     diags: &mut Vec<Diag>,
     line: usize,
     value: &str,
     version: Version,
 ) {
-    if version == Version::V70 {
+    if version != Version::V551 {
         return;
     }
     let v = value.trim();

@@ -457,7 +457,8 @@ you want to say in words about a person's gender belongs in a NOTE, not in this 
 and the media or format of a FILE take their value from a fixed list. A value outside the list is \
 dropped rather than adapted: an adoption recorded as \"2 PEDI adopted child\" imports as an ordinary \
 birth relationship, and the fact that the child was adopted is gone from the tree. In a 7.0 file a \
-value beginning with an underscore is a declared extension and is never flagged.",
+value matching the extension production, an underscore followed by uppercase letters, digits or \
+underscores, is a legal extension and is never flagged.",
         remedy: "Use the listed value named in the message; 7.0 wants the exact uppercase spelling, 5.5.1 \
 accepts any case. When none of them fits, that is what OTHER is for: put it there and write the real \
 wording in a PHRASE beside it, or, in 7.0, declare your own underscore-prefixed value in SCHMA.",
