@@ -165,11 +165,12 @@ pub(crate) fn enter_record(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line, 
     }
     // E010: 5.5.1 writes these six record types as `n @XREF@ TAG` with no
     // pointerless alternate, so an INDI, FAM, SOUR, REPO, SUBM or OBJE line
-    // without an @xref@ opens a record no pointer can ever name. 7.0
-    // relaxed this: "a record to which no structures point may have a
-    // cross-reference identifier, but does not need to have one" (spec
-    // 1.2), so an anonymous 7.0 record is legal and stays unflagged.
-    if version != Version::V70
+    // without an @xref@ opens a record no pointer can ever name. Gated on
+    // the proven 5.5.1 version, never on its absence: a file whose VERS is
+    // missing or unreadable already reports E009 for that, and 7.0 allows
+    // anonymous records ("a record to which no structures point may have a
+    // cross-reference identifier, but does not need to have one", spec 1.2).
+    if version == Version::V551
         && l.xref.is_empty()
         && matches!(
             l.tag.as_str(),

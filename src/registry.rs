@@ -209,8 +209,8 @@ record and a \"1 FILE\" (with its FORM) under each OBJE record.",
         default_enabled: true,
         fixable: None,
         example: Some((
-            "0 HEAD\n1 CHAR UTF-8\n0 INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
-            "0 HEAD\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
+            "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
+            "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n0 @I1@ INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
         )),
         title: "Give INDI, FAM, SOUR, REPO, SUBM and OBJE records an @xref@ (5.5.1)",
         why: "A 5.5.1 record of these six types is written with an identifier in its first line, and \

@@ -882,6 +882,13 @@ fn e010_is_551_only() {
     assert!(!has(g70, "E010"), "{:?}", codes(g70));
 }
 #[test]
+fn e010_needs_a_proven_version() {
+    // CodeRabbit: a file whose VERS is missing already reports E009 for
+    // that; E010 must not guess it is 5.5.1.
+    let g = "0 HEAD\n0 INDI\n1 NAME A /B/\n0 TRLR\n";
+    assert!(!has(g, "E010"), "{:?}", codes(g));
+}
+#[test]
 fn e010_spares_note_head_trlr_and_custom() {
     // NOTE is the one record type with a pointerless alternate; custom
     // record tags are the user's own grammar.
