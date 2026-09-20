@@ -118,13 +118,17 @@ pub(crate) fn check_calendar_escape(
         if c.is_empty() {
             continue;
         }
-        let Some(month) = c
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .find(|t| HEBREW_MONTHS.contains(t) || FRENCH_MONTHS.contains(t))
-        else {
+        let Some(month) = c.split(|c: char| !c.is_ascii_alphanumeric()).find_map(|t| {
+            let upper = t.to_ascii_uppercase();
+            if HEBREW_MONTHS.contains(&upper.as_str()) || FRENCH_MONTHS.contains(&upper.as_str()) {
+                Some(upper)
+            } else {
+                None
+            }
+        }) else {
             continue;
         };
-        let calendar = if HEBREW_MONTHS.contains(&month) {
+        let calendar = if HEBREW_MONTHS.contains(&month.as_str()) {
             "@#DHEBREW@"
         } else {
             "@#DFRENCH R@"
@@ -156,7 +160,9 @@ fn date_components(v: &str) -> Vec<String> {
     ];
     let mut parts: Vec<String> = vec![String::new()];
     for word in v.split_whitespace() {
-        if KEYWORDS.contains(&word) {
+        // Keywords compare case-insensitively: a lowercase "from" still
+        // opens a new date component, and its months still need escapes.
+        if KEYWORDS.iter().any(|k| k.eq_ignore_ascii_case(word)) {
             parts.push(String::new());
         } else {
             let last = parts.last_mut().unwrap();

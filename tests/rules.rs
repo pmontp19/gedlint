@@ -1025,6 +1025,13 @@ fn w306_form_is_551_enum() {
     assert!(!has(&ok, "W306"), "{:?}", codes(&ok));
 }
 #[test]
+fn w306_form_needs_a_proven_version() {
+    // Gated on proven 5.5.1 like E010 and W405: an unknown-version file
+    // with a 7.0-style media type must not face the 5.5.1 registry.
+    let g = "0 HEAD\n0 @I1@ INDI\n1 NAME A /B/\n1 OBJE\n2 FORM image/jpeg\n0 TRLR\n";
+    assert!(!has(g, "W306"), "{:?}", codes(g));
+}
+#[test]
 fn w306_stat_is_551_enum_per_ordinance() {
     // ged-inline.org flags SLGS STAT Child in TGC551; Cleared is fine. The
     // spec gives each ordinance its own status set (p.51-52).
@@ -1164,6 +1171,21 @@ fn w405_escape_must_match_the_calendar() {
     assert!(has(&wrong, "W405"), "{:?}", codes(&wrong));
     let buried = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 11 NIVO @#DFRENCH R@ 0006\n");
     assert!(has(&buried, "W405"), "{:?}", codes(&buried));
+}
+#[test]
+fn w405_lowercase_tokens_still_flag() {
+    // CodeRabbit: keywords and month codes compare case-insensitively; a
+    // lowercase "tvt ... to ... nivo" needs the same escapes as uppercase.
+    let bad = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE from @#DHEBREW@ 2 tvt 5758 to 11 nivo 0006\n",
+    );
+    let ds = codes(&bad);
+    assert_eq!(
+        ds.iter().filter(|c| *c == "W405").count(),
+        1,
+        "only the bare French half: {:?}",
+        ds
+    );
 }
 
 #[test]

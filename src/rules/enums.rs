@@ -273,9 +273,11 @@ pub(crate) fn check_enum(
             },
             "FILE.FORM.MEDI",
         )),
-        // 5.5.1 FORM is the MULTIMEDIA_FORMAT enum (bmp/gif/jpeg/...);
-        // 7.0 FORM is a media type handled above.
-        "FORM" if version != Version::V70 && matches!(parent_tag, "OBJE" | "FILE") => {
+        // 5.5.1 FORM is the MULTIMEDIA_FORMAT enum (bmp/gif/jpg/...);
+        // 7.0 FORM is a media type handled above. Gated on proven 5.5.1:
+        // an unknown-version file with "FORM image/jpeg" must not be
+        // judged against the 5.5.1 registry.
+        "FORM" if version == Version::V551 && matches!(parent_tag, "OBJE" | "FILE") => {
             Some((FORM551, "OBJE.FORM"))
         }
         // 5.5.1 ordinance STAT: one of the four LDS status sets, chosen
