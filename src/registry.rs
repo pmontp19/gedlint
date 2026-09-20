@@ -209,17 +209,19 @@ record and a \"1 FILE\" (with its FORM) under each OBJE record.",
         default_enabled: true,
         fixable: None,
         example: Some((
-            "0 INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
-            "0 @I1@ INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
+            "0 HEAD\n1 CHAR UTF-8\n0 INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
+            "0 HEAD\n1 CHAR UTF-8\n0 @I1@ INDI\n1 NAME Anna /Riu/\n0 @I2@ INDI\n1 NAME Joan /Riu/",
         )),
-        title: "Give INDI, FAM, SOUR, REPO, SUBM and OBJE records an @xref@",
-        why: "These six record types are defined with an identifier in their first line, and only a NOTE \
-record may drop it. A record opened as \"0 INDI\" with no @xref@ has no name, so no FAMC, CHIL, SOUR \
-or OBJE line anywhere in the file can ever point at it: strict importers refuse the record and lenient \
-ones read it as an anonymous blob that drops out of every index and chart. Hand-merging two files is \
+        title: "Give INDI, FAM, SOUR, REPO, SUBM and OBJE records an @xref@ (5.5.1)",
+        why: "A 5.5.1 record of these six types is written with an identifier in its first line, and \
+only a NOTE record may drop it. A record opened as \"0 INDI\" with no @xref@ has no name, so no FAMC, \
+CHIL, SOUR or OBJE line anywhere in the file can ever point at it: strict importers refuse the record \
+and lenient ones read it as an anonymous blob that drops out of every index and chart. 7.0 relaxed \
+this and allows anonymous records, so this rule stays silent on 7.0 files. Hand-merging two files is \
 the usual origin.",
         remedy: "Give the record an unused identifier, \"0 @I12@ INDI\", and keep it stable across \
-exports. Nothing may point at the record yet, but the next link you add now has a name to use.",
+exports. Nothing may point at the record yet, but the next link you add now has a name to use. \
+Converting the file to 7.0 is the other way out.",
     },
     RuleMeta {
         code: "E101",

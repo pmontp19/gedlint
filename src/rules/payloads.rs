@@ -119,7 +119,7 @@ pub(crate) fn check_calendar_escape(
     }
     for component in date_components(v) {
         let c = component.trim();
-        if c.is_empty() || c.contains("@#D") {
+        if c.is_empty() {
             continue;
         }
         let Some(month) = c
@@ -133,6 +133,12 @@ pub(crate) fn check_calendar_escape(
         } else {
             "@#DFRENCH R@"
         };
+        // The escape must open the component it covers: an escape for a
+        // different calendar or one buried mid-value does not exempt the
+        // date.
+        if c.starts_with(calendar) {
+            continue;
+        }
         diags.push(Diag::new(
             "W405",
             Category::Style,

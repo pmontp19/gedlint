@@ -153,7 +153,7 @@ pub(crate) fn check_continuation(
 }
 
 /// Level-0 record change: HEAD/TRLR bookkeeping, E010 on xref-less records.
-pub(crate) fn enter_record(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line) {
+pub(crate) fn enter_record(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line, version: Version) {
     // HEAD scope for E008 (GEDC/VERS singletons) and E009.
     st.in_head_main = l.tag == "HEAD";
     if l.tag == "HEAD" {
@@ -163,12 +163,14 @@ pub(crate) fn enter_record(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line) 
         st.saw_trlr = true;
         st.after_trlr = true;
     }
-    // E010: the record syntax of these six types is `n @XREF@ TAG`, with no
-    // pointerless alternate (only NOTE has one), so an INDI, FAM, SOUR,
-    // REPO, SUBM or OBJE line without an @xref@ opens a record no pointer
-    // can ever name (ged-inline.org caught the `0 INDI` case in the
-    // official xref.ged; we stayed silent).
-    if l.xref.is_empty()
+    // E010: 5.5.1 writes these six record types as `n @XREF@ TAG` with no
+    // pointerless alternate, so an INDI, FAM, SOUR, REPO, SUBM or OBJE line
+    // without an @xref@ opens a record no pointer can ever name. 7.0
+    // relaxed this: "a record to which no structures point may have a
+    // cross-reference identifier, but does not need to have one" (spec
+    // 1.2), so an anonymous 7.0 record is legal and stays unflagged.
+    if version != Version::V70
+        && l.xref.is_empty()
         && matches!(
             l.tag.as_str(),
             "INDI" | "FAM" | "SOUR" | "REPO" | "SUBM" | "OBJE"
@@ -180,7 +182,7 @@ pub(crate) fn enter_record(diags: &mut Vec<Diag>, st: &mut Structure, l: &Line) 
             Severity::Error,
             l.no,
             format!(
-                "{} record without an @xref@: no pointer can ever name it",
+                "{} record without an @xref@: no pointer can ever name it (5.5.1)",
                 l.tag
             ),
         ));
@@ -213,8 +215,9 @@ pub(crate) fn check_record_required_sub(st: &mut Structure, l: &Line, lvl: u32, 
             rec.files.push((l.no, false));
         }
     } else if lvl == 2 && l.tag == "FORM" && parent_tag == "FILE" {
-        // The FORM belongs to the nearest FILE still missing one.
-        if let Some(file) = rec.files.iter_mut().rev().find(|f| !f.1) {
+        // The FORM hangs under the most recent FILE only: with two FILEs
+        // and one FORM, the first FILE is still missing its own.
+        if let Some(file) = rec.files.last_mut() {
             file.1 = true;
         }
     }

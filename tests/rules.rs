@@ -853,8 +853,8 @@ fn e201_head_subm_pointer() {
 }
 #[test]
 fn e010_record_without_xref() {
-    // ged-inline.org flags the xref-less `0 INDI` in the official xref.ged;
-    // only NOTE may drop its identifier.
+    // 5.5.1 defines these records with an @xref@ and no pointerless
+    // alternate; ged-inline.org flags the same class of defect.
     let g = wrap551("0 INDI\n1 NAME A /B/\n0 @I1@ INDI\n1 NAME C /D/\n");
     let r = lint_str(&g);
     let ds: Vec<_> = r.diags.iter().filter(|d| d.code == "E010").collect();
@@ -863,7 +863,7 @@ fn e010_record_without_xref() {
 }
 #[test]
 fn e010_covers_all_six_record_types() {
-    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 INDI\n0 FAM\n0 SOUR\n0 REPO\n0 SUBM\n0 OBJE\n0 TRLR\n";
+    let g = "0 HEAD\n1 GEDC\n2 VERS 5.5.1\n1 CHAR UTF-8\n0 INDI\n0 FAM\n0 SOUR\n0 REPO\n0 SUBM\n0 OBJE\n0 TRLR\n";
     let r = lint_str(g);
     assert_eq!(
         r.diags.iter().filter(|d| d.code == "E010").count(),
@@ -871,6 +871,15 @@ fn e010_covers_all_six_record_types() {
         "{:?}",
         r.diags
     );
+}
+#[test]
+fn e010_is_551_only() {
+    // 7.0 relaxed the record syntax: "a record to which no structures
+    // point may have a cross-reference identifier, but does not need to
+    // have one" (spec 1.2). The official xref.ged leans on exactly that,
+    // and ged-inline.org's flag there is stricter than the spec.
+    let g70 = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 INDI\n1 NOTE anonymous record\n0 TRLR\n";
+    assert!(!has(g70, "E010"), "{:?}", codes(g70));
 }
 #[test]
 fn e010_spares_note_head_trlr_and_custom() {
@@ -940,6 +949,19 @@ fn e009_obje_form_must_hang_off_the_file() {
         "{:?}",
         r.diags
     );
+}
+#[test]
+fn e009_obje_form_binds_to_its_own_file() {
+    // CodeRabbit: one FORM under the second FILE does not cover the first.
+    let g = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @O1@ OBJE\n1 FILE a.bin\n1 FILE b.jpg\n2 FORM image/jpeg\n0 TRLR\n";
+    let r = lint_str(g);
+    let e9: Vec<_> = r
+        .diags
+        .iter()
+        .filter(|d| d.code == "E009" && d.msg.contains("FILE without required FORM"))
+        .collect();
+    assert_eq!(e9.len(), 1, "{:?}", r.diags);
+    assert_eq!(e9[0].line, 5, "the FORM-less FILE is line 5");
 }
 #[test]
 fn e009_embedded_obje_unaffected() {
@@ -1095,6 +1117,15 @@ fn w405_escape_per_component() {
         "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE FROM @#DHEBREW@ 2 TVT 5758 TO @#DFRENCH R@ 11 NIVO 0006\n",
     );
     assert!(!has(&both, "W405"), "{:?}", codes(&both));
+}
+#[test]
+fn w405_escape_must_match_the_calendar() {
+    // CodeRabbit: the escape must open the component and name the month's
+    // own calendar; a Hebrew escape does not exempt a French date.
+    let wrong = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE @#DHEBREW@ 11 NIVO 0006\n");
+    assert!(has(&wrong, "W405"), "{:?}", codes(&wrong));
+    let buried = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 11 NIVO @#DFRENCH R@ 0006\n");
+    assert!(has(&buried, "W405"), "{:?}", codes(&buried));
 }
 
 #[test]
