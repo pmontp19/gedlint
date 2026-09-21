@@ -1173,6 +1173,28 @@ fn w405_escape_must_match_the_calendar() {
     assert!(has(&buried, "W405"), "{:?}", codes(&buried));
 }
 #[test]
+fn w405_int_phrase_is_free_text() {
+    // CodeRabbit: the parenthesized DATE_PHRASE of an INT date is free
+    // text; a month code inside it is not a calendar month.
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE INT 1 JAN 1900 (copied from NIVO register)\n",
+    );
+    assert!(!has(&g, "W405"), "{:?}", codes(&g));
+    let g2 = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 BURI\n2 DATE 1 JAN 1900 (copied from NIVO register)\n",
+    );
+    assert!(!has(&g2, "W405"), "{:?}", codes(&g2));
+}
+#[test]
+fn w404_70_units_are_lowercase_only() {
+    // CodeRabbit: the 7.0 ABNF pins the units lowercase; 5.5.1 files keep
+    // the lenient read.
+    let g70 = "0 HEAD\n1 GEDC\n2 VERS 7.0\n0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE 42Y\n0 TRLR\n";
+    assert!(has(g70, "W404"), "{:?}", codes(g70));
+    let g551 = wrap551("0 @I1@ INDI\n1 NAME A /B/\n1 DEAT\n2 AGE 42Y\n");
+    assert!(!has(&g551, "W404"), "{:?}", codes(&g551));
+}
+#[test]
 fn w405_lowercase_tokens_still_flag() {
     // CodeRabbit: keywords and month codes compare case-insensitively; a
     // lowercase "tvt ... to ... nivo" needs the same escapes as uppercase.

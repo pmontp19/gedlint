@@ -70,11 +70,18 @@ fn age_duration_ok(v: &str, version: Version) -> bool {
         let Some((num, unit)) = tok.as_bytes().split_last_chunk::<1>() else {
             return false;
         };
+        // 7.0 pins the units lowercase in the ABNF; other versions get the
+        // lenient read (exporters capitalize), and 5.5.1 simply has no
+        // weeks at all.
         let order = match unit {
-            b"y" | b"Y" => 1,
-            b"m" | b"M" => 2,
-            b"w" | b"W" if version != Version::V551 => 3,
-            b"d" | b"D" => 4,
+            b"y" => 1,
+            b"Y" if version != Version::V70 => 1,
+            b"m" => 2,
+            b"M" if version != Version::V70 => 2,
+            b"w" if version == Version::V70 => 3,
+            b"W" if version == Version::Unknown => 3,
+            b"d" => 4,
+            b"D" if version != Version::V70 => 4,
             _ => return false,
         };
         if order <= last || num.is_empty() || !num.iter().all(|b| b.is_ascii_digit()) {
@@ -153,11 +160,14 @@ pub(crate) fn check_calendar_escape(
 
 /// One GEDCOM 5.5.1 DATE value can hold several date components separated
 /// by the range/approximation keywords. Split on those keywords so each
-/// component's calendar escape is judged on its own half.
+/// component's calendar escape is judged on its own half. Text inside the
+/// INT date's parenthesized DATE_PHRASE is free text and never a month, so
+/// the value is cut at the first parenthesis before splitting.
 fn date_components(v: &str) -> Vec<String> {
     const KEYWORDS: &[&str] = &[
         "FROM", "TO", "BET", "AND", "BEF", "AFT", "ABT", "CAL", "EST", "INT",
     ];
+    let v = v.split('(').next().unwrap_or(v);
     let mut parts: Vec<String> = vec![String::new()];
     for word in v.split_whitespace() {
         // Keywords compare case-insensitively: a lowercase "from" still
