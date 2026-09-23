@@ -857,7 +857,10 @@ The rule reads the surname slot of \"1 NAME\" and the \"2 SURN\" subtag, and rep
             "1 NOTE [T1] Llibre de família: Fill primer... pàgina 20. Confirmació el 9-10 de febrer de 1967 a Crist Rei pel bisbe Benjamí de Arriba y\n2 CONC Castro. 1a Comunió el 15 de maig de 1966 a Crist Rei. Aquest registre conté una descripció molt extensa dels esdeveniments familiars que supera el límit permès per la norma GEDCOM 5.5.1 en una sola línia de text.",
         )),
         title: "Split lines exceeding the 255-character GEDCOM limit",
-        why: "GEDCOM 5.5.1 limits physical lines to a maximum of 255 characters. Many parsers use fixed buffers or reject longer lines, which can truncate notes, citations, or text payloads. Multibyte encodings such as UTF-8 can also exceed 255 bytes even when character count is within limit.",
+        why: "GEDCOM 5.5.1 limits physical lines to a maximum of 255 characters, including delimiters and \
+terminator. Many parsers use fixed buffers or reject longer lines, which can truncate notes, citations, \
+or text payloads. Multibyte encodings such as UTF-8 can also exceed 255 bytes even when character count \
+is within limit.",
         remedy: "Split the long line using CONC continuation lines (at level + 1 for standard tags like NOTE, or at the same level for existing CONT/CONC lines).",
     },
 ];

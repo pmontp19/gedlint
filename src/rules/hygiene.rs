@@ -154,18 +154,19 @@ pub(crate) fn finish_sibling_spacing(
     }
 }
 
-/// Maximum physical line length in GEDCOM 5.5.1 (spec chapter 1 grammar: 255 chars).
+/// Maximum physical line length in GEDCOM 5.5.1 (spec chapter 1 grammar: 255 chars,
+/// including delimiters and terminator).
 pub(crate) const MAX_LINE_LEN: usize = 255;
 
 /// W713: line-too-long. Flags any line exceeding 255 characters or 255 UTF-8 bytes
-/// in GEDCOM 5.5.1. GEDCOM 7.0 explicitly eliminated this restriction (and removed CONC),
-/// so the check only applies to non-7.0 files.
+/// in GEDCOM 5.5.1 (including the line terminator). GEDCOM 7.0 explicitly eliminated
+/// this restriction (and removed CONC), so the check only applies to non-7.0 files.
 pub(crate) fn check_line_length(diags: &mut Vec<Diag>, l: &Line, version: Version) {
     if version == Version::V70 {
         return;
     }
-    let char_len = l.raw.chars().count();
-    let byte_len = l.raw.len();
+    let char_len = l.raw.chars().count() + l.term_len;
+    let byte_len = l.raw.len() + l.term_len;
     if char_len <= MAX_LINE_LEN && byte_len <= MAX_LINE_LEN {
         return;
     }

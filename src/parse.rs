@@ -98,6 +98,8 @@ pub(crate) struct Line {
     /// line 1 of a BOM'd file: the parser never sees the BOM, but the file a
     /// consumer slices does, so every span has to add it back.
     pub(crate) span_base: u32,
+    /// Physical line terminator length (1 for LF or lone CR, 2 for CRLF, 0 at EOF).
+    pub(crate) term_len: usize,
 }
 
 impl Line {
@@ -121,6 +123,12 @@ impl Line {
     /// Record how many bytes of the on-disk line the parser skipped.
     pub(crate) fn with_span_base(mut self, base: u32) -> Line {
         self.span_base = base;
+        self
+    }
+
+    /// Record the length of the line's physical terminator.
+    pub(crate) fn with_term_len(mut self, term_len: usize) -> Line {
+        self.term_len = term_len;
         self
     }
 }
@@ -177,7 +185,53 @@ pub(crate) fn parse_line(no: usize, raw: &str) -> Line {
         raw: raw.to_string(),
         value_col,
         span_base: 0,
+        term_len: 0,
     }
+}
+
+/// Iterator over lines of text preserving the length of each physical line terminator.
+pub(crate) struct SplitLines<'a> {
+    remainder: &'a str,
+}
+
+impl<'a> Iterator for SplitLines<'a> {
+    type Item = (&'a str, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remainder.is_empty() {
+            return None;
+        }
+        let cr = self.remainder.find('\r');
+        let lf = self.remainder.find('\n');
+        let next_delim = match (cr, lf) {
+            (Some(c), Some(l)) => Some(c.min(l)),
+            (Some(c), None) => Some(c),
+            (None, Some(l)) => Some(l),
+            (None, None) => None,
+        };
+        match next_delim {
+            Some(pos) => {
+                let bytes = self.remainder.as_bytes();
+                let (slice, term_len) = if bytes[pos] == b'\r' && bytes.get(pos + 1) == Some(&b'\n')
+                {
+                    (&self.remainder[..pos], 2)
+                } else {
+                    (&self.remainder[..pos], 1)
+                };
+                self.remainder = &self.remainder[pos + term_len..];
+                Some((slice, term_len))
+            }
+            None => {
+                let slice = self.remainder;
+                self.remainder = "";
+                Some((slice, 0))
+            }
+        }
+    }
+}
+
+pub(crate) fn split_lines(text: &str) -> SplitLines<'_> {
+    SplitLines { remainder: text }
 }
 
 pub(crate) fn is_pointer(s: &str) -> bool {

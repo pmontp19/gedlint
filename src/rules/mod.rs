@@ -24,7 +24,7 @@ use std::collections::HashSet;
 
 use crate::config::Thresholds;
 use crate::diag::{Category, Diag, Report, Severity};
-use crate::parse::{detect_version, parse_line, truncate, Line, BOM_LEN};
+use crate::parse::{detect_version, parse_line, split_lines, truncate, Line, BOM_LEN};
 
 use consistency::Consistency;
 use enums::EnumState;
@@ -46,11 +46,13 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
     };
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut diags: Vec<Diag> = Vec::new();
-    let raw_lines: Vec<&str> = text.lines().collect();
-    let lines: Vec<Line> = raw_lines
-        .iter()
+    let lines: Vec<Line> = split_lines(text)
         .enumerate()
-        .map(|(i, l)| parse_line(i + 1, l).with_span_base(if i == 0 { bom } else { 0 }))
+        .map(|(i, (l, term))| {
+            parse_line(i + 1, l)
+                .with_span_base(if i == 0 { bom } else { 0 })
+                .with_term_len(term)
+        })
         .collect();
 
     // Version state (HEAD.GEDC.VERS).

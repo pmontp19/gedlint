@@ -2876,14 +2876,15 @@ fn w712_street_address_leading_house_number_stays_silent() {
 
 #[test]
 fn w713_line_too_long_ascii() {
-    // 255 chars total line length: "1 NOTE " is 7 chars, plus 248 chars = 255 chars. Exactly at the limit.
-    let pad248 = "a".repeat(248);
-    let ok = wrap551(&format!("0 @I1@ INDI\n1 NOTE {pad248}\n"));
+    // With LF (+1 char terminator):
+    // 255 chars total line length: "1 NOTE " is 7 chars, plus 247 chars of payload + 1 LF = 255 chars. Exactly at the limit.
+    let pad247 = "a".repeat(247);
+    let ok = wrap551(&format!("0 @I1@ INDI\n1 NOTE {pad247}\n"));
     assert!(!has_with(&ok, "W713", "hygiene"));
 
-    // 256 chars total line length: "1 NOTE " (7) + 249 chars = 256 chars. Exceeds limit by 1 char.
-    let pad249 = "a".repeat(249);
-    let bad = wrap551(&format!("0 @I1@ INDI\n1 NOTE {pad249}\n"));
+    // 256 chars total line length: "1 NOTE " (7) + 248 chars + 1 LF = 256 chars. Exceeds limit by 1 char.
+    let pad248 = "a".repeat(248);
+    let bad = wrap551(&format!("0 @I1@ INDI\n1 NOTE {pad248}\n"));
     assert!(has_with(&bad, "W713", "hygiene"));
     // Default config has hygiene off:
     assert!(!has(&bad, "W713"));
@@ -2899,11 +2900,54 @@ fn w713_line_too_long_ascii() {
 }
 
 #[test]
+fn w713_line_too_long_crlf() {
+    // With CRLF (+2 chars terminator):
+    // "1 NOTE " (7) + 246 chars + 2 CRLF = 255 chars. Exactly at the limit.
+    let pad246 = "a".repeat(246);
+    let ok = format!("{HEAD551}0 @I1@ INDI\r\n1 NOTE {pad246}\r\n0 TRLR\r\n");
+    assert!(!has_with(&ok, "W713", "hygiene"));
+
+    // "1 NOTE " (7) + 247 chars + 2 CRLF = 256 chars. Exceeds limit.
+    let pad247 = "a".repeat(247);
+    let bad = format!("{HEAD551}0 @I1@ INDI\r\n1 NOTE {pad247}\r\n0 TRLR\r\n");
+    assert!(has_with(&bad, "W713", "hygiene"));
+
+    let cfg = parse_config("[lints]\npresets = [\"hygiene\"]\n").unwrap();
+    let report = gedlint::lint_str_with(&bad, &cfg);
+    let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
+    assert_eq!(
+        d.msg,
+        "NOTE line exceeds 255 characters (256 chars): split with CONC"
+    );
+}
+
+#[test]
+fn w713_line_too_long_lone_cr_and_no_newline() {
+    // Lone CR (classic Mac / 5.5.1, normalized to 1 char terminator):
+    let pad247 = "a".repeat(247);
+    let ok_cr = format!("{HEAD551}0 @I1@ INDI\r1 NOTE {pad247}\r0 TRLR\r");
+    assert!(!has_with(&ok_cr, "W713", "hygiene"));
+
+    let pad248 = "a".repeat(248);
+    let bad_cr = format!("{HEAD551}0 @I1@ INDI\r1 NOTE {pad248}\r0 TRLR\r");
+    assert!(has_with(&bad_cr, "W713", "hygiene"));
+
+    // No terminator at EOF (+0 terminator):
+    let ok_eof = format!("{HEAD551}0 @I1@ INDI\n1 NOTE {pad248}");
+    assert!(!has_with(&ok_eof, "W713", "hygiene"));
+
+    let pad249 = "a".repeat(249);
+    let bad_eof = format!("{HEAD551}0 @I1@ INDI\n1 NOTE {pad249}");
+    assert!(has_with(&bad_eof, "W713", "hygiene"));
+}
+
+#[test]
 fn w713_line_too_long_multibyte_bytes_only() {
-    // Line with 237 chars, but multibyte Catalan accents push UTF-8 byte length to 267 bytes.
+    // Line with 238 chars, but multibyte Catalan accents push UTF-8 byte length to 268 bytes.
     // "1 NOTE " is 7 chars / 7 bytes.
     // 30 characters of "à" = 30 chars, 60 bytes.
     // 200 characters of "a" = 200 chars, 200 bytes.
+    // 1 char / 1 byte LF terminator.
     let val = format!("{}{}", "à".repeat(30), "a".repeat(200));
     let bad = wrap551(&format!("0 @I1@ INDI\n1 NOTE {val}\n"));
     assert!(has_with(&bad, "W713", "hygiene"));
@@ -2913,7 +2957,7 @@ fn w713_line_too_long_multibyte_bytes_only() {
     let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
     assert_eq!(
         d.msg,
-        "NOTE line exceeds 255 bytes (237 chars, 267 bytes): split with CONC"
+        "NOTE line exceeds 255 bytes (238 chars, 268 bytes): split with CONC"
     );
 }
 
@@ -2922,7 +2966,8 @@ fn w713_line_too_long_multibyte_both_chars_and_bytes() {
     // "1 NOTE " is 7 chars / 7 bytes.
     // 10 chars of "à" = 10 chars, 20 bytes.
     // 250 chars of "a" = 250 chars, 250 bytes.
-    // Total chars = 267 (> 255). Total bytes = 277 (> 255).
+    // 1 char / 1 byte LF terminator.
+    // Total chars = 268 (> 255). Total bytes = 278 (> 255).
     let val = format!("{}{}", "à".repeat(10), "a".repeat(250));
     let bad = wrap551(&format!("0 @I1@ INDI\n1 NOTE {val}\n"));
     assert!(has_with(&bad, "W713", "hygiene"));
@@ -2932,7 +2977,7 @@ fn w713_line_too_long_multibyte_both_chars_and_bytes() {
     let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
     assert_eq!(
         d.msg,
-        "NOTE line exceeds 255 characters (267 chars, 277 bytes): split with CONC"
+        "NOTE line exceeds 255 characters (268 chars, 278 bytes): split with CONC"
     );
 }
 
@@ -2945,7 +2990,7 @@ fn w713_cont_and_conc_lines() {
     let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
     assert_eq!(
         d.msg,
-        "CONT line exceeds 255 characters (307 chars): split with CONC"
+        "CONT line exceeds 255 characters (308 chars): split with CONC"
     );
 
     let conc = wrap551(&format!("0 @I1@ INDI\n1 NOTE short\n2 CONC {pad300}\n"));
@@ -2953,7 +2998,7 @@ fn w713_cont_and_conc_lines() {
     let d2 = report2.diags.iter().find(|d| d.code == "W713").unwrap();
     assert_eq!(
         d2.msg,
-        "CONC line exceeds 255 characters (307 chars): split with CONC"
+        "CONC line exceeds 255 characters (308 chars): split with CONC"
     );
 }
 
@@ -2979,7 +3024,7 @@ fn w713_empty_tag_line_reports_line() {
     let cfg = parse_config("[lints]\npresets = [\"hygiene\"]\n").unwrap();
     let report = gedlint::lint_str_with(&bad, &cfg);
     let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
-    assert_eq!(d.msg, "line exceeds 255 characters (261 chars)");
+    assert_eq!(d.msg, "line exceeds 255 characters (262 chars)");
 }
 
 #[test]
