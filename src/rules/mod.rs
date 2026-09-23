@@ -111,6 +111,7 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
         structure::check_xref_syntax(&mut diags, l);
         structure::check_continuation(&mut diags, l, version, &parent);
         style::check_control_chars(&mut diags, l);
+        hygiene::check_line_length(&mut diags, l, version);
 
         if lvl == 0 {
             if let Some((xref, _)) = cur.take() {

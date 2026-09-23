@@ -1,6 +1,6 @@
 use crate::config::Thresholds;
 use crate::diag::{Category, Diag, Severity};
-use crate::parse::{truncate, Line};
+use crate::parse::{truncate, Line, Version};
 use crate::rules::dates::date_ordinal;
 use crate::rules::graph::Graph;
 use crate::rules::individuals::People;
@@ -152,4 +152,49 @@ pub(crate) fn finish_sibling_spacing(
             }
         }
     }
+}
+
+/// Maximum physical line length in GEDCOM 5.5.1 (spec chapter 1 grammar: 255 chars).
+pub(crate) const MAX_LINE_LEN: usize = 255;
+
+/// W713: line-too-long. Flags any line exceeding 255 characters or 255 UTF-8 bytes
+/// in GEDCOM 5.5.1. GEDCOM 7.0 explicitly eliminated this restriction (and removed CONC),
+/// so the check only applies to non-7.0 files.
+pub(crate) fn check_line_length(diags: &mut Vec<Diag>, l: &Line, version: Version) {
+    if version == Version::V70 {
+        return;
+    }
+    let char_len = l.raw.chars().count();
+    let byte_len = l.raw.len();
+    if char_len <= MAX_LINE_LEN && byte_len <= MAX_LINE_LEN {
+        return;
+    }
+    let tag_str = if l.tag.is_empty() {
+        "line".to_string()
+    } else {
+        format!("{} line", l.tag)
+    };
+    let count_str = if char_len == byte_len {
+        format!("{} chars", char_len)
+    } else {
+        format!("{} chars, {} bytes", char_len, byte_len)
+    };
+    let unit = if char_len > MAX_LINE_LEN {
+        "characters"
+    } else {
+        "bytes"
+    };
+    diags.push(
+        Diag::new(
+            "W713",
+            Category::Style,
+            Severity::Info,
+            l.no,
+            format!(
+                "{} exceeds 255 {} ({}): split with CONC",
+                tag_str, unit, count_str
+            ),
+        )
+        .in_ruleset("hygiene"),
+    );
 }
