@@ -2301,6 +2301,7 @@ fn hygiene_rules_are_off_by_default() {
     assert!(!has(&g, "W701"));
     assert!(!has(&g, "W702"));
     assert!(!has(&g, "W703"));
+    assert!(!has(&g, "W713"));
 }
 
 #[test]
@@ -2871,4 +2872,165 @@ fn w712_street_address_leading_house_number_stays_silent() {
             codes_with(&g, "hygiene")
         );
     }
+}
+
+#[test]
+fn w713_line_too_long_ascii() {
+    // With LF (+1 char terminator):
+    // 255 chars total line length: "1 NOTE " is 7 chars, plus 247 chars of payload + 1 LF = 255 chars. Exactly at the limit.
+    let pad247 = "a".repeat(247);
+    let ok = wrap551(&format!("0 @I1@ INDI\n1 NOTE {pad247}\n"));
+    assert!(!has_with(&ok, "W713", "hygiene"));
+
+    // 256 chars total line length: "1 NOTE " (7) + 248 chars + 1 LF = 256 chars. Exceeds limit by 1 char.
+    let pad248 = "a".repeat(248);
+    let bad = wrap551(&format!("0 @I1@ INDI\n1 NOTE {pad248}\n"));
+    assert!(has_with(&bad, "W713", "hygiene"));
+    // Default config has hygiene off:
+    assert!(!has(&bad, "W713"));
+
+    // Check diagnostic message
+    let cfg = parse_config("[lints]\npresets = [\"hygiene\"]\n").unwrap();
+    let report = gedlint::lint_str_with(&bad, &cfg);
+    let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
+    assert_eq!(
+        d.msg,
+        "NOTE line exceeds 255 characters (256 chars): split with CONC"
+    );
+}
+
+#[test]
+fn w713_line_too_long_crlf() {
+    // With CRLF (+2 chars terminator):
+    // "1 NOTE " (7) + 246 chars + 2 CRLF = 255 chars. Exactly at the limit.
+    let pad246 = "a".repeat(246);
+    let ok = format!("{HEAD551}0 @I1@ INDI\r\n1 NOTE {pad246}\r\n0 TRLR\r\n");
+    assert!(!has_with(&ok, "W713", "hygiene"));
+
+    // "1 NOTE " (7) + 247 chars + 2 CRLF = 256 chars. Exceeds limit.
+    let pad247 = "a".repeat(247);
+    let bad = format!("{HEAD551}0 @I1@ INDI\r\n1 NOTE {pad247}\r\n0 TRLR\r\n");
+    assert!(has_with(&bad, "W713", "hygiene"));
+
+    let cfg = parse_config("[lints]\npresets = [\"hygiene\"]\n").unwrap();
+    let report = gedlint::lint_str_with(&bad, &cfg);
+    let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
+    assert_eq!(
+        d.msg,
+        "NOTE line exceeds 255 characters (256 chars): split with CONC"
+    );
+}
+
+#[test]
+fn w713_line_too_long_lone_cr_and_no_newline() {
+    // Lone CR (classic Mac / 5.5.1, normalized to 1 char terminator):
+    let pad247 = "a".repeat(247);
+    let ok_cr = format!("{HEAD551}0 @I1@ INDI\r1 NOTE {pad247}\r0 TRLR\r");
+    assert!(!has_with(&ok_cr, "W713", "hygiene"));
+
+    let pad248 = "a".repeat(248);
+    let bad_cr = format!("{HEAD551}0 @I1@ INDI\r1 NOTE {pad248}\r0 TRLR\r");
+    assert!(has_with(&bad_cr, "W713", "hygiene"));
+
+    // No terminator at EOF (+0 terminator):
+    let ok_eof = format!("{HEAD551}0 @I1@ INDI\n1 NOTE {pad248}");
+    assert!(!has_with(&ok_eof, "W713", "hygiene"));
+
+    let pad249 = "a".repeat(249);
+    let bad_eof = format!("{HEAD551}0 @I1@ INDI\n1 NOTE {pad249}");
+    assert!(has_with(&bad_eof, "W713", "hygiene"));
+}
+
+#[test]
+fn w713_line_too_long_multibyte_bytes_only() {
+    // Line with 238 chars, but multibyte Catalan accents push UTF-8 byte length to 268 bytes.
+    // "1 NOTE " is 7 chars / 7 bytes.
+    // 30 characters of "à" = 30 chars, 60 bytes.
+    // 200 characters of "a" = 200 chars, 200 bytes.
+    // 1 char / 1 byte LF terminator.
+    let val = format!("{}{}", "à".repeat(30), "a".repeat(200));
+    let bad = wrap551(&format!("0 @I1@ INDI\n1 NOTE {val}\n"));
+    assert!(has_with(&bad, "W713", "hygiene"));
+
+    let cfg = parse_config("[lints]\npresets = [\"hygiene\"]\n").unwrap();
+    let report = gedlint::lint_str_with(&bad, &cfg);
+    let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
+    assert_eq!(
+        d.msg,
+        "NOTE line exceeds 255 bytes (238 chars, 268 bytes): split with CONC"
+    );
+}
+
+#[test]
+fn w713_line_too_long_multibyte_both_chars_and_bytes() {
+    // "1 NOTE " is 7 chars / 7 bytes.
+    // 10 chars of "à" = 10 chars, 20 bytes.
+    // 250 chars of "a" = 250 chars, 250 bytes.
+    // 1 char / 1 byte LF terminator.
+    // Total chars = 268 (> 255). Total bytes = 278 (> 255).
+    let val = format!("{}{}", "à".repeat(10), "a".repeat(250));
+    let bad = wrap551(&format!("0 @I1@ INDI\n1 NOTE {val}\n"));
+    assert!(has_with(&bad, "W713", "hygiene"));
+
+    let cfg = parse_config("[lints]\npresets = [\"hygiene\"]\n").unwrap();
+    let report = gedlint::lint_str_with(&bad, &cfg);
+    let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
+    assert_eq!(
+        d.msg,
+        "NOTE line exceeds 255 characters (268 chars, 278 bytes): split with CONC"
+    );
+}
+
+#[test]
+fn w713_cont_and_conc_lines() {
+    let pad300 = "x".repeat(300);
+    let cont = wrap551(&format!("0 @I1@ INDI\n1 NOTE short\n2 CONT {pad300}\n"));
+    let cfg = parse_config("[lints]\npresets = [\"hygiene\"]\n").unwrap();
+    let report = gedlint::lint_str_with(&cont, &cfg);
+    let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
+    assert_eq!(
+        d.msg,
+        "CONT line exceeds 255 characters (308 chars): split with CONC"
+    );
+
+    let conc = wrap551(&format!("0 @I1@ INDI\n1 NOTE short\n2 CONC {pad300}\n"));
+    let report2 = gedlint::lint_str_with(&conc, &cfg);
+    let d2 = report2.diags.iter().find(|d| d.code == "W713").unwrap();
+    assert_eq!(
+        d2.msg,
+        "CONC line exceeds 255 characters (308 chars): split with CONC"
+    );
+}
+
+#[test]
+fn w713_spares_gedcom_70() {
+    // GEDCOM 7.0 eliminated the 255 limit and eliminated CONC.
+    let pad300 = "y".repeat(300);
+    let g70 = format!("{HEAD70}0 @I1@ INDI\n1 NOTE {pad300}\n0 TRLR\n");
+    assert!(!has_with(&g70, "W713", "hygiene"));
+}
+
+#[test]
+fn w713_fires_on_unknown_version() {
+    let pad300 = "z".repeat(300);
+    let unk = format!("0 HEAD\n0 @I1@ INDI\n1 NOTE {pad300}\n0 TRLR\n");
+    assert!(has_with(&unk, "W713", "hygiene"));
+}
+
+#[test]
+fn w713_empty_tag_line_reports_line() {
+    let spaces = " ".repeat(260);
+    let bad = wrap551(&format!("0 @I1@ INDI\n1{spaces}\n"));
+    let cfg = parse_config("[lints]\npresets = [\"hygiene\"]\n").unwrap();
+    let report = gedlint::lint_str_with(&bad, &cfg);
+    let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
+    assert_eq!(d.msg, "line exceeds 255 characters (262 chars)");
+}
+
+#[test]
+fn w713_malformed_level_line_still_checked() {
+    let bad_line = "a".repeat(260);
+    let g = wrap551(&format!("{bad_line}\n"));
+    assert!(has_with(&g, "W713", "hygiene"));
+    assert!(has(&g, "E001"));
 }

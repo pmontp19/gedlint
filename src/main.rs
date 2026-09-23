@@ -60,7 +60,7 @@ fn help() -> String {
         W307 conflicting duplicate events, W401 PLAC+URL,\n  \
         W402 style (NAME/DATE), W403 NOTE+HTML,\n  \
         W102 encoding/style, U501/U502 upgrade path 5.5.1 -> 7.0,\n  \
-        hygiene W701-W712 (opt-in: spacing, caps, places, MyHeritage-style consistency)"
+        hygiene W701-W713 (opt-in: spacing, caps, places, MyHeritage-style consistency, line length)"
     )
 }
 
