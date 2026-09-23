@@ -184,16 +184,20 @@ pub(crate) fn check_line_length(diags: &mut Vec<Diag>, l: &Line, version: Versio
     } else {
         "bytes"
     };
+    let can_split_with_conc =
+        !l.value.is_empty() && l.tag.chars().count() <= 31 && l.xref.chars().count() <= 22;
+    let remedy = if can_split_with_conc {
+        ": split with CONC"
+    } else {
+        ""
+    };
     diags.push(
         Diag::new(
             "W713",
             Category::Style,
             Severity::Info,
             l.no,
-            format!(
-                "{} exceeds 255 {} ({}): split with CONC",
-                tag_str, unit, count_str
-            ),
+            format!("{} exceeds 255 {} ({}){}", tag_str, unit, count_str, remedy),
         )
         .in_ruleset("hygiene"),
     );

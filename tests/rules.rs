@@ -2979,8 +2979,13 @@ fn w713_empty_tag_line_reports_line() {
     let cfg = parse_config("[lints]\npresets = [\"hygiene\"]\n").unwrap();
     let report = gedlint::lint_str_with(&bad, &cfg);
     let d = report.diags.iter().find(|d| d.code == "W713").unwrap();
-    assert_eq!(
-        d.msg,
-        "line exceeds 255 characters (261 chars): split with CONC"
-    );
+    assert_eq!(d.msg, "line exceeds 255 characters (261 chars)");
+}
+
+#[test]
+fn w713_malformed_level_line_still_checked() {
+    let bad_line = "a".repeat(260);
+    let g = wrap551(&format!("{bad_line}\n"));
+    assert!(has_with(&g, "W713", "hygiene"));
+    assert!(has(&g, "E001"));
 }

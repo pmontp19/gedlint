@@ -73,6 +73,8 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
     let mut stack: Vec<(String, usize)> = Vec::new();
 
     for l in &lines {
+        hygiene::check_line_length(&mut diags, l, version);
+
         let Some(lvl) = l.level else {
             // A blank line has no level and no content: not a malformed line
             // (E002 already treats blanks as non-content). prev_level survives
@@ -111,7 +113,6 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
         structure::check_xref_syntax(&mut diags, l);
         structure::check_continuation(&mut diags, l, version, &parent);
         style::check_control_chars(&mut diags, l);
-        hygiene::check_line_length(&mut diags, l, version);
 
         if lvl == 0 {
             if let Some((xref, _)) = cur.take() {
