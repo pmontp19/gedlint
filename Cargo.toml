@@ -4,6 +4,11 @@ version = "0.11.0"
 edition = "2021"
 description = "GEDCOM 5.5.1 + 7.0 linter: categories, severities, --fix, streaming, WASM-ready"
 license = "MIT"
+repository = "https://github.com/pmontp19/gedlint"
+homepage = "https://pmontp19.github.io/gedlint"
+readme = "README.md"
+keywords = ["gedcom", "genealogy", "linter", "static-analysis", "cli"]
+categories = ["command-line-utilities", "development-tools", "parser-implementations"]
 
 [lib]
 name = "gedlint"
