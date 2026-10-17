@@ -118,6 +118,7 @@
 - **r/rust Rule 6 "No More Code Dumps"** (policy post 1wkmzun, Sep 2026): project self-announcements as posts are removed *regardless of text substance* — two submissions were removed and the mod publicly noted the repeat. Sanctioned path only: a **casual top-level comment in the weekly "What's Everyone Working on this Week?" thread**. Never resubmit a project post there.
 - **This Week in Rust**: Project/Tooling Updates section no longer accepts PR submissions (rust-lang/this-week-in-rust#8575); it pulls from r/rust, which since Rule 6 means mainly the weekly threads. Reliable dev channels: *Crate of the Week* (users.rust-lang.org/t/crate-of-the-week/2704) and technical articles submitted via PR to *Observations/Thoughts* / *Rust Walkthroughs* (still accepted).
 - **Hacker News** rate-limits submissions from new/low-karma accounts; either have an established account post it or let the account mature first.
+- **r/Genealogy** removed the outreach post as self-promotion ("asking for feedback on your app" is advertising per their rules; warning issued about bans). The mods themselves pointed to **r/genealogysoftwaredevs** as the sanctioned venue for app discussion and feedback. General genealogy subs are only reachable by answering other people's threads helpfully — never with project posts.
 - Never argue with mods or hostile commenters in public threads; silence plus the sanctioned channel is the playbook.
 
 ## Goals
