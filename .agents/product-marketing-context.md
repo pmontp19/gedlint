@@ -114,6 +114,12 @@
 | Privacy by construction | CSP `connect-src 'none'`; digest-only baselines; no-tree-data policy |
 | Engineered, not vibes | Zero dependencies; mutation testing with regression test per survivor; streaming single pass |
 
+## Channel learnings (do not repeat these mistakes)
+- **r/rust Rule 6 "No More Code Dumps"** (policy post 1wkmzun, Sep 2026): project self-announcements as posts are removed *regardless of text substance* — two submissions were removed and the mod publicly noted the repeat. Sanctioned path only: a **casual top-level comment in the weekly "What's Everyone Working on this Week?" thread**. Never resubmit a project post there.
+- **This Week in Rust**: Project/Tooling Updates section no longer accepts PR submissions (rust-lang/this-week-in-rust#8575); it pulls from r/rust, which since Rule 6 means mainly the weekly threads. Reliable dev channels: *Crate of the Week* (users.rust-lang.org/t/crate-of-the-week/2704) and technical articles submitted via PR to *Observations/Thoughts* / *Rust Walkthroughs* (still accepted).
+- **Hacker News** rate-limits submissions from new/low-karma accounts; either have an established account post it or let the account mature first.
+- Never argue with mods or hostile commenters in public threads; silence plus the sanctioned channel is the playbook.
+
 ## Goals
 **Business goal:** Adoption by real genealogists with real trees from other exporters, and feedback that hardens the rule set beyond the MyHeritage context it was born in. Owner-confirmed (2026-10-16): the aim is to make gedlint useful for *everyone*, not only MyHeritage/Hispanic trees.
 **Extensibility goal:** Show, and discover, how far the ruleset model reaches. `hispanic-naming` started as the author's own annoyance and became an opt-in ruleset; outreach should surface which other regional/cultural conventions deserve the same treatment (invite users to describe their region's naming/placement conventions — rule codes and conventions, never tree data).
