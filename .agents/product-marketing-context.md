@@ -114,6 +114,13 @@
 | Privacy by construction | CSP `connect-src 'none'`; digest-only baselines; no-tree-data policy |
 | Engineered, not vibes | Zero dependencies; mutation testing with regression test per survivor; streaming single pass |
 
+## Community intel (Gramps forum, Oct 2026)
+- **gedlint thread** (topic 10124): 63 views, 7 outbound clicks (4 repo, 3 viewer), 2 reactions, 0 replies in first days. Auto-closes 30 days after last post (~Nov 15) unless activity.
+- **DavidMStraub** (Gramps maintainer) asked in topic 10047 for GEDCOM 7 dialect findings to improve https://github.com/DavidMStraub/gramps-gedcom7 — gedlint already does 7.0 with clean corpora runs. Direct peer collaboration opportunity: share findings/rule list, offer the corpora results. Outreach via GitHub issue/PR or forum DM, not thread hijacking.
+- **GedcomRabbit / "Family Tree Transfer Check"** (topic 10047): browser-based, local-only Gramps↔MyHeritage transfer checker, closed beta, deliberately scoped to 5.5.1 with hand-validated rules, future paid model undecided. Adjacent tool, not a validator competitor per se — but same privacy pitch, so differentiate on openness (MIT, 15 releases, public roadmap) and dual-spec depth.
+- **emyoulation** (mod Brian McCullough) voiced the community's trust requirements: state project intent up front, show freshness, free-vs-paid clarity. gedlint answers this natively (MIT, no commercial plans, public history) — make that explicit in any Gramps-context communication.
+- Confirmed real-world pain: MyHeritage→Gramps import errors ("not recognized"/"not understood"); a Danish user resorted to hand-editing the .ged with search & replace — exactly the `--explain` + `--fix` use case.
+
 ## Channel learnings (do not repeat these mistakes)
 - **r/rust Rule 6 "No More Code Dumps"** (policy post 1wkmzun, Sep 2026): project self-announcements as posts are removed *regardless of text substance* — two submissions were removed and the mod publicly noted the repeat. Sanctioned path only: a **casual top-level comment in the weekly "What's Everyone Working on this Week?" thread**. Never resubmit a project post there.
 - **This Week in Rust**: Project/Tooling Updates section no longer accepts PR submissions (rust-lang/this-week-in-rust#8575); it pulls from r/rust, which since Rule 6 means mainly the weekly threads. Reliable dev channels: *Crate of the Week* (users.rust-lang.org/t/crate-of-the-week/2704) and technical articles submitted via PR to *Observations/Thoughts* / *Rust Walkthroughs* (still accepted).
