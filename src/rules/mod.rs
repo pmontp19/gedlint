@@ -283,6 +283,7 @@ pub(crate) fn lint_lines_with(text: &str, thr: &Thresholds) -> Report {
     individuals::finish_spouse_sex(&mut diags, &people, &graph);
     individuals::finish_sex(&mut diags, &people, version);
     individuals::finish_duplicates(&mut diags, &people, &graph, thr);
+    individuals::finish_sibling_duplicates(&mut diags, &people, &graph, thr);
     hygiene::finish_sibling_spacing(&mut diags, &people, &graph, thr);
     consistency::finish_all(&mut diags, &consistency, &people, &graph, thr);
 

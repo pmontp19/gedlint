@@ -70,6 +70,11 @@ pub struct BaselineOutcome {
     /// Baseline entries this run did not hit at all: the findings were
     /// fixed. Reported as resolved; `--write-baseline` prunes them.
     pub resolved: Vec<BaselineEntry>,
+    /// Every entry with places left over, `(entry, remaining)`: the ones in
+    /// `resolved` (all of their places) plus the ones this run only partly
+    /// used. A leftover place can swallow a new finding of a different kind
+    /// whose message normalizes the same, so `--strict-baseline` fails on it.
+    pub slack: Vec<(BaselineEntry, u32)>,
     /// One bool per diagnostic of the matched report, in report order:
     /// true when the baseline absorbed it. `baselined` is the number of
     /// trues. The web viewer renders its new/seen split from this, so the
@@ -189,6 +194,9 @@ pub fn apply_baseline(report: &Report, baseline: &Baseline) -> BaselineOutcome {
     for (i, e) in baseline.entries.iter().enumerate() {
         if remaining[i] == e.count {
             out.resolved.push(e.clone());
+        }
+        if remaining[i] > 0 {
+            out.slack.push((e.clone(), remaining[i]));
         }
     }
     out

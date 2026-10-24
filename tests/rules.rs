@@ -3034,3 +3034,97 @@ fn w713_malformed_level_line_still_checked() {
     assert!(has_with(&g, "W713", "hygiene"));
     assert!(has(&g, "E001"));
 }
+
+#[test]
+fn w203_repeated_chil_and_fams_report_once_and_keep_one_edge() {
+    let g = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n1 FAMS @F2@\n1 FAMS @F2@\n\
+         0 @F1@ FAM\n1 CHIL @I1@\n1 CHIL @I1@\n\
+         0 @F2@ FAM\n1 HUSB @I1@\n",
+    );
+    let r = lint_str(&g);
+    let w203: Vec<_> = r.diags.iter().filter(|d| d.code == "W203").collect();
+    assert_eq!(w203.len(), 2, "{:?}", r.diags);
+    assert!(w203.iter().any(|d| d
+        .msg
+        .starts_with("duplicate CHIL @I1@ in @F1@ (first at line")));
+    assert!(w203.iter().any(|d| d
+        .msg
+        .starts_with("duplicate FAMS @F2@ in @I1@ (first at line")));
+    // The repeat is dropped, so no other rule sees a second edge.
+    assert!(!has(&g, "W202"), "{:?}", codes(&g));
+    // Distinct targets and a repeated FAMC (one per PEDI in 7.0) stay silent.
+    let ok = wrap551(
+        "0 @I1@ INDI\n1 NAME A /B/\n1 FAMC @F1@\n2 PEDI BIRTH\n1 FAMC @F1@\n2 PEDI ADOPTED\n1 FAMS @F2@\n1 FAMS @F3@\n\
+         0 @F1@ FAM\n1 CHIL @I1@\n0 @F2@ FAM\n1 HUSB @I1@\n0 @F3@ FAM\n1 HUSB @I1@\n",
+    );
+    assert!(!has(&ok, "W203"), "{:?}", codes(&ok));
+    // @VOID@ is a placeholder, never a repeated link.
+    let void = wrap551(
+        "0 @I1@ INDI\n1 FAMS @VOID@\n1 FAMS @VOID@\n0 @F1@ FAM\n1 CHIL @VOID@\n1 CHIL @VOID@\n",
+    );
+    assert!(!has(&void, "W203"), "{:?}", codes(&void));
+}
+
+fn siblings(a: &str, b: &str) -> String {
+    wrap551(&format!(
+        "0 @I1@ INDI\n{a}1 FAMC @F1@\n0 @I2@ INDI\n{b}1 FAMC @F1@\n\
+         0 @F1@ FAM\n1 CHIL @I1@\n1 CHIL @I2@\n"
+    ))
+}
+
+#[test]
+fn w313_sibling_with_same_first_name_and_different_surname() {
+    // The motivating case: surname spelled differently, one birth missing.
+    let g = siblings(
+        "1 NAME Joan /Reig/\n1 BIRT\n2 DATE 1 JAN 1900\n",
+        "1 NAME Joan /Reig Faubí/\n",
+    );
+    let r = lint_str(&g);
+    let d = r.diags.iter().find(|d| d.code == "W313").expect("W313");
+    assert_eq!(
+        d.msg,
+        "@F1@: @I1@ and @I2@ share first name 'joan' and may be one person"
+    );
+    assert_eq!(d.line, 10, "reports at the second record");
+    // Same full name, no birth on one side: W302 cannot see it, W313 does.
+    let g = siblings("1 NAME Joan /Reig/\n", "1 NAME Joan /Reig/\n");
+    assert!(has(&g, "W313") && !has(&g, "W302"), "{:?}", codes(&g));
+    // Variant surname inside the window.
+    let g = siblings(
+        "1 NAME Joan /Reig/\n1 BIRT\n2 DATE 1900\n",
+        "1 NAME Joan /Reich/\n1 BIRT\n2 DATE 1901\n",
+    );
+    assert!(has(&g, "W313"));
+}
+
+#[test]
+fn w313_stays_silent_when_the_pair_is_not_a_candidate() {
+    // Births further apart than the window: a namesake after an infant death.
+    let far = siblings(
+        "1 NAME Joan /Reig/\n1 BIRT\n2 DATE 1900\n",
+        "1 NAME Joan /Reich/\n1 BIRT\n2 DATE 1910\n",
+    );
+    assert!(!has(&far, "W313"));
+    // Same full name and both births in the window: W302 already reports it.
+    let dup = siblings(
+        "1 NAME Joan /Reig/\n1 BIRT\n2 DATE 1900\n",
+        "1 NAME Joan /Reig/\n1 BIRT\n2 DATE 1901\n",
+    );
+    assert!(has(&dup, "W302") && !has(&dup, "W313"), "{:?}", codes(&dup));
+    // Known, different sex.
+    let sex = siblings(
+        "1 NAME Maria /Reig/\n1 SEX F\n",
+        "1 NAME Maria /Reich/\n1 SEX M\n",
+    );
+    assert!(!has(&sex, "W313"));
+    // Unknown sex on one side does not exclude the pair.
+    let unk = siblings(
+        "1 NAME Maria /Reig/\n1 SEX F\n",
+        "1 NAME Maria /Reich/\n1 SEX U\n",
+    );
+    assert!(has(&unk, "W313"));
+    // Different first names.
+    let names = siblings("1 NAME Joan /Reig/\n", "1 NAME Pere /Reig/\n");
+    assert!(!has(&names, "W313"));
+}
