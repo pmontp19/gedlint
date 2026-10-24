@@ -23,7 +23,7 @@ Validated against a real 544-individual MyHeritage tree kept outside this repo. 
 ## Usage
 
 ```
-gedlint [--fix [--only CODE] [--unsafe]] [--config PATH | --no-config] [--baseline FILE | --write-baseline FILE] [--format text|json] [--severity error|warning|info] [--max N] [--verbose] [--no-color] [--quiet] <file.ged>
+gedlint [--fix [--only CODE] [--unsafe]] [--config PATH | --no-config] [--baseline FILE [--strict-baseline] | --write-baseline FILE] [--format text|json] [--severity error|warning|info] [--max N] [--verbose] [--no-color] [--quiet] <file.ged>
 gedlint --explain [CODE]
 gedlint --rules-html [reference|handbook|cards]
 ```
@@ -38,7 +38,7 @@ The default text output groups diagnostics by rule code (worst severity and most
 
 Configuration is a `gedlint.toml` looked up next to the linted file and in every parent directory: it sets presets, per-rule severities (addressed by code or `<ruleset>/<name>`) and numeric consistency limits under `[lints.thresholds]` (`max-lifespan`, `min-parent-age`, `max-mother-age`, `max-father-age`, `duplicate-window`, `sibling-max-gap`, `max-alive-years`, `max-spouse-gap`, `min-marriage-age`). An unknown rule, preset, threshold or spelling is an error, never a silent no-op. `--config PATH` names the file explicitly; `--no-config` skips discovery and runs the built-ins only.
 
-For adopting gedlint on a legacy tree: `--write-baseline FILE` records every current finding (keyed by rule code plus a line-independent message fingerprint, with counts) and exits 0; `--baseline FILE` then fails only on findings beyond the recorded counts. Findings fixed later show up as ratchet progress, and re-running `--write-baseline` prunes them.
+For adopting gedlint on a legacy tree: `--write-baseline FILE` records every current finding (keyed by rule code plus a line-independent message fingerprint, with counts) and exits 0; `--baseline FILE` then fails only on findings beyond the recorded counts. Findings fixed later show up as ratchet progress, and re-running `--write-baseline` prunes them. `--strict-baseline` (Action input `strict-baseline`) additionally fails while any entry has unused places, so a stale count cannot absorb a new finding that normalizes to the same message; the leftovers are listed on stderr.
 
 A baseline is a file you commit, so it carries **no content from your tree**: the fingerprint is a digest (`h1:` plus 16 hex digits), never the diagnostic message, which for some rules quotes a surname, a note body or a place. Matching only needs equality and nothing ever reconstructs a message from a baseline, so the digest costs nothing and the same guarantee holds for the baseline the web viewer downloads. A baseline written before this (format version 1) is refused with a message telling you to regenerate it.
 

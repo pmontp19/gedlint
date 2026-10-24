@@ -756,3 +756,57 @@ fn from_report_sorts_and_absorbs_shifted_line_references() {
     assert!(o.new_diags.is_empty());
     assert_eq!(o.known_flags, vec![true]);
 }
+
+/// `--strict-baseline` turns leftover places into a failure, so a stale
+/// entry cannot absorb a new finding of a different kind that happens to
+/// normalize the same.
+#[test]
+fn strict_baseline_fails_on_unused_places() {
+    let d = tmpdir("strict");
+    let messy = write(&d, "messy.ged", MESSY);
+    let clean = write(&d, "clean.ged", CLEAN);
+    let base = d.join("g.baseline.json");
+    let b = base.to_str().unwrap();
+    let _ = run(&[messy.to_str().unwrap(), "--write-baseline", b]);
+
+    // Fully used baseline: strict is as quiet as plain.
+    let (code, out, err) = run(&[
+        messy.to_str().unwrap(),
+        "--baseline",
+        b,
+        "--strict-baseline",
+    ]);
+    assert_eq!(code, 0, "{} {}", out, err);
+
+    // The findings are gone: plain passes, strict fails and names the rule.
+    let (code, _, _) = run(&[clean.to_str().unwrap(), "--baseline", b]);
+    assert_eq!(code, 0);
+    let (code, _, err) = run(&[
+        clean.to_str().unwrap(),
+        "--baseline",
+        b,
+        "--strict-baseline",
+    ]);
+    assert_eq!(code, 1, "{}", err);
+    assert!(
+        err.contains("unused places") && err.contains("W305"),
+        "{}",
+        err
+    );
+
+    // Without a baseline there is nothing to be strict about.
+    let (code, _, err) = run(&[clean.to_str().unwrap(), "--strict-baseline"]);
+    assert_eq!(code, 2, "{}", err);
+}
+
+#[test]
+fn partially_used_entry_is_slack_but_not_resolved() {
+    let report = gedlint::lint_str(MESSY);
+    let mut b = gedlint::baseline_from_report(&report);
+    b.entries[0].count += 1;
+    let o = gedlint::apply_baseline(&report, &b);
+    assert!(o.resolved.is_empty());
+    assert_eq!(o.slack.len(), 1);
+    assert_eq!(o.slack[0].1, 1);
+    assert!(o.new_diags.is_empty());
+}

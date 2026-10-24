@@ -19,6 +19,10 @@ inputs:
     description: "Path to a gedlint baseline JSON. When set, only findings absent from the baseline affect the outcome"
     required: false
     default: ""
+  strict-baseline:
+    description: "With 'baseline': also fail while the baseline has unused places ('true' to enable). Regenerate the baseline to prune them"
+    required: false
+    default: "false"
   format:
     description: "Log output: 'text' (default) or 'json'. Annotations and the step summary are emitted either way"
     required: false
@@ -74,6 +78,7 @@ runs:
         GEDLINT_REQUIRE_CHECKSUM: ${{ inputs.require-checksum }}
         GEDLINT_CONFIG: ${{ inputs.config }}
         GEDLINT_BASELINE: ${{ inputs.baseline }}
+        GEDLINT_STRICT_BASELINE: ${{ inputs.strict-baseline }}
         GEDLINT_VERSION: ${{ inputs.version }}
       run: |
         set -euo pipefail
@@ -186,6 +191,7 @@ runs:
         if [ -n "$GEDLINT_BASELINE" ]; then
           [ -f "$GEDLINT_BASELINE" ] || { echo "::error::baseline not found: $GEDLINT_BASELINE"; exit 2; }
           EXTRA+=(--baseline "$GEDLINT_BASELINE")
+          [ "$GEDLINT_STRICT_BASELINE" = "true" ] && EXTRA+=(--strict-baseline)
         fi
 
         WORST=0

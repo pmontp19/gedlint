@@ -34,6 +34,7 @@ fn help() -> String {
          --max N               cap rule groups by default, single diagnostics with --verbose (0 = all; JSON always complete)\n  \
          --verbose             list every occurrence instead of one line per rule\n  \
          --baseline FILE       fail only on findings not already recorded in FILE (the ratchet)\n  \
+         --strict-baseline     with --baseline: also fail while the baseline has unused places (regenerate it)\n  \
          --write-baseline      record every current finding in FILE and exit 0\n                        \
         (rule codes and digests only, never text from your file)\n  \
          --no-color            no ANSI colors\n  \
@@ -211,6 +212,7 @@ fn main() -> ExitCode {
     let mut quiet = false;
     let mut baseline_path: Option<String> = None;
     let mut write_baseline_path: Option<String> = None;
+    let mut strict_baseline = false;
     let mut path: Option<String> = None;
 
     let mut i = 1;
@@ -323,6 +325,7 @@ fn main() -> ExitCode {
                 }
                 baseline_path = Some(args[i].clone());
             }
+            "--strict-baseline" => strict_baseline = true,
             "--write-baseline" => {
                 i += 1;
                 if i >= args.len() {
@@ -357,6 +360,11 @@ fn main() -> ExitCode {
     }
     if baseline_path.is_some() && write_baseline_path.is_some() {
         eprintln!("--baseline and --write-baseline are mutually exclusive");
+        return ExitCode::from(2);
+    }
+
+    if strict_baseline && baseline_path.is_none() {
+        eprintln!("--strict-baseline only applies with --baseline");
         return ExitCode::from(2);
     }
 
@@ -671,6 +679,19 @@ fn main() -> ExitCode {
         }
     }
 
+    // --strict-baseline: places the run left unused fail the gate, on stderr
+    // so every output format and --quiet still say why.
+    let mut slack = false;
+    if let Some(o) = outcome.as_ref().filter(|_| strict_baseline) {
+        slack = !o.slack.is_empty();
+        if slack {
+            eprintln!("baseline has unused places (--write-baseline prunes them):");
+        }
+        for (e, left) in &o.slack {
+            let name = gedlint::rule(&e.code).map_or("", |r| r.name);
+            eprintln!("  {} of {}x {} {}", left, e.count, e.code, name);
+        }
+    }
     // Baselined findings never affect the exit code: only the surplus. The
     // fallback is the config-filtered report (#21 has already dropped "off"
     // rules inside the engine, so they cannot reappear here).
@@ -682,7 +703,8 @@ fn main() -> ExitCode {
             families: report.families,
             diags: o.new_diags.clone(),
         }
-        .exit_code(),
+        .exit_code()
+        .max(slack as i32),
         None => report.exit_code(),
     };
     ExitCode::from(exit as u8)
