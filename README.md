@@ -1,5 +1,7 @@
 # gedlint
 
+> **Alpha software.** Rules, exit codes, output and the baseline format can change between releases, and new rules can turn a green CI red. The floating `v1` Action tag moves on every release without notice: pin a full version tag (`@v0.12.0`) or a commit SHA if you need stable results.
+
 GEDCOM linter in Rust: fast, single binary, streaming for large files, dual 5.5.1 (legacy, MyHeritage exports) + 7.0 (formal spec) support.
 
 Three ways to run the same engine: the CLI, a GitHub Action, and a **[web viewer](https://pmontp19.github.io/gedlint)** that compiles the engine to WebAssembly and runs entirely in the browser. Rule explanations come from one registry, so `--explain` and the web page cannot disagree.
