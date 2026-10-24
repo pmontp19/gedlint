@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use crate::config::Thresholds;
 use crate::diag::{Category, Diag, Severity};
 use crate::parse::{is_aft, is_bef, norm_name, year_of, Line, Version};
+use crate::rules::consistency::norm_given;
 use crate::rules::graph::Graph;
 
 /// Per-individual and per-family facts collected during the pass.
@@ -525,6 +526,78 @@ pub(crate) fn finish_duplicates(
                         ),
                     ));
                 }
+            }
+        }
+    }
+}
+
+/// Line of an individual's or family's record (0 when unknown).
+fn record_line(graph: &Graph, xref: &str) -> usize {
+    graph.records.get(xref).map(|r| r.1).unwrap_or(0)
+}
+
+/// SEX is known when it says M or F; U, X, absent or garbage know nothing.
+fn known_sex(st: &People, xref: &str) -> Option<char> {
+    let v = st.indi_sex.get(xref)?.0.trim().to_ascii_uppercase();
+    matches!(v.as_str(), "M" | "F").then(|| v.chars().next().unwrap())
+}
+
+/// End of run: W313 siblings of one family sharing a first name that may be
+/// one person entered twice. W302 misses them when the surname is spelled
+/// differently or one record has no birth, because it groups by full name.
+/// Skips pairs of known, different sex and pairs born further apart than the
+/// duplicate window. A pair W302 already reports (same full name, both
+/// births in the window) is left to it.
+pub(crate) fn finish_sibling_duplicates(
+    diags: &mut Vec<Diag>,
+    st: &People,
+    graph: &Graph,
+    thr: &Thresholds,
+) {
+    let year = |x: &str| match st.indi_birth.get(x) {
+        Some(Some(y)) if *y < 10000 => Some(*y),
+        _ => None,
+    };
+    let mut fams: Vec<&String> = graph.fam_chil.keys().collect();
+    fams.sort();
+    for fam in fams {
+        let mut kids: Vec<(&String, String)> = Vec::new();
+        for (c, _) in &graph.fam_chil[fam] {
+            let g = st
+                .indi_name
+                .get(c)
+                .map(|n| norm_given(n))
+                .unwrap_or_default();
+            if !g.is_empty() {
+                kids.push((c, g));
+            }
+        }
+        kids.sort();
+        for (i, (a, g)) in kids.iter().enumerate() {
+            for (b, gb) in &kids[i + 1..] {
+                if g != gb || a == b {
+                    continue;
+                }
+                if matches!((known_sex(st, a), known_sex(st, b)), (Some(x), Some(y)) if x != y) {
+                    continue;
+                }
+                if let (Some(x), Some(y)) = (year(a), year(b)) {
+                    if (x - y).abs() > thr.duplicate_window
+                        || norm_name(&st.indi_name[*a]) == norm_name(&st.indi_name[*b])
+                    {
+                        continue;
+                    }
+                }
+                diags.push(Diag::new(
+                    "W313",
+                    Category::Suspicious,
+                    Severity::Warning,
+                    record_line(graph, b),
+                    format!(
+                        "{}: {} and {} share first name '{}' and may be one person",
+                        fam, a, b, g
+                    ),
+                ));
             }
         }
     }

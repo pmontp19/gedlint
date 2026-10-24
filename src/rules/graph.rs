@@ -14,6 +14,8 @@ pub(crate) struct Graph {
     pub(crate) records: HashMap<String, (String, usize)>,
     // xref -> [(fam xref, line of the 1 FAMC)]
     pub(crate) indi_famc: HashMap<String, Vec<(String, usize)>>,
+    // xref -> [(fam xref, line of the 1 FAMS)], kept only to spot W203 repeats
+    pub(crate) indi_fams: HashMap<String, Vec<(String, usize)>>,
     // fam xref -> [(child xref, line of the 1 CHIL)]
     pub(crate) fam_chil: HashMap<String, Vec<(String, usize)>>,
     pub(crate) fam_husb: HashMap<String, (String, usize)>,
@@ -60,6 +62,35 @@ pub(crate) fn open_record(
     cur
 }
 
+/// Records one family-member link, or W203 when this record already holds the
+/// same one. The repeat is dropped, so W202, W313 and E202 see a single edge.
+fn push_link(
+    diags: &mut Vec<Diag>,
+    links: &mut Vec<(String, usize)>,
+    l: &Line,
+    xref: &str,
+    target: String,
+) {
+    // @VOID@ is a placeholder, not a link: several of them are fine.
+    let dup = links
+        .iter()
+        .find(|(t, _)| *t == target && target != "@VOID@");
+    if let Some((_, first)) = dup {
+        diags.push(Diag::new(
+            "W203",
+            Category::Suspicious,
+            Severity::Warning,
+            l.no,
+            format!(
+                "duplicate {} {} in {} (first at line {})",
+                l.tag, target, xref, first
+            ),
+        ));
+    } else {
+        links.push((target, l.no));
+    }
+}
+
 /// INDI.FAMS / INDI.FAMC: pointer bookkeeping, or E201 on a non-pointer value.
 pub(crate) fn indi_fam_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, xref: &str) {
     if is_pointer(&l.value) {
@@ -70,13 +101,26 @@ pub(crate) fn indi_fam_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, xre
             l.tag.clone(),
             inner_ptr(&l.value).to_string(),
         ));
-        if l.tag == "FAMC" {
-            // The line is kept with the link so W202 can point at the FAMC
-            // itself (issue 30) instead of at line 0.
-            st.indi_famc
+        let t = inner_ptr(&l.value).to_string();
+        // The line is kept with the link so W202 can point at the FAMC
+        // itself (issue 30) instead of at line 0.
+        match l.tag.as_str() {
+            // A FAMC may repeat: 7.0 allows one per PEDI, and a person can be
+            // both the birth and the adopted child of one family. So W203
+            // covers FAMS and CHIL only.
+            "FAMC" => st
+                .indi_famc
                 .entry(xref.to_string())
                 .or_default()
-                .push((inner_ptr(&l.value).to_string(), l.no));
+                .push((t, l.no)),
+            "FAMS" => push_link(
+                diags,
+                st.indi_fams.entry(xref.to_string()).or_default(),
+                l,
+                xref,
+                t,
+            ),
+            _ => {}
         }
     } else if !l.value.is_empty() {
         diags.push(Diag::new(
@@ -102,14 +146,15 @@ pub(crate) fn fam_member_link(diags: &mut Vec<Diag>, st: &mut Graph, l: &Line, x
         st.pending
             .push((l.no, xref.to_string(), l.tag.clone(), t.clone()));
         match l.tag.as_str() {
-            "CHIL" => {
-                // The line is kept with the link so W202 can point at the
-                // CHIL itself (issue 30) instead of at line 0.
-                st.fam_chil
-                    .entry(xref.to_string())
-                    .or_default()
-                    .push((t, l.no));
-            }
+            // The line is kept with the link so W202 can point at the CHIL
+            // itself (issue 30) instead of at line 0.
+            "CHIL" => push_link(
+                diags,
+                st.fam_chil.entry(xref.to_string()).or_default(),
+                l,
+                xref,
+                t,
+            ),
             // E008: FAM.HUSB / FAM.WIFE are {0:1}.
             "HUSB" | "WIFE" => {
                 let slot = if l.tag == "HUSB" {

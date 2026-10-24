@@ -375,7 +375,7 @@ fn given_part(name: &str) -> &str {
     name[..end].trim()
 }
 
-fn norm_given(name: &str) -> String {
+pub(crate) fn norm_given(name: &str) -> String {
     given_part(name)
         .to_lowercase()
         .split_whitespace()
